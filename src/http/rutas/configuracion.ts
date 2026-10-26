@@ -4,6 +4,7 @@ import { cambiarPin } from "./auth.js";
 import { claveApi, ESFUERZOS, gastoDelMes, MODELOS, probarConexion } from "../../bot/ia.js";
 import { entorno } from "../../entorno.js";
 import { cifrar } from "../../lib/cifrado.js";
+import { probarGroq } from "../../servicios/audio.js";
 import { actualizarConfig, obtenerConfig, PLANTILLAS_DEFECTO } from "../../servicios/configuracion.js";
 import { ErrorUsuario } from "../../servicios/recordatorios.js";
 
@@ -44,17 +45,21 @@ const Cambios = z
     demoraMaxMs: z.number().int().min(0).max(30_000),
     alertaDesconexionMin: z.number().int().min(1).max(24 * 60),
     minutosAtrasado: z.number().int().min(1).max(24 * 60),
+    audioModelo: z.string().trim().min(3).max(80),
+    audioMaxSegundos: z.number().int().min(10).max(600),
   })
   .partial();
 
 export async function configPublica() {
   const cfg = await obtenerConfig();
-  const { iaApiKeyCifrada, ...resto } = cfg;
+  const { iaApiKeyCifrada, groqApiKeyCifrada, ...resto } = cfg;
   return {
     ...resto,
     apiKeyPropia: !!iaApiKeyCifrada,
     apiKeyEntorno: !!entorno.anthropicApiKey,
     apiKeyDisponible: !!claveApi(cfg),
+    groqKeyPropia: !!groqApiKeyCifrada,
+    groqKeyEntorno: !!entorno.groqApiKey,
     modelos: MODELOS,
     esfuerzos: ESFUERZOS,
     plantillasDefecto: PLANTILLAS_DEFECTO,
@@ -82,6 +87,16 @@ export const rutasConfiguracion: FastifyPluginAsync = async (app) => {
   });
 
   app.post("/configuracion/probar-ia", async () => probarConexion(await obtenerConfig()));
+
+  app.put("/configuracion/groq-key", async (req) => {
+    const { clave } = z.object({ clave: z.string().trim().nullable() }).parse(req.body);
+    if (clave && !/^gsk_[\x21-\x7e]+$/.test(clave))
+      throw new ErrorUsuario("Eso no parece una API key de Groq (empieza con gsk_). Copiala con el botón de copiar.");
+    await actualizarConfig({ groqApiKeyCifrada: clave ? cifrar(clave) : null });
+    return configPublica();
+  });
+
+  app.post("/configuracion/probar-groq", async () => probarGroq(await obtenerConfig()));
 
   app.put("/configuracion/pin", async (req, reply) => {
     const { actual, nuevo } = z.object({ actual: z.string(), nuevo: z.string() }).parse(req.body);

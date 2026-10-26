@@ -12,6 +12,8 @@ import {
   Plus,
   ScrollText,
   Settings,
+  ShoppingCart,
+  StickyNote,
   X,
 } from "lucide-react";
 import { post } from "../lib/api";
@@ -22,6 +24,9 @@ import { useEditor } from "./Editor";
 const SECCIONES = [
   { a: "/", texto: "Inicio", icono: LayoutDashboard },
   { a: "/recordatorios", texto: "Recordatorios", icono: ListChecks },
+  // Listas y Notas van en la barra inferior del celular (posiciones 3 y 4).
+  { a: "/listas", texto: "Listas", icono: ShoppingCart },
+  { a: "/notas", texto: "Notas", icono: StickyNote },
   { a: "/calendario", texto: "Calendario", icono: CalendarDays },
   { a: "/whatsapp", texto: "WhatsApp", icono: MessageCircle },
   { a: "/historial", texto: "Historial", icono: History },

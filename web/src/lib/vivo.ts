@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { get } from "./api";
 
-export type TipoCambio = "recordatorios" | "whatsapp" | "configuracion" | "mensajes" | "logs";
+export type TipoCambio = "recordatorios" | "whatsapp" | "configuracion" | "mensajes" | "logs" | "listas" | "notas";
 type Oyente = (tipo: TipoCambio, datos: unknown) => void;
 
 // Una sola conexión SSE para toda la app; se reconecta sola.
@@ -21,7 +21,7 @@ function abrir() {
     conectadoVivo = true;
     oyentesConexion.forEach((o) => o(true));
     // Al reconectar, refrescar todo por si se perdió algún aviso.
-    (["recordatorios", "whatsapp", "configuracion", "mensajes", "logs"] as TipoCambio[]).forEach((t) => oyentes.forEach((o) => o(t, null)));
+    (["recordatorios", "whatsapp", "configuracion", "mensajes", "logs", "listas", "notas"] as TipoCambio[]).forEach((t) => oyentes.forEach((o) => o(t, null)));
   };
   fuente.onerror = () => {
     conectadoVivo = false;

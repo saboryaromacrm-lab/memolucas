@@ -81,6 +81,10 @@ export const configuracion = pgTable("configuracion", {
   alertaDesconexionMin: integer("alerta_desconexion_min").notNull().default(10),
   minutosAtrasado: integer("minutos_atrasado").notNull().default(3),
 
+  groqApiKeyCifrada: text("groq_api_key_cifrada"),
+  audioModelo: text("audio_modelo").notNull().default("whisper-large-v3-turbo"),
+  audioMaxSegundos: integer("audio_max_segundos").notNull().default(120),
+
   actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
 });
 
@@ -92,6 +96,41 @@ export const adjunto = pgTable("adjunto", {
   descripcionIa: text("descripcion_ia"),
   datosExtraidos: jsonb("datos_extraidos").$type<Record<string, unknown>>(),
   creadoEn: creadoEn(),
+});
+
+/** Listas (súper, farmacia, pendientes…). Los ítems comprados se borran. */
+export const lista = pgTable("lista", {
+  id: serial("id").primaryKey(),
+  nombre: text("nombre").notNull(),
+  // Nombre normalizado (sin tildes ni mayúsculas) para no duplicar listas.
+  clave: text("clave").notNull().unique(),
+  creadoEn: creadoEn(),
+  actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
+});
+
+export const listaItem = pgTable(
+  "lista_item",
+  {
+    id: serial("id").primaryKey(),
+    listaId: integer("lista_id")
+      .notNull()
+      .references(() => lista.id, { onDelete: "cascade" }),
+    texto: text("texto").notNull(),
+    cantidad: text("cantidad"),
+    creadoEn: creadoEn(),
+  },
+  (t) => [index("lista_item_lista_idx").on(t.listaId)],
+);
+
+/** Notas: título y contenido van cifrados con APP_SECRET. */
+export const nota = pgTable("nota", {
+  id: serial("id").primaryKey(),
+  tituloCifrado: text("titulo_cifrado").notNull(),
+  contenidoCifrado: text("contenido_cifrado").notNull(),
+  categoria: text("categoria").notNull().default("otros"),
+  adjuntoId: integer("adjunto_id").references(() => adjunto.id, { onDelete: "set null" }),
+  creadoEn: creadoEn(),
+  actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
 });
 
 export type EstadoRecordatorio = "activo" | "pausado" | "cumplido" | "no_confirmado" | "borrado";
@@ -117,6 +156,8 @@ export const recordatorio = pgTable(
     estado: text("estado").$type<EstadoRecordatorio>().notNull().default("activo"),
     origen: text("origen").$type<"whatsapp" | "panel" | "foto" | "enlace">().notNull().default("panel"),
     adjuntoId: integer("adjunto_id").references(() => adjunto.id, { onDelete: "set null" }),
+    // Si tiene una lista, el aviso trae los ítems pendientes en ese momento.
+    listaId: integer("lista_id").references(() => lista.id, { onDelete: "set null" }),
     creadoEn: creadoEn(),
     actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
   },
@@ -164,7 +205,7 @@ export const mensaje = pgTable(
     id: serial("id").primaryKey(),
     direccion: text("direccion").$type<"entrante" | "saliente">().notNull(),
     texto: text("texto"),
-    tipo: text("tipo").$type<"texto" | "imagen" | "reaccion" | "otro">().notNull().default("texto"),
+    tipo: text("tipo").$type<"texto" | "imagen" | "reaccion" | "audio" | "otro">().notNull().default("texto"),
     waMessageId: text("wa_message_id"),
     intencionDetectada: text("intencion_detectada"),
     recordatorioId: integer("recordatorio_id").references(() => recordatorio.id, { onDelete: "set null" }),
@@ -210,3 +251,6 @@ export type Recordatorio = typeof recordatorio.$inferSelect;
 export type Ocurrencia = typeof ocurrencia.$inferSelect;
 export type Configuracion = typeof configuracion.$inferSelect;
 export type Adjunto = typeof adjunto.$inferSelect;
+export type Lista = typeof lista.$inferSelect;
+export type ListaItem = typeof listaItem.$inferSelect;
+export type Nota = typeof nota.$inferSelect;

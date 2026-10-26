@@ -260,6 +260,17 @@ class ConexionWhatsApp implements Enviador {
     return this.enviarTexto(texto);
   }
 
+  /** Como responder, pero con una imagen (ej. la foto de una nota). */
+  async responderImagen(ruta: string, mime: string, epigrafe: string): Promise<string | null> {
+    const sock = this.sock;
+    if (!sock || !this.conectado()) return null;
+    const jid = await this.destino();
+    await sock.sendPresenceUpdate("composing", jid).catch(() => {});
+    await espera(800);
+    await sock.sendPresenceUpdate("paused", jid).catch(() => {});
+    return this.enviarImagen(ruta, mime, epigrafe);
+  }
+
   async descargarMedia(msg: WAMessage): Promise<Buffer> {
     const sock = this.sock;
     if (!sock) throw new Error("WhatsApp no está conectado");

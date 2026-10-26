@@ -11,6 +11,7 @@ const SECCIONES = [
   ["silencio", "Silencio"],
   ["resumen", "Resumen diario"],
   ["ia", "IA"],
+  ["audios", "Audios"],
   ["mensajes", "Mensajes"],
   ["seguridad", "Seguridad"],
   ["respaldo", "Respaldo"],
@@ -50,6 +51,8 @@ const EDITABLES = [
   "demoraMaxMs",
   "alertaDesconexionMin",
   "minutosAtrasado",
+  "audioModelo",
+  "audioMaxSegundos",
 ] as const;
 type Editable = Pick<Cfg, (typeof EDITABLES)[number]>;
 
@@ -189,6 +192,8 @@ export function Configuracion() {
           )}
 
           {seccion === "ia" && <SeccionIA datos={datos} form={form} set={set} recargar={recargar} />}
+
+          {seccion === "audios" && <SeccionAudios datos={datos} form={form} set={set} recargar={recargar} />}
 
           {seccion === "mensajes" && (
             <Tarjeta
@@ -454,6 +459,93 @@ function SeccionIA({
           <Cargando />
         )}
         <p className="text-xs text-slate-500">Los comandos rápidos (hoy, lista, listo…) no usan IA.</p>
+      </Tarjeta>
+    </>
+  );
+}
+
+function SeccionAudios({
+  datos,
+  form,
+  set,
+  recargar,
+}: {
+  datos: Cfg;
+  form: Editable;
+  set: <K extends keyof Editable>(k: K, v: Editable[K]) => void;
+  recargar: () => Promise<void>;
+}) {
+  const accion = useAccion();
+  const [clave, setClave] = useState("");
+  const [prueba, setPrueba] = useState<{ ok: boolean; mensaje: string; ms: number } | null>(null);
+  const [probando, setProbando] = useState(false);
+  return (
+    <>
+      <Tarjeta titulo="Audios (Groq)" texto="Los audios que le mandás al bot se pasan a texto con Groq y se procesan como si los hubieras escrito.">
+        <p className="text-sm text-slate-600">
+          {datos.groqKeyPropia
+            ? "Usando la API key de Groq cargada desde el panel (guardada cifrada)."
+            : datos.groqKeyEntorno
+              ? "Usando la API key de Groq del servidor."
+              : "⚠️ Falta la API key de Groq: el bot no puede entender audios."}
+        </p>
+        <ol className="list-decimal space-y-1 pl-5 text-xs text-slate-500">
+          <li>
+            Entrá a <b>console.groq.com</b> e iniciá sesión (podés usar tu cuenta de Google).
+          </li>
+          <li>
+            Andá a <b>API Keys → Create API Key</b> y copiala con el botón de copiar (empieza con <code>gsk_</code>).
+          </li>
+          <li>Pegala acá abajo y tocá Guardar.</li>
+        </ol>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <input className="campo font-mono text-xs" type="password" placeholder="gsk_…" value={clave} onChange={(e) => setClave(e.target.value)} autoComplete="off" />
+          <Boton
+            icono={<KeyRound className="size-4" />}
+            disabled={!clave.trim()}
+            onClick={async () => {
+              if (await accion(() => put("/api/configuracion/groq-key", { clave }), "API key de Groq guardada")) {
+                setClave("");
+                await recargar();
+              }
+            }}
+          >
+            Guardar
+          </Boton>
+          {datos.groqKeyPropia && (
+            <Boton variante="peligro" onClick={async () => (await accion(() => put("/api/configuracion/groq-key", { clave: null }), "Clave quitada")) && recargar()}>
+              Quitar
+            </Boton>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <Boton
+            icono={<PlugZap className="size-4" />}
+            cargando={probando}
+            onClick={async () => {
+              setProbando(true);
+              setPrueba((await accion(() => post<{ ok: boolean; mensaje: string; ms: number }>("/api/configuracion/probar-groq"))) ?? null);
+              setProbando(false);
+            }}
+          >
+            Probar conexión
+          </Boton>
+          {prueba && (
+            <span className={`text-sm ${prueba.ok ? "text-marca-profundo" : "text-red-600"}`}>
+              {prueba.ok ? "✅" : "❌"} {prueba.mensaje} ({prueba.ms} ms)
+            </span>
+          )}
+        </div>
+      </Tarjeta>
+      <Tarjeta titulo="Opciones">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Campo etiqueta="Modelo de transcripción" ayuda="whisper-large-v3-turbo es rápido y barato; whisper-large-v3 es un poco más preciso.">
+            <input className="campo font-mono text-xs" value={form.audioModelo} onChange={(e) => set("audioModelo", e.target.value)} />
+          </Campo>
+          <Campo etiqueta="Duración máxima (segundos)">
+            <Numero valor={form.audioMaxSegundos} min={10} onChange={(v) => set("audioMaxSegundos", v)} />
+          </Campo>
+        </div>
       </Tarjeta>
     </>
   );

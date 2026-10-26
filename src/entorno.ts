@@ -7,6 +7,7 @@ export const entorno = {
   host: process.env.HOST ?? "127.0.0.1",
   databaseUrl: process.env.DATABASE_URL ?? "postgresql://localhost:5432/memolucas",
   anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? "",
+  groqApiKey: process.env.GROQ_API_KEY ?? "",
   appSecret: process.env.APP_SECRET ?? "",
   dataDir: path.resolve(process.env.DATA_DIR ?? "./data"),
 };

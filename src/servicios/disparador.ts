@@ -7,6 +7,7 @@ import { registrar } from "../lib/log.js";
 import { describirMinutos } from "../lib/textos.js";
 import { obtenerConfig, plantillasDe, renderizar } from "./configuracion.js";
 import { enviador } from "./enviador.js";
+import { obtenerLista, textoLista } from "./listas.js";
 import { registrarMensaje } from "./mensajes.js";
 import { avanzarRecurrente, cerrarSiCorresponde } from "./recordatorios.js";
 
@@ -100,7 +101,13 @@ async function procesar(id: number): Promise<void> {
   const wa = enviador();
   if (!wa.conectado()) return; // Se reintenta al reconectar (barrido).
 
-  const { texto, atrasada } = textoAviso(oc, rec, cfg, ahora);
+  const { texto: base, atrasada } = textoAviso(oc, rec, cfg, ahora);
+  // Si el recordatorio tiene una lista, el primer aviso trae lo que falta en ese momento.
+  let texto = base;
+  if (oc.intentos === 0 && rec.listaId) {
+    const l = await obtenerLista(rec.listaId);
+    if (l) texto += `\n\n${textoLista(l)}`;
+  }
   let waId: string | null = null;
   let adjuntoId: number | null = null;
   try {

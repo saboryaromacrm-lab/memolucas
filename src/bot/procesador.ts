@@ -31,13 +31,32 @@ import {
 } from "../servicios/recordatorios.js";
 import { EMOJIS_CONFIRMACION, TEXTO_AYUDA, detectarComando, esAfirmativo, esNegativo } from "./comandos.js";
 import { extraerUrls, leerEnlace, textoSinUrls, type VistaPreviaWa } from "../servicios/enlaces.js";
-import { analizarEnlace, analizarFoto, interpretar, type Interpretacion } from "./ia.js";
+import { analizarEnlace, analizarFoto, interpretar, responderConNotas, type Interpretacion } from "./ia.js";
+import { ErrorAudio, transcribir } from "../servicios/audio.js";
+import {
+  agregarItems,
+  borrarLista,
+  buscarLista,
+  obtenerLista,
+  obtenerOCrearLista,
+  quitarItems,
+  textoLista,
+  todasLasListas,
+  vaciarLista,
+} from "../servicios/listas.js";
+import { actualizarNota, borrarNota, crearNota, obtenerNota, relacionadas, todasLasNotas } from "../servicios/notas.js";
+import { obtenerAdjunto } from "../servicios/adjuntos.js";
+import { normalizar } from "../lib/textos.js";
 
 /** Lo que el procesador necesita de WhatsApp. */
 export interface CanalBot {
   responder(texto: string): Promise<string | null>;
+  responderImagen(ruta: string, mime: string, epigrafe: string): Promise<string | null>;
   descargarMedia(msg: WAMessage): Promise<Buffer>;
 }
+
+/** "guardala como nota", "anotá esto": la foto va a notas y no a recordatorios. */
+const PIDE_NOTA = /\b(nota|anota|anotala|anotalo)\b/;
 
 const ERROR_IA = "Uy, no pude procesar eso. ¿Me lo repetís?";
 const HORAS_BORRADOR = 24;
@@ -106,7 +125,7 @@ function textoMensaje(msg: WAMessage): string | null {
 
 function idCitado(msg: WAMessage): string | null {
   const m = msg.message;
-  return m?.extendedTextMessage?.contextInfo?.stanzaId ?? m?.imageMessage?.contextInfo?.stanzaId ?? null;
+  return m?.extendedTextMessage?.contextInfo?.stanzaId ?? m?.imageMessage?.contextInfo?.stanzaId ?? m?.audioMessage?.contextInfo?.stanzaId ?? null;
 }
 
 // ───────────── Borradores (propuestas de fotos) ─────────────
@@ -146,12 +165,41 @@ export class Procesador {
     if (!m) return;
     if (m.reactionMessage) return this.reaccion(msg);
     if (m.imageMessage) return this.foto(msg);
+    if (m.audioMessage) return this.audio(msg);
     const texto = textoMensaje(msg);
     if (texto?.trim()) return this.texto(msg, texto.trim());
     await registrarMensaje({ direccion: "entrante", tipo: "otro", texto: null, waMessageId: msg.key.id });
-    if (m.audioMessage) return this.decir("Por ahora no escucho audios 🙈. Escribime, o mandame una foto o un link.");
     if (m.stickerMessage) return;
-    await this.decir("Por ahora entiendo texto, fotos y links 🙂");
+    await this.decir("Por ahora entiendo texto, audios, fotos y links 🙂");
+  }
+
+  /** Audio: se transcribe con Groq, se muestra lo entendido y se procesa como texto. */
+  private async audio(msg: WAMessage) {
+    const a = msg.message!.audioMessage!;
+    const cfg = await obtenerConfig();
+    const segundos = Number(a.seconds ?? 0);
+    if (segundos > cfg.audioMaxSegundos) {
+      await registrarMensaje({ direccion: "entrante", tipo: "audio", texto: null, waMessageId: msg.key.id });
+      const max = cfg.audioMaxSegundos >= 60 ? `${Math.round(cfg.audioMaxSegundos / 60)} min` : `${cfg.audioMaxSegundos} s`;
+      return this.decir(`Ese audio es muy largo (máximo ${max}). ¿Me lo mandás más corto o por partes?`);
+    }
+    let transcripcion: string;
+    try {
+      const datos = await this.canal.descargarMedia(msg);
+      transcripcion = await transcribir(cfg, datos, a.mimetype ?? "audio/ogg");
+    } catch (err) {
+      await registrarMensaje({ direccion: "entrante", tipo: "audio", texto: null, waMessageId: msg.key.id });
+      await registrar("error", "audio", "No se pudo transcribir el audio", err);
+      if (err instanceof ErrorAudio && /falta/i.test(err.message))
+        return this.decir("Para entender audios falta cargar la clave de Groq en el panel (Configuración → Audios).");
+      return this.decir("No pude entender el audio 😕. ¿Me lo repetís o me lo escribís?");
+    }
+    if (!transcripcion) {
+      await registrarMensaje({ direccion: "entrante", tipo: "audio", texto: null, waMessageId: msg.key.id });
+      return this.decir("No escuché nada en ese audio 🤔. ¿Me lo mandás de nuevo?");
+    }
+    await this.decir(`🎙️ Entendí: “${transcripcion}”`, { intencion: "transcripcion" });
+    return this.texto(msg, transcripcion, "audio");
   }
 
   private async reaccion(msg: WAMessage) {
@@ -189,6 +237,8 @@ export class Procesador {
     const adj = await guardarImagen(datos, MIMES_IMAGEN.includes(mime) ? mime : "image/jpeg");
     await registrarMensaje({ direccion: "entrante", tipo: "imagen", texto: epigrafe, waMessageId: msg.key.id, adjuntoId: adj.id });
 
+    if (epigrafe && PIDE_NOTA.test(normalizar(epigrafe))) return this.fotoComoNota(adj.id, datos, epigrafe);
+
     let datosBorrador: DatosBorrador = { adjuntoId: adj.id, url };
     let respuesta: string;
     try {
@@ -218,11 +268,31 @@ export class Procesador {
     await this.decir(respuesta, { intencion: "propuesta_foto" });
   }
 
-  private async texto(msg: WAMessage, texto: string) {
+  /** Foto con "guardala como nota": la IA lee el texto de la imagen y se guarda en notas. */
+  private async fotoComoNota(adjuntoId: number, datos: Buffer, epigrafe: string) {
+    const cfg = await obtenerConfig();
+    let titulo = epigrafe.slice(0, 60);
+    let contenido = epigrafe;
+    let categoria = "otros";
+    try {
+      const liviana = await imagenParaIa(datos);
+      const a = await analizarFoto(cfg, liviana.datos, liviana.mime, epigrafe);
+      await db.update(adjunto).set({ descripcionIa: a.descripcion, datosExtraidos: a }).where(eq(adjunto.id, adjuntoId));
+      titulo = a.titulo ?? a.descripcion;
+      contenido = [epigrafe, a.descripcion, a.texto_visible].filter(Boolean).join("\n");
+      categoria = { factura: "documentos", turno: "salud", entrada: "ideas", invitacion: "ideas", receta: "compras" }[a.tipo as string] ?? "otros";
+    } catch {
+      // Sin IA, se guarda igual con el texto del pie.
+    }
+    const n = await crearNota({ titulo, contenido, categoria, adjuntoId });
+    return this.decir(`🗒️ Guardé la nota *${n.titulo}* con la foto. Preguntame cuando la necesites.`, { intencion: "nota_guardar" });
+  }
+
+  private async texto(msg: WAMessage, texto: string, tipo: "texto" | "audio" = "texto") {
     const historial = await ultimosMensajes(5);
     const citado = idCitado(msg);
     const ocCitada = citado ? (await mensajePorWaId(citado))?.ocurrenciaId ?? null : null;
-    const entrante = await registrarMensaje({ direccion: "entrante", texto, waMessageId: msg.key.id });
+    const entrante = await registrarMensaje({ direccion: "entrante", texto, tipo, waMessageId: msg.key.id });
     const anotar = (intencion: string) =>
       db.update(mensaje).set({ intencionDetectada: intencion }).where(eq(mensaje.id, entrante.id));
 
@@ -259,6 +329,10 @@ export class Procesador {
         }
         case "ayuda":
           return this.decir(TEXTO_AYUDA, { intencion: "ayuda" });
+        case "listas":
+          return this.decir(await this.textoListas(), { intencion: "lista_ver" });
+        case "notas":
+          return this.decir(await this.textoNotas(), { intencion: "nota_consultar" });
         case "silencio": {
           const hasta = new Date(Date.now() + cmd.minutos * 60_000);
           await actualizarConfig({ botSilenciadoHasta: hasta });
@@ -330,8 +404,17 @@ export class Procesador {
       const r = oc ? await obtenerRecordatorio(oc.recordatorioId) : null;
       if (r) respondiendoA = `El usuario está respondiendo al aviso de "${r.titulo}" (ID ${r.id}). Si dice solo un momento ("mañana", "en 2 horas", "a las 18"), es posponer ese aviso.`;
     }
+    const listas = (await todasLasListas())
+      .map((l) => `${l.nombre}: ${l.items.map((i) => `[${i.id}] ${i.texto}${i.cantidad ? ` (${i.cantidad})` : ""}`).join("; ") || "(vacía)"}`)
+      .join("\n");
+    const notas = (await todasLasNotas())
+      .slice(0, 100)
+      .map((n) => `${n.id} | ${n.titulo} | ${n.categoria}`)
+      .join("\n");
     return {
       respondiendoA,
+      listas,
+      notas,
       recordatoriosActivos: activos.slice(0, 80).map(lineaRec).join("\n"),
       esperandoConfirmacion: esperandoTxt.join("\n"),
       propuestaPendiente: propuesta,
@@ -412,6 +495,20 @@ export class Procesador {
     return this.decir(a.mensaje, { intencion: "propuesta_enlace" });
   }
 
+  private async textoListas(): Promise<string> {
+    const ls = await todasLasListas();
+    if (!ls.length) return "No tenés listas todavía. Probá: _agregá leche a la lista del súper_ 🛒";
+    if (ls.length === 1) return textoLista(ls[0]);
+    return `📝 Tus listas:\n${ls.map((l) => `• *${l.nombre}* (${l.items.length})`).join("\n")}\n\nPedime una: _pasame la lista del súper_.`;
+  }
+
+  private async textoNotas(): Promise<string> {
+    const ns = await todasLasNotas();
+    if (!ns.length) return "Todavía no tenés notas. Probá: _anotá que la clave del wifi es…_ 🗒️";
+    const lineas = ns.slice(0, 40).map((n) => `• ${n.titulo} _(${n.categoria})_${n.adjuntoId ? " 📎" : ""}`);
+    return `🗒️ Tus notas (${ns.length}):\n${lineas.join("\n")}${ns.length > 40 ? "\n…y más en el panel." : ""}\n\nPreguntame: _¿cuál era la clave del wifi?_`;
+  }
+
   private async confirmar(ocId: number) {
     const oc = await confirmarOcurrencia(ocId);
     if (!oc) return this.decir("Ese aviso ya estaba cerrado 👌");
@@ -463,8 +560,10 @@ export class Procesador {
         let conFoto = ctx.borrador?.datos.adjuntoId ?? null;
         let link = ctx.borrador?.datos.url ?? null;
         for (const it of items) {
+          const listaId = it.lista ? (await obtenerOCrearLista(it.lista)).id : null;
           const datos: DatosRecordatorio = {
             titulo: it.titulo!,
+            listaId,
             descripcion: conLink(it.descripcion, link),
             fechaHora: fechaDe(it.fecha_hora)!,
             rrule: it.recurrencia,
@@ -556,6 +655,88 @@ export class Procesador {
         await reanudarRecordatorio(rec.id);
         const r = (await obtenerRecordatorio(rec.id))!;
         return this.decir(`▶️ Reanudé *${r.titulo}*: ${describirCuando(r)}.`, { recordatorioId: rec.id, intencion: "reanudar" });
+      }
+      case "lista_agregar": {
+        const items = i.lista_items.filter((x) => x.texto.trim());
+        if (!items.length) return this.decir(i.respuesta ?? "¿Qué querés agregar a la lista?");
+        const l = await obtenerOCrearLista(i.lista ?? "Pendientes");
+        const nuevos = await agregarItems(l.id, items);
+        const total = (await obtenerLista(l.id))?.items.length ?? 0;
+        if (!nuevos.length) return this.decir(`Eso ya estaba en *${l.nombre}* 👌 (${total} en total)`, { intencion: "lista_agregar" });
+        const lineas = nuevos.map((x) => `${x.texto}${x.cantidad ? ` (${x.cantidad})` : ""}`).join(", ");
+        return this.decir(`🛒 Agregué a *${l.nombre}*: ${lineas}. (${total} en total)`, { intencion: "lista_agregar" });
+      }
+      case "lista_quitar": {
+        const borrados = await quitarItems(i.lista_item_ids);
+        if (!borrados.length) return this.decir(i.respuesta ?? "No encontré eso en tus listas 🤔. Escribí *listas* para verlas.");
+        const l = await obtenerLista(borrados[0].listaId);
+        const quedan = l?.items.length ?? 0;
+        return this.decir(
+          `✅ Listo, saqué: ${borrados.map((b) => b.texto).join(", ")}.${l ? ` En *${l.nombre}* ${quedan ? `quedan ${quedan}` : "no queda nada 🙌"}.` : ""}`,
+          { intencion: "lista_quitar" },
+        );
+      }
+      case "lista_ver": {
+        if (!i.lista) return this.decir(await this.textoListas(), { intencion: "lista_ver" });
+        const l = await buscarLista(i.lista);
+        if (!l) return this.decir(`No tenés una lista "${i.lista}". ${await this.textoListas()}`);
+        return this.decir(textoLista((await obtenerLista(l.id))!), { intencion: "lista_ver" });
+      }
+      case "lista_vaciar":
+      case "lista_borrar": {
+        const l = i.lista ? await buscarLista(i.lista) : null;
+        if (!l) return this.decir("¿Qué lista? Escribí *listas* para verlas.");
+        if (i.intencion === "lista_vaciar") {
+          await vaciarLista(l.id);
+          return this.decir(`🧹 Vacié *${l.nombre}*.`, { intencion: i.intencion });
+        }
+        await borrarLista(l.id);
+        return this.decir(`🗑️ Borré la lista *${l.nombre}*.`, { intencion: i.intencion });
+      }
+      case "nota_guardar": {
+        if (!i.nota || !(i.nota.contenido.trim() || i.nota.titulo.trim())) return this.decir(i.respuesta ?? "¿Qué querés que anote?");
+        // Si hay una foto esperando, va con la nota.
+        const b = ctx.borrador && !ctx.borrador.datos.url ? ctx.borrador : null;
+        let contenido = i.nota.contenido;
+        if (b?.datos.adjuntoId) {
+          const adj = await obtenerAdjunto(b.datos.adjuntoId);
+          const visible = (adj?.datosExtraidos as { texto_visible?: string | null } | null)?.texto_visible;
+          if (visible && !contenido.includes(visible)) contenido = `${contenido}\n${visible}`;
+        }
+        const n = await crearNota({ ...i.nota, contenido, adjuntoId: b?.datos.adjuntoId ?? null });
+        if (b) await cerrarBorrador(b.id);
+        return this.decir(`🗒️ Anotado: *${n.titulo}*${b?.datos.adjuntoId ? " (con la foto)" : ""}. Preguntame cuando lo necesites.`, {
+          intencion: "nota_guardar",
+        });
+      }
+      case "nota_consultar": {
+        const todas = await todasLasNotas();
+        if (!todas.length) return this.decir("Todavía no tenés notas. Probá: _anotá que la clave del wifi es…_");
+        const consulta = i.consulta ?? i.referencia ?? "";
+        const r = await responderConNotas(await obtenerConfig(), consulta, relacionadas(todas, consulta));
+        await this.decir(r.respuesta, { intencion: "nota_consultar" });
+        // Si la nota usada tiene foto, se manda también.
+        const conFoto = todas.find((n) => r.nota_ids.includes(n.id) && n.adjuntoId);
+        if (conFoto?.adjuntoId) {
+          const adj = await obtenerAdjunto(conFoto.adjuntoId);
+          if (adj) await this.canal.responderImagen(adj.rutaArchivo, adj.mime, `🗒️ ${conFoto.titulo}`);
+        }
+        return;
+      }
+      case "nota_editar":
+      case "nota_borrar": {
+        const notas = (await Promise.all(i.nota_ids.map((id) => obtenerNota(id)))).filter((n) => !!n);
+        if (!notas.length) return this.decir("No encontré esa nota 🤔. Escribí *notas* para verlas.");
+        if (notas.length > 1)
+          return this.decir(`Encontré varias:\n${notas.map((n, k) => `${k + 1}) *${n.titulo}*`).join("\n")}\n\n¿Cuál?`);
+        const n = notas[0];
+        if (i.intencion === "nota_borrar") {
+          await borrarNota(n.id);
+          return this.decir(`🗑️ Borré la nota *${n.titulo}*.`, { intencion: "nota_borrar" });
+        }
+        if (!i.nota) return this.decir("¿Qué le cambio a la nota?");
+        const nueva = await actualizarNota(n.id, { titulo: i.nota.titulo || n.titulo, contenido: i.nota.contenido || n.contenido, categoria: i.nota.categoria || n.categoria });
+        return this.decir(`✏️ Actualicé la nota *${nueva.titulo}*.`, { intencion: "nota_editar" });
       }
       case "ayuda":
         return this.decir(TEXTO_AYUDA, { intencion: "ayuda" });

@@ -14,11 +14,18 @@ const interpretar = vi.fn<(...a: unknown[]) => Promise<Interpretacion>>();
 const analizarFoto = vi.fn<(...a: unknown[]) => Promise<AnalisisFoto>>();
 const analizarEnlace = vi.fn<(...a: unknown[]) => Promise<AnalisisEnlace>>();
 const leerEnlace = vi.fn<(...a: unknown[]) => Promise<ContenidoEnlace>>();
+const responderConNotas = vi.fn<(...a: unknown[]) => Promise<{ respuesta: string; nota_ids: number[] }>>();
+const transcribir = vi.fn<(...a: unknown[]) => Promise<string>>();
+vi.mock("../src/servicios/audio.js", async (orig) => ({
+  ...(await orig<object>()),
+  transcribir: (...a: unknown[]) => transcribir(...a),
+}));
 vi.mock("../src/bot/ia.js", async (orig) => ({
   ...(await orig<object>()),
   interpretar: (...a: unknown[]) => interpretar(...a),
   analizarFoto: (...a: unknown[]) => analizarFoto(...a),
   analizarEnlace: (...a: unknown[]) => analizarEnlace(...a),
+  responderConNotas: (...a: unknown[]) => responderConNotas(...a),
 }));
 vi.mock("../src/servicios/enlaces.js", async (orig) => ({
   ...(await orig<object>()),
@@ -38,6 +45,12 @@ const base: Interpretacion = {
   listar_hasta: null,
   posponer_minutos: null,
   posponer_hasta: null,
+  lista: null,
+  lista_items: [],
+  lista_item_ids: [],
+  nota: null,
+  nota_ids: [],
+  consulta: null,
   falta_info: null,
   respuesta: null,
   confianza: 1,
@@ -50,6 +63,7 @@ describe("bot", () => {
   const respuestas: string[] = [];
   const canal = {
     responder: async (t: string) => (respuestas.push(t), `OUT${respuestas.length}`),
+    responderImagen: async (_r: string, _m: string, t: string) => (respuestas.push(`[foto] ${t}`), `OUT${respuestas.length}`),
     descargarMedia: async () => sharp({ create: { width: 20, height: 20, channels: 3, background: "#fff" } }).jpeg().toBuffer(),
   };
   const bot = new Procesador(canal);
@@ -67,7 +81,7 @@ describe("bot", () => {
     interpretar.mockResolvedValue({
       ...base,
       intencion: "crear_recordatorio",
-      recordatorios: [{ titulo: "Pagar la luz", descripcion: null, fecha_hora: "2026-10-23T10:00:00-03:00", recurrencia: null, avisos_previos_min: [] }],
+      recordatorios: [{ titulo: "Pagar la luz", descripcion: null, fecha_hora: "2026-10-23T10:00:00-03:00", recurrencia: null, avisos_previos_min: [], lista: null }],
     });
     await bot.procesar(texto("Recordame mañana a las 10 pagar la luz"));
     expect(respuestas[0]).toBe("Listo ✅ Te recuerdo *Pagar la luz* mañana a las 10:00.");
@@ -87,7 +101,7 @@ describe("bot", () => {
     interpretar.mockResolvedValue({
       ...base,
       intencion: "crear_recordatorio",
-      recordatorios: [{ titulo: "Tomar la pastilla", descripcion: null, fecha_hora: "2026-10-22T09:00:00-03:00", recurrencia: null, avisos_previos_min: [] }],
+      recordatorios: [{ titulo: "Tomar la pastilla", descripcion: null, fecha_hora: "2026-10-22T09:00:00-03:00", recurrencia: null, avisos_previos_min: [], lista: null }],
     });
     await bot.procesar(texto("Recordame a las 9 tomar la pastilla"));
     await bot.procesar(texto("hoy"));
@@ -126,6 +140,7 @@ describe("bot", () => {
       propuesta_fecha_hora: "2026-10-29T10:00:00-03:00",
       propuesta_avisos_previos_min: [],
       mensaje: "Veo una factura de luz que vence el 30/10 por $25.400. ¿Te lo recuerdo el 29/10 a las 10:00?",
+      texto_visible: null,
     });
     const foto: WAMessage = {
       key: { id: "FOTO1", remoteJid: "5491112345678@s.whatsapp.net" },
@@ -208,11 +223,120 @@ describe("bot", () => {
       propuesta_fecha_hora: "2026-10-30T22:00:00-03:00",
       propuesta_avisos_previos_min: [],
       mensaje: "¿Te lo recuerdo el 30/10 a las 22?",
+      texto_visible: null,
     });
     await bot.procesar({ key: { id: "FOTO2", remoteJid: "5491112345678@s.whatsapp.net" }, message: { imageMessage: { mimetype: "image/jpeg", fileLength: 1000 } } });
     await bot.procesar(texto("dale"));
     const [rec] = await recordatoriosActivos();
     expect(rec.descripcion).toContain("🔗 https://www.instagram.com/p/ABC/");
     expect(rec.adjuntoId).not.toBeNull();
+  });
+
+  it("audio: transcribe, muestra lo entendido y lo procesa", async () => {
+    transcribir.mockResolvedValue("recordame mañana a las 10 pagar la luz");
+    interpretar.mockResolvedValue({
+      ...base,
+      intencion: "crear_recordatorio",
+      recordatorios: [{ titulo: "Pagar la luz", descripcion: null, fecha_hora: "2026-10-23T10:00:00-03:00", recurrencia: null, avisos_previos_min: [], lista: null }],
+    });
+    await bot.procesar({ key: { id: "AUD1", remoteJid: "5491112345678@s.whatsapp.net" }, message: { audioMessage: { seconds: 5, mimetype: "audio/ogg; codecs=opus" } } });
+    expect(respuestas[0]).toBe("🎙️ Entendí: “recordame mañana a las 10 pagar la luz”");
+    expect(respuestas[1]).toContain("*Pagar la luz*");
+    expect(interpretar.mock.calls[0][1]).toBe("recordame mañana a las 10 pagar la luz");
+  });
+
+  it("audio muy largo: no lo transcribe", async () => {
+    await bot.procesar({ key: { id: "AUD2", remoteJid: "5491112345678@s.whatsapp.net" }, message: { audioMessage: { seconds: 500 } } });
+    expect(respuestas[0]).toContain("muy largo");
+    expect(transcribir).not.toHaveBeenCalled();
+  });
+
+  it("listas: agregar, ver, quitar lo comprado y recordar la lista", async () => {
+    interpretar.mockResolvedValueOnce({
+      ...base,
+      intencion: "lista_agregar",
+      lista: "súper",
+      lista_items: [
+        { texto: "leche", cantidad: null },
+        { texto: "pan", cantidad: "2 kg" },
+      ],
+    });
+    await bot.procesar(texto("agregá leche y 2 kg de pan a la lista del súper"));
+    expect(respuestas[0]).toBe("🛒 Agregué a *Súper*: leche, pan (2 kg). (2 en total)");
+
+    await bot.procesar(texto("listas"));
+    expect(respuestas[1]).toContain("• pan (2 kg)");
+
+    const { todasLasListas } = await import("../src/servicios/listas.js");
+    const [l] = await todasLasListas();
+    const leche = l.items.find((i) => i.texto === "leche")!;
+    interpretar.mockResolvedValueOnce({ ...base, intencion: "lista_quitar", lista_item_ids: [leche.id] });
+    await bot.procesar(texto("ya compré la leche"));
+    expect(respuestas[2]).toContain("saqué: leche");
+
+    interpretar.mockResolvedValueOnce({
+      ...base,
+      intencion: "crear_recordatorio",
+      recordatorios: [{ titulo: "Lista del súper", descripcion: null, fecha_hora: "2026-10-24T10:00:00-03:00", recurrencia: null, avisos_previos_min: [], lista: "súper" }],
+    });
+    await bot.procesar(texto("recordame la lista del súper el sábado a las 10"));
+    const [rec] = await recordatoriosActivos();
+    expect(rec.listaId).toBe(l.id);
+    const wa = enviadorFalso();
+    vi.setSystemTime(local("2026-10-24T10:00"));
+    for (const id of await ocurrenciasVencidas()) await procesarOcurrencia(id);
+    expect(wa.enviados[0].texto).toContain("• pan (2 kg)");
+    expect(wa.enviados[0].texto).not.toContain("leche");
+  });
+
+  it("notas: guarda cifrada y responde preguntas", async () => {
+    interpretar.mockResolvedValueOnce({
+      ...base,
+      intencion: "nota_guardar",
+      nota: { titulo: "Clave wifi oficina", contenido: "La clave del wifi de la oficina es Mate2026!", categoria: "claves" },
+    });
+    await bot.procesar(texto("anotá que la clave del wifi de la oficina es Mate2026!"));
+    expect(respuestas[0]).toContain("Anotado: *Clave wifi oficina*");
+
+    const { db } = await import("../src/db/index.js");
+    const { sql } = await import("drizzle-orm");
+    const crudo = await db.execute(sql`select titulo_cifrado, contenido_cifrado from nota`);
+    expect(JSON.stringify(crudo.rows)).not.toContain("Mate2026");
+
+    interpretar.mockResolvedValueOnce({ ...base, intencion: "nota_consultar", consulta: "clave del wifi" });
+    responderConNotas.mockResolvedValueOnce({ respuesta: "La clave del wifi de la oficina es *Mate2026!*", nota_ids: [1] });
+    await bot.procesar(texto("¿cuál era la clave del wifi?"));
+    expect(respuestas[1]).toContain("Mate2026!");
+    const notasEnviadas = responderConNotas.mock.calls[0][2] as { contenido: string }[];
+    expect(notasEnviadas[0].contenido).toContain("Mate2026!");
+
+    await bot.procesar(texto("notas"));
+    expect(respuestas[2]).toContain("Clave wifi oficina");
+  });
+
+  it("foto con 'guardala como nota' va a notas", async () => {
+    analizarFoto.mockResolvedValue({
+      tipo: "otro",
+      descripcion: "Patente del auto",
+      util: false,
+      titulo: "Patente del auto",
+      fecha_evento: null,
+      monto: null,
+      lugar: null,
+      propuesta_fecha_hora: null,
+      propuesta_avisos_previos_min: [],
+      mensaje: "",
+      texto_visible: "AB 123 CD",
+    });
+    await bot.procesar({
+      key: { id: "FOTO3", remoteJid: "5491112345678@s.whatsapp.net" },
+      message: { imageMessage: { mimetype: "image/jpeg", fileLength: 1000, caption: "guardala como nota" } },
+    });
+    expect(respuestas[0]).toContain("Guardé la nota *Patente del auto*");
+    const { todasLasNotas } = await import("../src/servicios/notas.js");
+    const [n] = await todasLasNotas();
+    expect(n.contenido).toContain("AB 123 CD");
+    expect(n.adjuntoId).not.toBeNull();
+    expect(await recordatoriosActivos()).toHaveLength(0);
   });
 });
