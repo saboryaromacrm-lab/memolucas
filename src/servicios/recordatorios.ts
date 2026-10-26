@@ -27,6 +27,7 @@ export type DatosRecordatorio = {
   insistirPrevios?: boolean | null;
   origen?: "whatsapp" | "panel" | "foto" | "enlace";
   adjuntoId?: number | null;
+  listaId?: number | null;
 };
 
 // El scheduler se registra acá para evitar dependencias circulares.
@@ -155,6 +156,7 @@ export async function crearRecordatorio(d: DatosRecordatorio): Promise<Recordato
       insistirPrevios: d.insistirPrevios ?? null,
       origen: d.origen ?? "panel",
       adjuntoId: d.adjuntoId ?? null,
+      listaId: d.listaId ?? null,
     })
     .returning();
   const r = await reprogramar(rec);
@@ -205,6 +207,7 @@ export async function actualizarRecordatorio(id: number, cambios: Partial<DatosR
       insistenciaTope: cambios.insistenciaTope !== undefined ? cambios.insistenciaTope : actual.insistenciaTope,
       insistirPrevios: cambios.insistirPrevios !== undefined ? cambios.insistirPrevios : actual.insistirPrevios,
       adjuntoId: cambios.adjuntoId !== undefined ? cambios.adjuntoId : actual.adjuntoId,
+      listaId: cambios.listaId !== undefined ? cambios.listaId : actual.listaId,
       estado,
       actualizadoEn: sql`now()`,
     })
@@ -259,6 +262,7 @@ export async function duplicarRecordatorio(id: number): Promise<Recordatorio> {
     insistirPrevios: r.insistirPrevios,
     origen: "panel",
     adjuntoId: r.adjuntoId,
+    listaId: r.listaId,
   });
 }
 

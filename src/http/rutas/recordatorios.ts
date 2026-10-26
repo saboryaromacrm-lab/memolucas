@@ -47,6 +47,7 @@ const Datos = z.object({
   insistenciaTope: z.number().int().min(0).max(50).nullish(),
   insistirPrevios: z.boolean().nullish(),
   adjuntoId: z.number().int().positive().nullish(),
+  listaId: z.number().int().positive().nullish(),
 });
 
 export function serializar(r: Recordatorio, cfg: Configuracion) {
@@ -239,6 +240,7 @@ export const rutasRecordatorios: FastifyPluginAsync = async (app) => {
       estado: "activo",
       origen: "panel",
       adjuntoId: d.adjuntoId ?? null,
+      listaId: d.listaId ?? null,
       creadoEn: new Date(),
       actualizadoEn: new Date(),
     } satisfies Recordatorio;

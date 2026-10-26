@@ -1,9 +1,9 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { DateTime } from "luxon";
-import { Camera, Clock, History, ImageOff, Plus, Repeat, X } from "lucide-react";
+import { Camera, Clock, History, ImageOff, Plus, Repeat, ShoppingCart, X } from "lucide-react";
 import { api, del, get, post, put } from "../lib/api";
 import { aInputs, ahora, desdeInputs, fechaHora as fmtFechaHora, zona } from "../lib/fechas";
-import type { Configuracion, ModoInsistencia, Ocurrencia, RecordatorioDetalle } from "../lib/tipos";
+import type { Configuracion, Lista, ModoInsistencia, Ocurrencia, RecordatorioDetalle } from "../lib/tipos";
 import { Boton, Cargando, Insignia, Interruptor, Modal, useAviso } from "./ui";
 
 // ───────────── Repetición (editor visual ⇄ RRULE) ─────────────
@@ -144,6 +144,8 @@ function EditorModal({ apertura, onCerrar }: { apertura: Apertura; onCerrar: () 
   const [tope, setTope] = useState(5);
   const [insistirPrevios, setInsistirPrevios] = useState(false);
   const [adjunto, setAdjunto] = useState<{ id: number; url: string } | null>(null);
+  const [listaId, setListaId] = useState<number | null>(null);
+  const [listas, setListas] = useState<Lista[]>([]);
   const [subiendo, setSubiendo] = useState(false);
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -155,6 +157,7 @@ function EditorModal({ apertura, onCerrar }: { apertura: Apertura; onCerrar: () 
     (async () => {
       try {
         const c = await get<Configuracion>("/api/configuracion");
+        get<Lista[]>("/api/listas").then(setListas).catch(() => {});
         setCfg(c);
         setIntervalo(c.insistenciaIntervaloMin);
         setTope(c.insistenciaTope);
@@ -177,6 +180,7 @@ function EditorModal({ apertura, onCerrar }: { apertura: Apertura; onCerrar: () 
           if (r.insistenciaTope !== null) setTope(r.insistenciaTope);
           if (r.insistirPrevios !== null) setInsistirPrevios(r.insistirPrevios);
           if (r.adjuntoId && r.adjuntoUrl) setAdjunto({ id: r.adjuntoId, url: r.adjuntoUrl });
+          setListaId(r.listaId);
         } else {
           let f = apertura.fecha ? DateTime.fromJSDate(apertura.fecha).setZone(zona()) : ahora().plus({ hours: 1 }).startOf("hour");
           // Clic en un día del mes (medianoche): usar la hora por defecto.
@@ -212,8 +216,9 @@ function EditorModal({ apertura, onCerrar }: { apertura: Apertura; onCerrar: () 
       insistenciaTope: modo === "propia" ? tope : null,
       insistirPrevios: modo === "propia" ? insistirPrevios : null,
       adjuntoId: adjunto?.id ?? null,
+      listaId,
     }),
-    [titulo, descripcion, fechaDt, rrule, previos, avisarEnHora, modo, intervalo, tope, insistirPrevios, adjunto],
+    [titulo, descripcion, fechaDt, rrule, previos, avisarEnHora, modo, intervalo, tope, insistirPrevios, adjunto, listaId],
   );
 
   // Vista previa del mensaje (con una pequeña espera mientras se escribe).
@@ -474,6 +479,24 @@ function EditorModal({ apertura, onCerrar }: { apertura: Apertura; onCerrar: () 
                     </div>
                   )}
                 </section>
+
+                {/* Lista */}
+                {(listas.length > 0 || listaId) && (
+                  <section className="rounded-xl border border-slate-200 p-4">
+                    <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-800">
+                      <ShoppingCart className="size-4 text-slate-400" /> Adjuntar lista al aviso
+                    </div>
+                    <select className="campo" value={listaId ?? ""} onChange={(e) => setListaId(e.target.value ? Number(e.target.value) : null)}>
+                      <option value="">Ninguna</option>
+                      {listas.map((l) => (
+                        <option key={l.id} value={l.id}>
+                          {l.nombre} ({l.items.length})
+                        </option>
+                      ))}
+                    </select>
+                    <p className="mt-1 text-xs text-slate-500">El aviso trae los ítems que falten en ese momento.</p>
+                  </section>
+                )}
 
                 {/* Foto */}
                 <section className="rounded-xl border border-slate-200 p-4">
