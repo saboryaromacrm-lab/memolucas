@@ -2,13 +2,19 @@
 
 Bot personal de recordatorios por WhatsApp, con panel web en **https://memolucas.saboryaroma.com**.
 
-Le escribís al bot como a una persona (*"recordame mañana a las 10 pagar la luz"*, *"todos los lunes a las 8 sacar la basura"*, o le mandás la foto de una factura) y te avisa por WhatsApp a la hora indicada. Si no confirmás, insiste.
+Le escribís al bot como a una persona (*"recordame mañana a las 10 pagar la luz"*, *"todos los lunes a las 8 sacar la basura"*), le mandás la foto de una factura o el link de un evento, y te avisa por WhatsApp a la hora indicada. Si no confirmás, insiste.
 
 ## Qué hace
 
 **Por WhatsApp**
 - Entiende texto libre con IA (Claude): recordatorios únicos, relativos (*"en 2 horas"*), recurrentes (*"el 10 de cada mes"*, *"cada 3 días"*), con avisos previos (*"avisame 1 hora antes y el día anterior"*) y sin hora (usa la hora por defecto).
 - **Fotos**: lee facturas, turnos, entradas o invitaciones, propone el recordatorio (*"¿Te lo recuerdo el 29/10 a las 10:00?"*) y al avisarte reenvía la foto.
+- **Links** (Instagram, TikTok, YouTube, webs de entradas, recetas, notas, tiendas…):
+  - lee el título, la descripción, el texto y la imagen de portada;
+  - te dice de qué se trata, saca su conjetura y te propone o te pregunta cuándo recordártelo;
+  - con *"recordame el viernes ver esto"* lo crea directo;
+  - el aviso trae el link y la imagen de portada.
+  Si el sitio no deja leer el link (pasa con Instagram), te pide una captura de pantalla y le agrega el link al recordatorio.
 - **Confirmar**: *listo*, *hecho*, ✅ o reaccionar con 👍/✅ al aviso. Si no confirmás, insiste cada 60 min (configurable) hasta un tope y lo marca "no confirmado".
 - **Posponer**: *"posponé 15 min"*, *"mañana"*, *"en 2 horas"*.
 - **Editar, borrar, pausar y reanudar**: *"cambiá lo del dentista a las 11"*, *"borrá lo de la basura"*.
@@ -48,7 +54,7 @@ Le escribís al bot como a una persona (*"recordame mañana a las 10 pagar la lu
 
 ## Resiliencia
 
-- Arranca solo al reiniciar el VPS (PM2) y espera a que PostgreSQL esté listo.
+- Corre en Dokploy: arranca solo al reiniciar el VPS y espera a que PostgreSQL esté listo.
 - Corre las migraciones de la base automáticamente.
 - Las tareas programadas viven en PostgreSQL (pg-boss): sobreviven a reinicios.
 - Si WhatsApp se corta, reconecta con espera creciente (5 s, 10 s, 30 s, 1 min, 5 min).
@@ -65,9 +71,9 @@ Un solo proceso sirve el bot, el scheduler, la API y el panel.
 
 ---
 
-## Instalación en el VPS de Hostinger
+## Instalación en el VPS (Dokploy)
 
-Se hace una sola vez, por SSH en el VPS (Ubuntu). Convive con las otras apps del servidor: usa el puerto **3100**, su propia base PostgreSQL y su propio sitio de Nginx.
+El VPS usa **Dokploy**: Memolucas corre como una app más, junto a las otras, con su propia base PostgreSQL.
 
 ### 0. Antes de empezar: el chip del bot
 
@@ -78,62 +84,45 @@ Se hace una sola vez, por SSH en el VPS (Ubuntu). Convive con las otras apps del
 
 En hPanel, zona DNS de `saboryaroma.com`: creá un registro **A** con nombre `memolucas` que apunte a la IP del VPS.
 
-### 2. Programas (si alguno ya está instalado, se saltea solo)
+### 2. Base de datos
 
-```bash
-curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-sudo apt install -y nodejs nginx postgresql certbot python3-certbot-nginx git
-sudo npm install -g pm2
-node -v   # tiene que ser 22.12 o más nuevo
+En Dokploy:
+1. **Create Project** `memolucas` → **Create Service → Database → PostgreSQL**.
+2. Datos: Database `memolucas`, User `memolucas`, y una contraseña de **solo letras y números**.
+3. Tocá **Deploy**.
+4. Copiá la **Internal Connection URL**.
+
+### 3. Aplicación
+
+**Create Service → Application** `memolucas`:
+
+| Pestaña | Qué cargar |
+|---|---|
+| General | Provider GitHub, repo `memolucas`, branch `main`, Build Type **Dockerfile** |
+| Environment | ver abajo |
+| Advanced → Volumes | Volume Mount `memolucas-data` en `/app/data` (sesión de WhatsApp y fotos) |
+| Domains | Host `memolucas.saboryaroma.com`, path `/`, Container Port `3000`, HTTPS con Let's Encrypt |
+
+Variables de entorno:
+
+```
+NODE_ENV=production
+TZ=America/Argentina/Buenos_Aires
+DATA_DIR=/app/data
+DATABASE_URL=<Internal Connection URL del paso 2>
+APP_SECRET=<generala con: openssl rand -hex 48>
+ANTHROPIC_API_KEY=<opcional: también se puede cargar desde el panel>
 ```
 
-### 3. Base de datos
+Tocá **Deploy** y activá **Autodeploy**: con cada cambio en `main` se actualiza solo.
 
-```bash
-sudo -u postgres psql -c "CREATE USER memolucas WITH PASSWORD 'una-clave-segura';"
-sudo -u postgres psql -c "CREATE DATABASE memolucas OWNER memolucas;"
-```
-
-### 4. Código y configuración
-
-```bash
-sudo mkdir -p /var/www/memolucas /var/www/memolucas-data
-sudo chown -R $USER /var/www/memolucas /var/www/memolucas-data
-git clone https://github.com/saboryaromacrm-lab/memolucas.git /var/www/memolucas
-cd /var/www/memolucas
-cp .env.example .env
-nano .env
-```
-
-En el `.env` completá:
-- `DATABASE_URL`: con la clave del paso 3.
-- `ANTHROPIC_API_KEY`: una clave **aparte** para este bot (console.anthropic.com → API Keys).
-- `APP_SECRET`: generala con `openssl rand -base64 48`.
-
-Después:
-
-```bash
-bash scripts/desplegar.sh
-pm2 startup      # copiá y ejecutá el comando que te muestra (arranque automático)
-pm2 save
-```
-
-### 5. Dominio y HTTPS
-
-```bash
-sudo cp deploy/nginx-memolucas.saboryaroma.com.conf /etc/nginx/sites-available/memolucas.saboryaroma.com
-sudo ln -s /etc/nginx/sites-available/memolucas.saboryaroma.com /etc/nginx/sites-enabled/
-sudo nginx -t && sudo systemctl reload nginx
-sudo certbot --nginx -d memolucas.saboryaroma.com
-```
-
-### 6. Primer uso
+### 4. Primer uso
 
 1. Entrá a **https://memolucas.saboryaroma.com** con el PIN **1953**.
-2. En **Inicio → Configuración inicial**, cargá tu número personal (el único que puede hablarle al bot).
-3. En **WhatsApp**, escaneá el QR con el teléfono del chip del bot: *Configuración → Dispositivos vinculados → Vincular un dispositivo*. También podés usar la opción *Con código*.
-4. Desde tu número personal, mandale **"hola"** o **"ayuda"** al bot.
-5. Cambiá el PIN en *Configuración → Seguridad* si querés.
+2. **Configuración → IA**: cargá la API key de Claude (console.anthropic.com → API Keys, copiala con el botón de copiar) y tocá *Probar conexión*.
+3. **Inicio → Configuración inicial**: cargá tu número personal, que es el único que puede hablarle al bot.
+4. **WhatsApp**: escaneá el QR con el teléfono del chip del bot (*Configuración → Dispositivos vinculados → Vincular un dispositivo*), o usá *Con código*.
+5. Desde tu número, mandale **"ayuda"** al bot.
 
 ### Instalar el panel en el celular
 
@@ -141,40 +130,19 @@ Entrá a la URL y elegí:
 - **Android (Chrome)**: menú ⋮ → *Instalar app*.
 - **iPhone (Safari)**: Compartir → *Agregar a pantalla de inicio*.
 
----
-
-## Actualizar
-
-Manual, en el VPS:
-
-```bash
-cd /var/www/memolucas && bash scripts/desplegar.sh
-```
-
-**Automático con cada push a `main`**: cargá estos secretos en GitHub (*Settings → Secrets and variables → Actions*):
-
-| Secreto | Valor |
-|---|---|
-| `VPS_HOST` | IP del VPS |
-| `VPS_USER` | usuario SSH (el dueño de `/var/www/memolucas`) |
-| `VPS_SSH_KEY` | clave privada SSH (su clave pública tiene que estar en `~/.ssh/authorized_keys` del VPS) |
-| `VPS_PORT` | opcional, 22 por defecto |
-
-Mientras no estén cargados, el workflow se saltea sin fallar.
-
 ## Si algo no anda
 
 | Problema | Qué hacer |
 |---|---|
-| El panel no abre | `pm2 status` y `pm2 logs memolucas` |
+| "Bad Gateway" | Dokploy → memolucas → **Logs**. Si dice *"la base no responde"*, revisá `DATABASE_URL` (Internal URL) y redesplegá. |
 | El bot no responde | Panel → WhatsApp: ¿está "Conectado"? ¿El número autorizado es el tuyo? Mirá *Logs*. |
 | "Uy, no pude procesar eso" | Panel → Configuración → IA → *Probar conexión* (API key o modelo) |
 | WhatsApp bloqueó el número | Cambiá el chip, *Desvincular* y escaneá el QR nuevo |
-| Estado general | `curl http://127.0.0.1:3100/health` |
+| Estado general | `https://memolucas.saboryaroma.com/health` |
 
-Los datos persistentes están en PostgreSQL y en `/var/www/memolucas-data`:
+Los datos persistentes están en la base PostgreSQL de Dokploy y en el volumen `memolucas-data`:
 - `auth/`: sesión de WhatsApp.
-- `media/`: fotos.
+- `media/`: fotos e imágenes de links.
 
 ## Desarrollo local
 
@@ -194,5 +162,3 @@ npm run typecheck      # tipos
 npm test               # pruebas (usa TEST_DATABASE_URL o postgresql://postgres@127.0.0.1:5433/memolucas_test)
 npm run db:generar     # nueva migración después de cambiar src/db/schema.ts
 ```
-
-Con Docker (por ejemplo, Dokploy) también funciona: el `Dockerfile` está listo. Necesita las mismas variables de entorno y un volumen persistente en `/app/data`.

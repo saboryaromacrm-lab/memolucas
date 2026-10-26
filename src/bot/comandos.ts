@@ -45,6 +45,7 @@ export const TEXTO_AYUDA = `👋 Soy *Memolucas*, tu bot de recordatorios. Escri
 • _Todos los lunes a las 8 sacar la basura_
 • _Tengo turno el jueves a las 10, avisame 1 hora antes_
 • Mandame una *foto* de una factura o turno y te propongo el recordatorio.
+• Mandame un *link* (Instagram, TikTok, YouTube, entradas, recetas, notas…): te digo de qué se trata y te propongo cuándo recordártelo.
 
 Comandos rápidos:
 • *hoy* / *mañana* / *semana* / *lista*

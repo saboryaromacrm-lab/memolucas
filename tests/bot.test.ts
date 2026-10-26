@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WAMessage } from "baileys";
 import { DateTime } from "luxon";
 import { Procesador } from "../src/bot/procesador.js";
-import type { AnalisisFoto, Interpretacion } from "../src/bot/ia.js";
+import type { AnalisisEnlace, AnalisisFoto, Interpretacion } from "../src/bot/ia.js";
+import type { ContenidoEnlace } from "../src/servicios/enlaces.js";
 import sharp from "sharp";
 import { actualizarConfig } from "../src/servicios/configuracion.js";
 import { ocurrenciasVencidas, procesarOcurrencia } from "../src/servicios/disparador.js";
@@ -11,10 +12,17 @@ import { baseLimpia, enviadorFalso, reloj } from "./ayuda.js";
 
 const interpretar = vi.fn<(...a: unknown[]) => Promise<Interpretacion>>();
 const analizarFoto = vi.fn<(...a: unknown[]) => Promise<AnalisisFoto>>();
+const analizarEnlace = vi.fn<(...a: unknown[]) => Promise<AnalisisEnlace>>();
+const leerEnlace = vi.fn<(...a: unknown[]) => Promise<ContenidoEnlace>>();
 vi.mock("../src/bot/ia.js", async (orig) => ({
   ...(await orig<object>()),
   interpretar: (...a: unknown[]) => interpretar(...a),
   analizarFoto: (...a: unknown[]) => analizarFoto(...a),
+  analizarEnlace: (...a: unknown[]) => analizarEnlace(...a),
+}));
+vi.mock("../src/servicios/enlaces.js", async (orig) => ({
+  ...(await orig<object>()),
+  leerEnlace: (...a: unknown[]) => leerEnlace(...a),
 }));
 
 const Z = "America/Argentina/Buenos_Aires";
@@ -133,5 +141,78 @@ describe("bot", () => {
     vi.setSystemTime(local("2026-10-29T10:00"));
     for (const id of await ocurrenciasVencidas()) await procesarOcurrencia(id);
     expect(wa.enviados[0].imagen).toBeTruthy();
+  });
+
+  const contenido = (extra: Partial<ContenidoEnlace> = {}): ContenidoEnlace => ({
+    url: "https://entradas.com/recital",
+    urlFinal: "https://entradas.com/recital",
+    sitio: "entradas.com",
+    titulo: "Recital de La Banda",
+    descripcion: "15/11 21 hs en el Movistar Arena",
+    texto: null,
+    evento: null,
+    imagen: null,
+    legible: true,
+    esInstagram: false,
+    ...extra,
+  });
+  const analisis = (extra: Partial<AnalisisEnlace> = {}): AnalisisEnlace => ({
+    tipo: "evento",
+    resumen: "Recital de La Banda el 15/11 a las 21 en el Movistar Arena.",
+    titulo: "Recital de La Banda",
+    fecha_evento: "2026-11-15T21:00:00-03:00",
+    lugar: "Movistar Arena",
+    accion: "proponer",
+    propuesta_fecha_hora: "2026-11-15T21:00:00-03:00",
+    propuesta_avisos_previos_min: [1440, 60],
+    mensaje: "Es el recital de La Banda el 15/11 a las 21. ¿Te aviso ese día con avisos el día anterior y 1 hora antes?",
+    ...extra,
+  });
+
+  it("link: propone, acepta con 'dale' y el recordatorio trae el link", async () => {
+    leerEnlace.mockResolvedValue(contenido());
+    analizarEnlace.mockResolvedValue(analisis());
+    await bot.procesar(texto("https://entradas.com/recital"));
+    expect(respuestas[0]).toContain("¿Te aviso ese día");
+    await bot.procesar(texto("dale"));
+    const [rec] = await recordatoriosActivos();
+    expect(rec.titulo).toBe("Recital de La Banda");
+    expect(rec.origen).toBe("enlace");
+    expect(rec.descripcion).toContain("🔗 https://entradas.com/recital");
+    expect(rec.avisosPreviosMin).toEqual([1440, 60]);
+  });
+
+  it("link con instrucción: lo crea directo", async () => {
+    leerEnlace.mockResolvedValue(contenido({ titulo: "Ñoquis caseros", descripcion: "Receta" }));
+    analizarEnlace.mockResolvedValue(
+      analisis({ tipo: "receta", titulo: "Ver receta de ñoquis", accion: "crear", propuesta_fecha_hora: "2026-10-24T10:00:00-03:00", propuesta_avisos_previos_min: [] }),
+    );
+    await bot.procesar(texto("recordame el sábado ver esto https://recetas.com/noquis"));
+    expect(respuestas[0]).toContain("Listo ✅ Te recuerdo *Ver receta de ñoquis*");
+    expect(analizarEnlace.mock.calls[0][2]).toBe("recordame el sábado ver esto");
+  });
+
+  it("link que no se puede leer: pide captura y la foto hereda el link", async () => {
+    leerEnlace.mockResolvedValue(contenido({ legible: false, esInstagram: true, titulo: null, descripcion: null }));
+    await bot.procesar(texto("https://www.instagram.com/p/ABC/"));
+    expect(respuestas[0]).toContain("captura de pantalla");
+    expect(respuestas[0]).toContain("Instagram");
+    analizarFoto.mockResolvedValue({
+      tipo: "entrada",
+      descripcion: "Flyer de fiesta",
+      util: true,
+      titulo: "Fiesta",
+      fecha_evento: null,
+      monto: null,
+      lugar: null,
+      propuesta_fecha_hora: "2026-10-30T22:00:00-03:00",
+      propuesta_avisos_previos_min: [],
+      mensaje: "¿Te lo recuerdo el 30/10 a las 22?",
+    });
+    await bot.procesar({ key: { id: "FOTO2", remoteJid: "5491112345678@s.whatsapp.net" }, message: { imageMessage: { mimetype: "image/jpeg", fileLength: 1000 } } });
+    await bot.procesar(texto("dale"));
+    const [rec] = await recordatoriosActivos();
+    expect(rec.descripcion).toContain("🔗 https://www.instagram.com/p/ABC/");
+    expect(rec.adjuntoId).not.toBeNull();
   });
 });

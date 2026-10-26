@@ -25,7 +25,7 @@ export type DatosRecordatorio = {
   insistenciaIntervaloMin?: number | null;
   insistenciaTope?: number | null;
   insistirPrevios?: boolean | null;
-  origen?: "whatsapp" | "panel" | "foto";
+  origen?: "whatsapp" | "panel" | "foto" | "enlace";
   adjuntoId?: number | null;
 };
 

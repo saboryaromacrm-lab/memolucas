@@ -112,7 +112,7 @@ export const rutasPanel: FastifyPluginAsync = async (app) => {
       insistenciaTope: z.number().int().nullish(),
       insistirPrevios: z.boolean().nullish(),
       estado: z.enum(["activo", "pausado", "cumplido", "no_confirmado"]).optional(),
-      origen: z.enum(["whatsapp", "panel", "foto"]).optional(),
+      origen: z.enum(["whatsapp", "panel", "foto", "enlace"]).optional(),
     });
     const { recordatorios } = z.object({ recordatorios: z.array(Item).max(5000) }).parse(req.body);
     let programados = 0;

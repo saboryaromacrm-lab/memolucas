@@ -23,7 +23,8 @@ export async function esperarBase(intentosMax = 60): Promise<void> {
     } catch (err) {
       if (i >= intentosMax) throw err;
       const ms = Math.min(1000 * i, 10_000);
-      console.warn(`[db] la base no responde (intento ${i}), reintento en ${ms / 1000}s`);
+      const motivo = err instanceof Error ? err.message : String(err);
+      console.warn(`[db] la base no responde (intento ${i}: ${motivo}), reintento en ${ms / 1000}s`);
       await espera(ms);
     }
   }
