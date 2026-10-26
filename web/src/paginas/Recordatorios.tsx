@@ -124,7 +124,7 @@ function Fila({ r }: { r: Recordatorio }) {
         </span>
         <span className="hidden shrink-0 items-center gap-1.5 text-slate-400 sm:flex">
           {r.adjuntoId && <Camera className="size-4" />}
-          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-500">{r.origen === "panel" ? "Panel" : r.origen === "foto" ? "Foto" : "WhatsApp"}</span>
+          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-500">{r.origen === "panel" ? "Panel" : r.origen === "foto" ? "Foto" : r.origen === "enlace" ? "Link" : "WhatsApp"}</span>
         </span>
       </button>
       <div className="relative" ref={ref}>

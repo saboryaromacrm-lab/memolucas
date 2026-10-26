@@ -30,7 +30,8 @@ import {
   type DatosRecordatorio,
 } from "../servicios/recordatorios.js";
 import { EMOJIS_CONFIRMACION, TEXTO_AYUDA, detectarComando, esAfirmativo, esNegativo } from "./comandos.js";
-import { analizarFoto, interpretar, type Interpretacion } from "./ia.js";
+import { extraerUrls, leerEnlace, textoSinUrls, type VistaPreviaWa } from "../servicios/enlaces.js";
+import { analizarEnlace, analizarFoto, interpretar, type Interpretacion } from "./ia.js";
 
 /** Lo que el procesador necesita de WhatsApp. */
 export interface CanalBot {
@@ -42,10 +43,34 @@ const ERROR_IA = "Uy, no pude procesar eso. ¿Me lo repetís?";
 const HORAS_BORRADOR = 24;
 
 type DatosBorrador = {
-  adjuntoId: number;
+  adjuntoId?: number | null;
+  /** Link que mandó el usuario (va en el recordatorio para que el aviso lo traiga). */
+  url?: string | null;
+  titulo?: string | null;
   descripcion?: string;
+  /** El link no se pudo leer y se pidió una captura: la próxima foto lo hereda. */
+  esperaCaptura?: boolean;
   propuesta?: { titulo: string; fechaHora: string; avisosPreviosMin: number[]; descripcion: string | null } | null;
 };
+
+/** Agrega el link al final de la descripción (si no está). */
+function conLink(descripcion: string | null | undefined, url: string | null | undefined): string | null {
+  const d = descripcion?.trim() || "";
+  if (!url || d.includes(url)) return d || null;
+  return d ? `${d}\n🔗 ${url}` : `🔗 ${url}`;
+}
+
+function vistaPrevia(msg: WAMessage): VistaPreviaWa | null {
+  const e = msg.message?.extendedTextMessage;
+  if (!e?.title && !e?.description && !e?.jpegThumbnail?.length) return null;
+  return { titulo: e.title ?? null, descripcion: e.description ?? null, miniatura: e.jpegThumbnail?.length ? Buffer.from(e.jpegThumbnail) : null };
+}
+
+async function guardarBorrador(datos: DatosBorrador) {
+  // Una sola propuesta abierta por vez.
+  await db.delete(borradorPendiente);
+  await db.insert(borradorPendiente).values({ tipo: "foto", datos, expiraEn: new Date(Date.now() + HORAS_BORRADOR * 3_600_000) });
+}
 
 // ───────────── Helpers de texto ─────────────
 
@@ -124,9 +149,9 @@ export class Procesador {
     const texto = textoMensaje(msg);
     if (texto?.trim()) return this.texto(msg, texto.trim());
     await registrarMensaje({ direccion: "entrante", tipo: "otro", texto: null, waMessageId: msg.key.id });
-    if (m.audioMessage) return this.decir("Por ahora no escucho audios 🙈. Escribime o mandame una foto.");
+    if (m.audioMessage) return this.decir("Por ahora no escucho audios 🙈. Escribime, o mandame una foto o un link.");
     if (m.stickerMessage) return;
-    await this.decir("Por ahora solo entiendo texto y fotos 🙂");
+    await this.decir("Por ahora entiendo texto, fotos y links 🙂");
   }
 
   private async reaccion(msg: WAMessage) {
@@ -159,10 +184,12 @@ export class Procesador {
       await registrar("error", "bot", "No se pudo descargar la foto", err);
       return this.decir("No pude bajar la foto 😕. ¿Me la mandás de nuevo?");
     }
+    const previo = await borradorActivo();
+    const url = previo?.datos.esperaCaptura ? (previo.datos.url ?? null) : null;
     const adj = await guardarImagen(datos, MIMES_IMAGEN.includes(mime) ? mime : "image/jpeg");
     await registrarMensaje({ direccion: "entrante", tipo: "imagen", texto: epigrafe, waMessageId: msg.key.id, adjuntoId: adj.id });
 
-    let datosBorrador: DatosBorrador = { adjuntoId: adj.id };
+    let datosBorrador: DatosBorrador = { adjuntoId: adj.id, url };
     let respuesta: string;
     try {
       const liviana = await imagenParaIa(datos);
@@ -171,6 +198,7 @@ export class Procesador {
       const fecha = fechaDe(a.propuesta_fecha_hora);
       datosBorrador = {
         adjuntoId: adj.id,
+        url,
         descripcion: a.descripcion,
         propuesta:
           a.util && fecha && fecha.getTime() > Date.now()
@@ -178,7 +206,7 @@ export class Procesador {
                 titulo: a.titulo ?? a.descripcion,
                 fechaHora: fecha.toISOString(),
                 avisosPreviosMin: a.propuesta_avisos_previos_min,
-                descripcion: [a.monto && `Monto: ${a.monto}`, a.lugar && `Lugar: ${a.lugar}`].filter(Boolean).join(" · ") || null,
+                descripcion: conLink([a.monto && `Monto: ${a.monto}`, a.lugar && `Lugar: ${a.lugar}`].filter(Boolean).join(" · "), url),
               }
             : null,
       };
@@ -186,13 +214,7 @@ export class Procesador {
     } catch {
       respuesta = "Guardé la foto 📎. ¿Cuándo querés que te la recuerde?";
     }
-    // Una sola propuesta abierta por vez.
-    await db.delete(borradorPendiente);
-    await db.insert(borradorPendiente).values({
-      tipo: "foto",
-      datos: datosBorrador,
-      expiraEn: new Date(Date.now() + HORAS_BORRADOR * 3_600_000),
-    });
+    await guardarBorrador(datosBorrador);
     await this.decir(respuesta, { intencion: "propuesta_foto" });
   }
 
@@ -204,7 +226,14 @@ export class Procesador {
     const anotar = (intencion: string) =>
       db.update(mensaje).set({ intencionDetectada: intencion }).where(eq(mensaje.id, entrante.id));
 
-    // 1) Respuesta rápida a una propuesta de foto.
+    // 1) Links: se leen y se analizan.
+    const urls = extraerUrls(texto);
+    if (urls.length) {
+      await anotar("enlace");
+      return this.enlace(msg, urls[0], textoSinUrls(texto) || null);
+    }
+
+    // 2) Respuesta rápida a una propuesta (foto o link).
     const borrador = await borradorActivo();
     if (borrador?.datos.propuesta && esAfirmativo(texto)) {
       await anotar("aceptar_propuesta");
@@ -215,7 +244,7 @@ export class Procesador {
       return this.rechazarBorrador(borrador.id, borrador.datos);
     }
 
-    // 2) Comandos rápidos sin IA. Si responde a un aviso ("mañana", "en 2 horas"), lo interpreta la IA como posponer.
+    // 3) Comandos rápidos sin IA. Si responde a un aviso ("mañana", "en 2 horas"), lo interpreta la IA como posponer.
     const comando = detectarComando(texto);
     const cmd = ocCitada && comando?.tipo === "listar" ? null : comando;
     if (cmd) {
@@ -252,7 +281,7 @@ export class Procesador {
       }
     }
 
-    // 3) IA.
+    // 4) IA.
     const cfg = await obtenerConfig();
     let interp: Interpretacion;
     try {
@@ -287,11 +316,14 @@ export class Procesador {
       .filter((h) => h.texto)
       .map((h) => ({ role: h.direccion === "entrante" ? "user" : "assistant", content: h.texto! }));
     let propuesta: string | null = null;
+    const origen = borrador?.url ? `Link ${borrador.url}${borrador.titulo ? ` ("${borrador.titulo}")` : ""}` : "Foto";
+    const adjunta = borrador?.url ? "este link (y su imagen si tiene)" : "esta foto";
     if (borrador?.propuesta)
-      propuesta = `Foto: ${borrador.descripcion ?? ""}. Propuesta: "${borrador.propuesta.titulo}" el ${aLocal(borrador.propuesta.fechaHora).toFormat("dd/MM HH:mm")}${
+      propuesta = `${origen}: ${borrador.descripcion ?? ""}. Propuesta: "${borrador.propuesta.titulo}" el ${aLocal(borrador.propuesta.fechaHora).toFormat("dd/MM HH:mm")}${
         borrador.propuesta.avisosPreviosMin.length ? ` con avisos previos ${borrador.propuesta.avisosPreviosMin.join(", ")} min` : ""
-      }. Si el usuario crea un recordatorio ahora, se le adjunta esta foto.`;
-    else if (borrador) propuesta = `Foto recibida sin propuesta (${borrador.descripcion ?? "sin datos"}). Si el usuario dice cuándo, crear_recordatorio y se le adjunta la foto.`;
+      }. Si el usuario crea un recordatorio ahora, se le adjunta ${adjunta}.`;
+    else if (borrador)
+      propuesta = `${origen} recibido sin propuesta (${borrador.descripcion ?? "sin datos"}). Si el usuario dice cuándo, crear_recordatorio (usá un título que describa el contenido) y se le adjunta ${adjunta}.`;
     let respondiendoA: string | null = null;
     if (ocCitada) {
       const [oc] = await db.select().from(ocurrencia).where(eq(ocurrencia.id, ocCitada));
@@ -305,6 +337,79 @@ export class Procesador {
       propuestaPendiente: propuesta,
       historial: historialIa,
     };
+  }
+
+  /** Link: lo lee, saca una conjetura y crea, propone o pregunta. */
+  private async enlace(msg: WAMessage, url: string, textoUsuario: string | null) {
+    const cfg = await obtenerConfig();
+    let contenido: Awaited<ReturnType<typeof leerEnlace>> | null = null;
+    try {
+      contenido = await leerEnlace(url, vistaPrevia(msg));
+    } catch (err) {
+      await registrar("aviso", "enlaces", `No se pudo leer ${url}`, err);
+    }
+
+    if (!contenido?.legible) {
+      await guardarBorrador({ url, adjuntoId: null, descripcion: "link que no se pudo leer", esperaCaptura: true });
+      const motivo = contenido?.esInstagram ? " Instagram no deja ver los posts sin iniciar sesión." : "";
+      return this.decir(
+        `No pude leer ese link 😕${motivo}\n¿Me mandás una *captura de pantalla*? O decime cuándo te lo recuerdo y te mando el link en el aviso.`,
+        { intencion: "enlace_ilegible" },
+      );
+    }
+
+    // La imagen de portada queda como adjunto: se reenvía con el aviso.
+    let adjuntoId: number | null = null;
+    if (contenido.imagen) {
+      try {
+        adjuntoId = (await guardarImagen(contenido.imagen.datos, contenido.imagen.mime)).id;
+      } catch {
+        adjuntoId = null;
+      }
+    }
+
+    let a: Awaited<ReturnType<typeof analizarEnlace>>;
+    try {
+      a = await analizarEnlace(cfg, { ...contenido, url }, textoUsuario);
+    } catch {
+      await guardarBorrador({ url, adjuntoId, titulo: contenido.titulo, descripcion: contenido.descripcion ?? "" });
+      return this.decir(`Leí el link${contenido.titulo ? ` (*${contenido.titulo}*)` : ""}. ¿Cuándo querés que te lo recuerde?`, {
+        intencion: "enlace",
+      });
+    }
+    if (adjuntoId) await db.update(adjunto).set({ descripcionIa: a.resumen, datosExtraidos: { url, ...a } }).where(eq(adjunto.id, adjuntoId));
+
+    const fecha = fechaDe(a.propuesta_fecha_hora);
+    const futura = fecha && fecha.getTime() > Date.now() ? fecha : null;
+    const descripcion = conLink(a.lugar ? `Lugar: ${a.lugar}` : null, url);
+
+    if (a.accion === "crear" && futura) {
+      try {
+        const rec = await crearRecordatorio({
+          titulo: a.titulo,
+          descripcion,
+          fechaHora: futura,
+          avisosPreviosMin: a.propuesta_avisos_previos_min,
+          origen: "enlace",
+          adjuntoId,
+        });
+        return this.decir(`${a.resumen}\n\n${await textoConfirmacion(rec)}`, { recordatorioId: rec.id, intencion: "crear_recordatorio" });
+      } catch (err) {
+        if (!(err instanceof ErrorUsuario)) throw err;
+      }
+    }
+
+    await guardarBorrador({
+      url,
+      adjuntoId,
+      titulo: a.titulo,
+      descripcion: a.resumen,
+      propuesta:
+        a.accion !== "preguntar" && futura
+          ? { titulo: a.titulo, fechaHora: futura.toISOString(), avisosPreviosMin: a.propuesta_avisos_previos_min, descripcion: a.lugar ? `Lugar: ${a.lugar}` : null }
+          : null,
+    });
+    return this.decir(a.mensaje, { intencion: "propuesta_enlace" });
   }
 
   private async confirmar(ocId: number) {
@@ -321,11 +426,11 @@ export class Procesador {
     const p = d.propuesta!;
     const rec = await crearRecordatorio({
       titulo: p.titulo,
-      descripcion: p.descripcion,
+      descripcion: conLink(p.descripcion, d.url),
       fechaHora: new Date(p.fechaHora),
       avisosPreviosMin: p.avisosPreviosMin,
-      origen: "foto",
-      adjuntoId: d.adjuntoId,
+      origen: d.url ? "enlace" : "foto",
+      adjuntoId: d.adjuntoId ?? null,
     });
     await cerrarBorrador(id);
     await this.decir(await textoConfirmacion(rec), { recordatorioId: rec.id, intencion: "crear_recordatorio" });
@@ -333,7 +438,7 @@ export class Procesador {
 
   private async rechazarBorrador(id: number, d: DatosBorrador) {
     await cerrarBorrador(id);
-    await borrarAdjunto(d.adjuntoId);
+    if (d.adjuntoId) await borrarAdjunto(d.adjuntoId);
     await this.decir("Dale, no te lo recuerdo 👍", { intencion: "rechazar_propuesta" });
   }
 
@@ -356,18 +461,20 @@ export class Procesador {
         if (i.falta_info || !items.length) return this.decir(i.respuesta ?? "¿Para cuándo te lo recuerdo?", { intencion: "falta_info" });
         const respuestas: string[] = [];
         let conFoto = ctx.borrador?.datos.adjuntoId ?? null;
+        let link = ctx.borrador?.datos.url ?? null;
         for (const it of items) {
           const datos: DatosRecordatorio = {
             titulo: it.titulo!,
-            descripcion: it.descripcion,
+            descripcion: conLink(it.descripcion, link),
             fechaHora: fechaDe(it.fecha_hora)!,
             rrule: it.recurrencia,
             avisosPreviosMin: it.avisos_previos_min ?? [],
-            origen: conFoto ? "foto" : "whatsapp",
+            origen: link ? "enlace" : conFoto ? "foto" : "whatsapp",
             adjuntoId: conFoto,
           };
           const rec = await crearRecordatorio(datos);
-          conFoto = null; // La foto va solo con el primero.
+          conFoto = null; // La foto y el link van solo con el primero.
+          link = null;
           respuestas.push(await textoConfirmacion(rec));
         }
         if (ctx.borrador) await cerrarBorrador(ctx.borrador.id);

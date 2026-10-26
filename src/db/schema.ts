@@ -115,7 +115,7 @@ export const recordatorio = pgTable(
     insistenciaTope: integer("insistencia_tope"),
     insistirPrevios: boolean("insistir_previos"),
     estado: text("estado").$type<EstadoRecordatorio>().notNull().default("activo"),
-    origen: text("origen").$type<"whatsapp" | "panel" | "foto">().notNull().default("panel"),
+    origen: text("origen").$type<"whatsapp" | "panel" | "foto" | "enlace">().notNull().default("panel"),
     adjuntoId: integer("adjunto_id").references(() => adjunto.id, { onDelete: "set null" }),
     creadoEn: creadoEn(),
     actualizadoEn: ts("actualizado_en").notNull().defaultNow(),

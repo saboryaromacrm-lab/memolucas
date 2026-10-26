@@ -15,7 +15,7 @@ export type Recordatorio = {
   insistenciaTope: number | null;
   insistirPrevios: boolean | null;
   estado: EstadoRecordatorio;
-  origen: "whatsapp" | "panel" | "foto";
+  origen: "whatsapp" | "panel" | "foto" | "enlace";
   adjuntoId: number | null;
   creadoEn: string;
   actualizadoEn: string;

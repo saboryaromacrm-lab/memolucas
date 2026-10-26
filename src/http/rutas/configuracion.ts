@@ -75,6 +75,8 @@ export const rutasConfiguracion: FastifyPluginAsync = async (app) => {
   app.put("/configuracion/api-key", async (req) => {
     const { clave } = z.object({ clave: z.string().trim().nullable() }).parse(req.body);
     if (clave && !clave.startsWith("sk-ant-")) throw new ErrorUsuario("Eso no parece una API key de Claude (empieza con sk-ant-).");
+    if (clave && !/^[\x21-\x7e]+$/.test(clave))
+      throw new ErrorUsuario("La clave tiene caracteres raros (como •): copiala de nuevo con el botón de copiar de la consola de Claude.");
     await actualizarConfig({ iaApiKeyCifrada: clave ? cifrar(clave) : null });
     return configPublica();
   });
