@@ -8,12 +8,13 @@ import { gastoDelMes } from "../../bot/ia.js";
 import { obtenerConfig } from "../../servicios/configuracion.js";
 import { rangoHoy, rangoManana } from "../../servicios/listados.js";
 import { crearRecordatorio, eventosEntre, pendientesSinConfirmar } from "../../servicios/recordatorios.js";
-import { serializar } from "./recordatorios.js";
+import { cargarNombresGrupos, serializar } from "./recordatorios.js";
 import { infoWhatsapp } from "./whatsapp.js";
 
 export const rutasPanel: FastifyPluginAsync = async (app) => {
   app.get("/estado", async () => {
     const cfg = await obtenerConfig();
+    await cargarNombresGrupos();
     const hoy = rangoHoy();
     const manana = rangoManana();
     const inicioSemana = ahora().startOf("week").toJSDate();
@@ -93,6 +94,7 @@ export const rutasPanel: FastifyPluginAsync = async (app) => {
         insistirPrevios: r.insistirPrevios,
         estado: r.estado,
         origen: r.origen,
+        chat: r.chat,
       })),
     };
     const nombre = `memolucas-respaldo-${ahora().toFormat("yyyy-MM-dd")}.json`;
@@ -113,6 +115,7 @@ export const rutasPanel: FastifyPluginAsync = async (app) => {
       insistirPrevios: z.boolean().nullish(),
       estado: z.enum(["activo", "pausado", "cumplido", "no_confirmado"]).optional(),
       origen: z.enum(["whatsapp", "panel", "foto", "enlace"]).optional(),
+      chat: z.string().nullish(),
     });
     const { recordatorios } = z.object({ recordatorios: z.array(Item).max(5000) }).parse(req.body);
     let programados = 0;
@@ -132,6 +135,7 @@ export const rutasPanel: FastifyPluginAsync = async (app) => {
         insistenciaTope: it.insistenciaTope ?? null,
         insistirPrevios: it.insistirPrevios ?? null,
         origen: it.origen ?? "panel",
+        chat: it.chat ?? null,
       } as const;
       const activo = (it.estado ?? "activo") === "activo";
       if (activo && (base.rrule || fechaHora.getTime() > Date.now())) {

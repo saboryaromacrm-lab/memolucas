@@ -2,11 +2,13 @@ import { useState } from "react";
 import { Check, MoreVertical, Pencil, Plus, ShoppingCart, Trash2, Eraser } from "lucide-react";
 import { Boton, Cargando, Encabezado, Modal, Vacio, useAccion } from "../componentes/ui";
 import { del, post, put } from "../lib/api";
-import type { Lista } from "../lib/tipos";
+import type { Grupo, Lista } from "../lib/tipos";
 import { useDatos } from "../lib/vivo";
 
 export function Listas() {
   const { datos, recargar } = useDatos<Lista[]>("/api/listas", ["listas"]);
+  const { datos: grupos } = useDatos<Grupo[]>("/api/grupos", ["listas"]);
+  const nombreGrupo = (jid: string | null) => (jid ? (grupos?.find((g) => g.jid === jid)?.nombre ?? "Grupo") : null);
   const [nueva, setNueva] = useState(false);
 
   return (
@@ -33,7 +35,7 @@ export function Listas() {
       ) : (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {datos.map((l) => (
-            <TarjetaLista key={l.id} lista={l} onCambio={recargar} />
+            <TarjetaLista key={l.id} lista={l} grupo={nombreGrupo(l.chat)} onCambio={recargar} />
           ))}
         </div>
       )}
@@ -51,7 +53,7 @@ export function Listas() {
   );
 }
 
-function TarjetaLista({ lista, onCambio }: { lista: Lista; onCambio: () => Promise<void> }) {
+function TarjetaLista({ lista, grupo, onCambio }: { lista: Lista; grupo: string | null; onCambio: () => Promise<void> }) {
   const accion = useAccion();
   const [texto, setTexto] = useState("");
   const [cantidad, setCantidad] = useState("");
@@ -83,6 +85,7 @@ function TarjetaLista({ lista, onCambio }: { lista: Lista; onCambio: () => Promi
           <ShoppingCart className="size-4 text-marca-oscuro" />
           {lista.nombre}
           <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-500">{lista.items.length}</span>
+          {grupo && <span className="rounded-full bg-sky-50 px-2 py-0.5 text-[11px] font-medium text-sky-700">👨‍👩‍👧 {grupo}</span>}
         </h2>
         <div className="relative">
           <button onClick={() => setMenu(!menu)} className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label="Opciones">

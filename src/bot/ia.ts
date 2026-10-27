@@ -123,6 +123,7 @@ export const EsquemaInterpretacion = z.object({
     "ayuda",
     "charla",
     "desconocido",
+    "ignorar",
   ]),
   recordatorios: z.array(Campos).describe("Para crear_recordatorio: uno por cada recordatorio pedido"),
   cambios: Campos.extend({ quitar_recurrencia: z.boolean() }).nullable().describe("Para editar: solo lo que cambia, el resto null"),
@@ -154,6 +155,8 @@ export type ContextoInterpretacion = {
   respondiendoA: string | null;
   listas: string;
   notas: string;
+  /** Si el mensaje viene del grupo de la familia. */
+  grupo: { nombre: string; autor: string | null } | null;
   historial: Anthropic.MessageParam[];
 };
 
@@ -193,7 +196,17 @@ Reglas:
 - Para ayuda, charla o desconocido, poné en "respuesta" un texto corto que guíe (qué puede hacer el bot).
 - confianza entre 0 y 1.
 
-Recordatorios activos (ID | título | próxima vez | repetición):
+${
+    ctx.grupo
+      ? `ESTÁS EN EL GRUPO DE WHATSAPP "${ctx.grupo.nombre}" (la familia de ${cfg.nombreUsuario}). Escribió: ${ctx.grupo.autor ?? "alguien del grupo"}.
+- Leés todos los mensajes del grupo, pero SOLO respondés cuando te piden algo a vos: recordatorios ("recordame/recordanos/avisanos…"), listas ("agregá a la lista…"), consultas de agenda ("¿qué tenemos mañana?"), confirmar o posponer un aviso.
+- Si es charla entre ellos ("¿qué comemos?", "ya llegué", "jaja", fotos o comentarios), devolvé intencion "ignorar" sin respuesta. Ante la duda, "ignorar".
+- Los recordatorios y listas de abajo son los del grupo. Las notas son personales de ${cfg.nombreUsuario}: no las uses en el grupo.
+- Los mensajes del historial del grupo vienen con [nombre] de quien escribió. Si alguien dice "recordame", el recordatorio es para el grupo y podés mencionar a esa persona en el título si corresponde (ej. "Ana: turno con el dentista").
+
+`
+      : ""
+  }Recordatorios activos (ID | título | próxima vez | repetición):
 ${ctx.recordatoriosActivos || "(ninguno)"}
 
 Listas (nombre: [ID ítem] texto (cantidad)):

@@ -4,7 +4,7 @@ import { db, migrarBase } from "../src/db/index.js";
 import { actualizarConfig, invalidarConfig } from "../src/servicios/configuracion.js";
 import { fijarEnviador, type Enviador } from "../src/servicios/enviador.js";
 
-export type Enviado = { texto: string; imagen?: string; id: string };
+export type Enviado = { texto: string; imagen?: string; id: string; destino?: string | null };
 
 export function enviadorFalso() {
   const enviados: Enviado[] = [];
@@ -15,14 +15,14 @@ export function enviadorFalso() {
     conectado() {
       return this.online;
     },
-    async enviarTexto(texto) {
+    async enviarTexto(texto, destino) {
       const id = `MSG${++n}`;
-      enviados.push({ texto, id });
+      enviados.push({ texto, id, destino: destino ?? null });
       return id;
     },
-    async enviarImagen(ruta, _mime, texto) {
+    async enviarImagen(ruta, _mime, texto, destino) {
       const id = `MSG${++n}`;
-      enviados.push({ texto, imagen: ruta, id });
+      enviados.push({ texto, imagen: ruta, id, destino: destino ?? null });
       return id;
     },
   };
@@ -37,7 +37,7 @@ export async function baseLimpia() {
     migrado = true;
   }
   await db.execute(
-    sql`truncate table mensaje, ocurrencia, recordatorio, lista_item, lista, nota, adjunto, borrador_pendiente, log_sistema, uso_ia, configuracion, acceso_panel restart identity cascade`,
+    sql`truncate table mensaje, ocurrencia, recordatorio, lista_item, lista, nota, grupo, adjunto, borrador_pendiente, log_sistema, uso_ia, configuracion, acceso_panel restart identity cascade`,
   );
   invalidarConfig();
   await actualizarConfig({ numeroAutorizado: "5491112345678" });

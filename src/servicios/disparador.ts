@@ -114,11 +114,11 @@ async function procesar(id: number): Promise<void> {
     if (oc.intentos === 0 && rec.adjuntoId) {
       const [adj] = await db.select().from(adjunto).where(eq(adjunto.id, rec.adjuntoId));
       if (adj) {
-        waId = await wa.enviarImagen(adj.rutaArchivo, adj.mime, texto);
+        waId = await wa.enviarImagen(adj.rutaArchivo, adj.mime, texto, rec.chat);
         adjuntoId = adj.id;
       }
     }
-    if (!waId) waId = await wa.enviarTexto(texto);
+    if (!waId) waId = await wa.enviarTexto(texto, rec.chat);
   } catch (err) {
     await registrar("error", "scheduler", `No se pudo enviar el aviso de "${rec.titulo}"`, err);
     return; // Queda pendiente; el barrido lo reintenta.
@@ -146,6 +146,7 @@ async function procesar(id: number): Promise<void> {
     recordatorioId: rec.id,
     ocurrenciaId: oc.id,
     adjuntoId,
+    chat: rec.chat,
     intencionDetectada: oc.intentos > 0 ? "insistencia" : oc.tipo === "previo" ? "aviso_previo" : "aviso",
   });
   if (proximo) await reagendar(oc.id, proximo);

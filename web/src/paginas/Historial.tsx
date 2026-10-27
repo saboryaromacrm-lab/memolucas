@@ -84,6 +84,7 @@ export function Historial() {
                       )}
                       {m.texto ? <TextoWhatsapp texto={m.texto} /> : <span className="italic text-slate-400">({m.tipo})</span>}
                       <div className="mt-1 flex flex-wrap items-center justify-end gap-x-2 text-[10px] text-slate-500">
+                        {m.chat && <span className="rounded bg-sky-100 px-1 text-sky-700">👨‍👩‍👧 {m.autor ?? "grupo"}</span>}
                         {m.intencionDetectada && <span className="rounded bg-black/5 px-1">{m.intencionDetectada}</span>}
                         {m.recordatorioId && (
                           <button className="underline" onClick={() => editor.abrir({ id: m.recordatorioId! })}>

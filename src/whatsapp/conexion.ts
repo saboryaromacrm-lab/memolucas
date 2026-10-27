@@ -22,11 +22,21 @@ import { bus } from "../lib/eventos.js";
 import { logger, registrar } from "../lib/log.js";
 import { actualizarConfig, obtenerConfig } from "../servicios/configuracion.js";
 import type { Enviador } from "../servicios/enviador.js";
+import { esMiembro, guardarGrupo } from "./grupos.js";
 import { jidDeNumero, mismoNumero } from "./numeros.js";
 
 export type EstadoWhatsApp = "iniciando" | "conectando" | "esperando_qr" | "conectado" | "desconectado" | "sesion_cerrada";
 
-type Remitente = { autorizado: boolean; numero: string | null; chatJid: string };
+export type Remitente = {
+  autorizado: boolean;
+  numero: string | null;
+  chatJid: string;
+  /** Si vino de un grupo: el grupo (las respuestas van ahí). */
+  grupo: { jid: string; nombre: string } | null;
+  /** Nombre de quien escribió (en grupos). */
+  autor: string | null;
+};
+const MINUTOS_CACHE_GRUPO = 10;
 type Manejador = (msg: WAMessage, remitente: Remitente) => Promise<void>;
 
 const ESPERAS_S = [5, 10, 30, 60, 300];
@@ -46,6 +56,8 @@ class ConexionWhatsApp implements Enviador {
   private chatJid: string | null = null;
   private enviados = new Map<string, proto.IMessage>();
   private manejador: Manejador | null = null;
+  private grupos = new Map<string, { miembro: boolean; nombre: string; hasta: number }>();
+  private gruposAvisados = new Set<string>();
   private alConectar: (() => void) | null = null;
 
   onMensaje(fn: Manejador) {
@@ -95,14 +107,17 @@ class ConexionWhatsApp implements Enviador {
       browser: Browsers.ubuntu("Chrome"),
       markOnlineOnConnect: false,
       syncFullHistory: false,
-      // Grupos, estados y canales no interesan: se descartan antes de procesarlos.
-      shouldIgnoreJid: (jid) => !!(isJidGroup(jid) || isJidBroadcast(jid) || isJidNewsletter(jid)),
+      // Estados y canales no interesan: se descartan antes de procesarlos. Los grupos se filtran después.
+      shouldIgnoreJid: (jid) => !!(isJidBroadcast(jid) || isJidNewsletter(jid)),
       getMessage: async (key) => (key.id ? this.enviados.get(key.id) : undefined),
     });
     this.sock = sock;
 
     sock.ev.on("creds.update", saveCreds);
     sock.ev.on("connection.update", (u) => void this.alActualizar(sock, u));
+    // Si cambian los integrantes o el nombre de un grupo, se vuelve a consultar.
+    sock.ev.on("group-participants.update", ({ id }) => this.grupos.delete(id));
+    sock.ev.on("groups.update", (gs) => gs.forEach((g) => g.id && this.grupos.delete(g.id)));
     sock.ev.on("messages.upsert", ({ messages, type }) => {
       if (type !== "notify") return;
       for (const msg of messages) void this.alRecibir(sock, msg);
@@ -195,14 +210,47 @@ class ConexionWhatsApp implements Enviador {
     const porLid = !!cfg.lidAutorizado && isLidUser(chatJid) && chatJid === cfg.lidAutorizado;
     const autorizado = !!cfg.numeroAutorizado && (porLid || (!!numero && mismoNumero(numero, cfg.numeroAutorizado)));
     if (autorizado && isLidUser(chatJid) && chatJid !== cfg.lidAutorizado) await actualizarConfig({ lidAutorizado: chatJid });
-    return { autorizado, numero, chatJid };
+    return { autorizado, numero, chatJid, grupo: null, autor: null };
+  }
+
+  /** Datos del grupo (con caché): nombre y si el dueño está adentro. */
+  private async infoGrupo(sock: WASocket, jid: string) {
+    const enCache = this.grupos.get(jid);
+    if (enCache && enCache.hasta > Date.now()) return enCache;
+    const cfg = await obtenerConfig();
+    const meta = await sock.groupMetadata(jid);
+    const info = {
+      miembro: esMiembro(meta.participants, cfg.numeroAutorizado, cfg.lidAutorizado),
+      nombre: meta.subject || "Grupo",
+      hasta: Date.now() + MINUTOS_CACHE_GRUPO * 60_000,
+    };
+    this.grupos.set(jid, info);
+    if (info.miembro) await guardarGrupo(jid, info.nombre);
+    return info;
+  }
+
+  private async alRecibirGrupo(sock: WASocket, msg: WAMessage, jid: string) {
+    const info = await this.infoGrupo(sock, jid);
+    if (!info.miembro) {
+      if (!this.gruposAvisados.has(jid)) {
+        this.gruposAvisados.add(jid);
+        await registrar("aviso", "whatsapp", `Grupo "${info.nombre}" ignorado: el número autorizado no está en el grupo`);
+      }
+      return;
+    }
+    const participante = msg.key.participantAlt ?? msg.key.participant ?? "";
+    const numero = isPnUser(participante) ? numeroDeJid(participante) : null;
+    const autor = msg.pushName?.trim() || (numero ? `+${numero}` : null);
+    await sock.readMessages([msg.key]).catch(() => {});
+    await this.manejador?.(msg, { autorizado: true, numero, chatJid: jid, grupo: { jid, nombre: info.nombre }, autor });
   }
 
   private async alRecibir(sock: WASocket, msg: WAMessage) {
     try {
       if (!msg.message || msg.key.fromMe) return;
       const jid = msg.key.remoteJid ?? "";
-      if (!isPnUser(jid) && !isLidUser(jid)) return; // Grupos, estados, canales: se ignoran.
+      if (isJidGroup(jid)) return await this.alRecibirGrupo(sock, msg, jid);
+      if (!isPnUser(jid) && !isLidUser(jid)) return; // Estados y canales: se ignoran.
       const r = await this.remitente(sock, msg);
       if (!r.autorizado) {
         await registrar("info", "whatsapp", `Mensaje ignorado de ${r.numero ? `+${r.numero}` : r.chatJid} (no autorizado)`);
@@ -229,46 +277,46 @@ class ConexionWhatsApp implements Enviador {
     if (this.enviados.size > 500) this.enviados.delete(this.enviados.keys().next().value!);
   }
 
-  async enviarTexto(texto: string): Promise<string | null> {
+  async enviarTexto(texto: string, destino?: string | null, citar?: WAMessage): Promise<string | null> {
     const sock = this.sock;
     if (!sock || !this.conectado()) throw new Error("WhatsApp no está conectado");
-    const r = await sock.sendMessage(await this.destino(), { text: texto });
+    const r = await sock.sendMessage(destino ?? (await this.destino()), { text: texto }, citar ? { quoted: citar } : undefined);
     this.recordar(r?.key.id, r?.message);
     return r?.key.id ?? null;
   }
 
-  async enviarImagen(ruta: string, mime: string, epigrafe: string): Promise<string | null> {
+  async enviarImagen(ruta: string, mime: string, epigrafe: string, destino?: string | null): Promise<string | null> {
     const sock = this.sock;
     if (!sock || !this.conectado()) throw new Error("WhatsApp no está conectado");
     const imagen = await fs.readFile(ruta);
-    const r = await sock.sendMessage(await this.destino(), { image: imagen, mimetype: mime, caption: epigrafe });
+    const r = await sock.sendMessage(destino ?? (await this.destino()), { image: imagen, mimetype: mime, caption: epigrafe });
     this.recordar(r?.key.id, r?.message);
     return r?.key.id ?? null;
   }
 
   /** Respuesta del bot: "escribiendo…" y una demora corta antes de enviar (más natural). */
-  async responder(texto: string): Promise<string | null> {
+  async responder(texto: string, destino?: string | null, citar?: WAMessage): Promise<string | null> {
     const sock = this.sock;
     if (!sock || !this.conectado()) return null;
     const cfg = await obtenerConfig();
-    const jid = await this.destino();
+    const jid = destino ?? (await this.destino());
     const min = Math.max(0, cfg.demoraMinMs);
     const max = Math.max(min, cfg.demoraMaxMs);
     await sock.sendPresenceUpdate("composing", jid).catch(() => {});
     await espera(min + Math.random() * (max - min));
     await sock.sendPresenceUpdate("paused", jid).catch(() => {});
-    return this.enviarTexto(texto);
+    return this.enviarTexto(texto, jid, citar);
   }
 
   /** Como responder, pero con una imagen (ej. la foto de una nota). */
-  async responderImagen(ruta: string, mime: string, epigrafe: string): Promise<string | null> {
+  async responderImagen(ruta: string, mime: string, epigrafe: string, destino?: string | null): Promise<string | null> {
     const sock = this.sock;
     if (!sock || !this.conectado()) return null;
-    const jid = await this.destino();
+    const jid = destino ?? (await this.destino());
     await sock.sendPresenceUpdate("composing", jid).catch(() => {});
     await espera(800);
     await sock.sendPresenceUpdate("paused", jid).catch(() => {});
-    return this.enviarImagen(ruta, mime, epigrafe);
+    return this.enviarImagen(ruta, mime, epigrafe, jid);
   }
 
   async descargarMedia(msg: WAMessage): Promise<Buffer> {

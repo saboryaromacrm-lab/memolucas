@@ -3,7 +3,7 @@ import { DateTime } from "luxon";
 import { Camera, Clock, History, ImageOff, Plus, Repeat, ShoppingCart, X } from "lucide-react";
 import { api, del, get, post, put } from "../lib/api";
 import { aInputs, ahora, desdeInputs, fechaHora as fmtFechaHora, zona } from "../lib/fechas";
-import type { Configuracion, Lista, ModoInsistencia, Ocurrencia, RecordatorioDetalle } from "../lib/tipos";
+import type { Configuracion, Grupo, Lista, ModoInsistencia, Ocurrencia, RecordatorioDetalle } from "../lib/tipos";
 import { Boton, Cargando, Insignia, Interruptor, Modal, useAviso } from "./ui";
 
 // ───────────── Repetición (editor visual ⇄ RRULE) ─────────────
@@ -145,6 +145,8 @@ function EditorModal({ apertura, onCerrar }: { apertura: Apertura; onCerrar: () 
   const [insistirPrevios, setInsistirPrevios] = useState(false);
   const [adjunto, setAdjunto] = useState<{ id: number; url: string } | null>(null);
   const [listaId, setListaId] = useState<number | null>(null);
+  const [chatDestino, setChatDestino] = useState<string | null>(null);
+  const [grupos, setGrupos] = useState<Grupo[]>([]);
   const [listas, setListas] = useState<Lista[]>([]);
   const [subiendo, setSubiendo] = useState(false);
   const [guardando, setGuardando] = useState(false);
@@ -158,6 +160,7 @@ function EditorModal({ apertura, onCerrar }: { apertura: Apertura; onCerrar: () 
       try {
         const c = await get<Configuracion>("/api/configuracion");
         get<Lista[]>("/api/listas").then(setListas).catch(() => {});
+        get<Grupo[]>("/api/grupos").then(setGrupos).catch(() => {});
         setCfg(c);
         setIntervalo(c.insistenciaIntervaloMin);
         setTope(c.insistenciaTope);
@@ -181,6 +184,7 @@ function EditorModal({ apertura, onCerrar }: { apertura: Apertura; onCerrar: () 
           if (r.insistirPrevios !== null) setInsistirPrevios(r.insistirPrevios);
           if (r.adjuntoId && r.adjuntoUrl) setAdjunto({ id: r.adjuntoId, url: r.adjuntoUrl });
           setListaId(r.listaId);
+          setChatDestino(r.chat);
         } else {
           let f = apertura.fecha ? DateTime.fromJSDate(apertura.fecha).setZone(zona()) : ahora().plus({ hours: 1 }).startOf("hour");
           // Clic en un día del mes (medianoche): usar la hora por defecto.
@@ -217,8 +221,9 @@ function EditorModal({ apertura, onCerrar }: { apertura: Apertura; onCerrar: () 
       insistirPrevios: modo === "propia" ? insistirPrevios : null,
       adjuntoId: adjunto?.id ?? null,
       listaId,
+      chat: chatDestino,
     }),
-    [titulo, descripcion, fechaDt, rrule, previos, avisarEnHora, modo, intervalo, tope, insistirPrevios, adjunto, listaId],
+    [titulo, descripcion, fechaDt, rrule, previos, avisarEnHora, modo, intervalo, tope, insistirPrevios, adjunto, listaId, chatDestino],
   );
 
   // Vista previa del mensaje (con una pequeña espera mientras se escribe).
@@ -480,6 +485,21 @@ function EditorModal({ apertura, onCerrar }: { apertura: Apertura; onCerrar: () 
                   )}
                 </section>
 
+                {/* Dónde avisa */}
+                {(grupos.length > 0 || chatDestino) && (
+                  <section className="rounded-xl border border-slate-200 p-4">
+                    <div className="mb-3 text-sm font-semibold text-slate-800">Dónde avisa</div>
+                    <select className="campo" value={chatDestino ?? ""} onChange={(e) => setChatDestino(e.target.value || null)}>
+                      <option value="">Mi WhatsApp (privado)</option>
+                      {grupos.map((g) => (
+                        <option key={g.jid} value={g.jid}>
+                          👨‍👩‍👧 Grupo {g.nombre}
+                        </option>
+                      ))}
+                    </select>
+                  </section>
+                )}
+
                 {/* Lista */}
                 {(listas.length > 0 || listaId) && (
                   <section className="rounded-xl border border-slate-200 p-4">
@@ -488,7 +508,7 @@ function EditorModal({ apertura, onCerrar }: { apertura: Apertura; onCerrar: () 
                     </div>
                     <select className="campo" value={listaId ?? ""} onChange={(e) => setListaId(e.target.value ? Number(e.target.value) : null)}>
                       <option value="">Ninguna</option>
-                      {listas.map((l) => (
+                      {listas.filter((l) => (l.chat ?? null) === chatDestino).map((l) => (
                         <option key={l.id} value={l.id}>
                           {l.nombre} ({l.items.length})
                         </option>

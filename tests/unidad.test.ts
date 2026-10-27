@@ -96,3 +96,14 @@ describe("comandos rápidos", () => {
     expect(renderizar("Hola {nombre}, {x}", { nombre: "Lucas" })).toBe("Hola Lucas, ");
   });
 });
+
+describe("grupos", async () => {
+  const { esMiembro } = await import("../src/whatsapp/grupos.js");
+  it("el bot solo funciona si el dueño está en el grupo", () => {
+    const yo = "5491112345678";
+    expect(esMiembro([{ id: "5491112345678@s.whatsapp.net" }], yo, null)).toBe(true);
+    expect(esMiembro([{ id: "123@lid", phoneNumber: "541112345678@s.whatsapp.net" }], yo, null)).toBe(true);
+    expect(esMiembro([{ id: "999@lid" }], yo, "999@lid")).toBe(true);
+    expect(esMiembro([{ id: "5491187654321@s.whatsapp.net" }, { id: "111@lid" }], yo, "999@lid")).toBe(false);
+  });
+});

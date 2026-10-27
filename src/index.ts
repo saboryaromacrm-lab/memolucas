@@ -33,7 +33,7 @@ async function arrancar() {
   // 4) WhatsApp con la sesión guardada. Al conectar, se envía lo atrasado.
   fijarEnviador(whatsapp);
   const procesador = new Procesador(whatsapp);
-  whatsapp.onMensaje((msg) => procesador.procesar(msg));
+  whatsapp.onMensaje((msg, r) => procesador.procesar(msg, { grupo: r.grupo, autor: r.autor }));
   // Al reconectar, se da unos segundos a WhatsApp para sincronizar y se manda lo pendiente.
   whatsapp.onConectado(() => setTimeout(() => void barrer(), 5000));
   whatsapp.iniciar().catch((err) => void registrar("error", "whatsapp", "No se pudo iniciar WhatsApp", err));

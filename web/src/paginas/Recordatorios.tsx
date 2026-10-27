@@ -114,6 +114,7 @@ function Fila({ r }: { r: Recordatorio }) {
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-2">
             <span className="truncate text-sm font-semibold text-slate-800">{r.titulo}</span>
+            {r.grupoNombre && <span className="shrink-0 rounded-full bg-sky-50 px-2 py-0.5 text-[11px] font-medium text-sky-700">👨‍👩‍👧 {r.grupoNombre}</span>}
             {r.estado !== "activo" && <InsigniaEstado estado={r.estado} />}
           </span>
           <span className="mt-0.5 block truncate text-xs text-slate-500">

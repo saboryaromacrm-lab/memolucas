@@ -3,7 +3,7 @@ import { and, desc, eq, ilike, inArray, isNotNull, ne, or, type SQL } from "driz
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { db } from "../../db/index.js";
-import { ocurrencia, recordatorio, type Configuracion, type Ocurrencia, type Recordatorio } from "../../db/schema.js";
+import { grupo, ocurrencia, recordatorio, type Configuracion, type Ocurrencia, type Recordatorio } from "../../db/schema.js";
 import { aLocal } from "../../lib/fechas.js";
 import { describirRrule, normalizarRrule } from "../../lib/recurrencia.js";
 import { describirCuando } from "../../bot/procesador.js";
@@ -48,12 +48,21 @@ const Datos = z.object({
   insistirPrevios: z.boolean().nullish(),
   adjuntoId: z.number().int().positive().nullish(),
   listaId: z.number().int().positive().nullish(),
+  chat: z.string().regex(/@g\.us$/).nullish(),
 });
+
+let nombresGrupos = new Map<string, string>();
+/** Nombres de los grupos para mostrarlos en el panel (se refresca en cada pedido de lista). */
+export async function cargarNombresGrupos() {
+  nombresGrupos = new Map((await db.select().from(grupo)).map((g) => [g.jid, g.nombre]));
+  return nombresGrupos;
+}
 
 export function serializar(r: Recordatorio, cfg: Configuracion) {
   const ins = insistenciaEfectiva(r, cfg);
   return {
     ...r,
+    grupoNombre: r.chat ? (nombresGrupos.get(r.chat) ?? "Grupo") : null,
     repeticion: r.rrule ? describirRrule(r.rrule, r.fechaHora) : null,
     cuando: describirCuando(r),
     proxima: r.proximaInstancia ?? r.fechaHora,
@@ -73,7 +82,10 @@ const FILTROS: Record<string, SQL | undefined> = {
 };
 
 export const rutasRecordatorios: FastifyPluginAsync = async (app) => {
+  app.get("/grupos", async () => db.select().from(grupo).orderBy(grupo.nombre));
+
   app.get("/recordatorios", async (req) => {
+    await cargarNombresGrupos();
     const { filtro = "activos", q } = z.object({ filtro: z.string().optional(), q: z.string().optional() }).parse(req.query);
     const cond: (SQL | undefined)[] = [ne(recordatorio.estado, "borrado"), FILTROS[filtro]];
     if (q?.trim()) cond.push(or(ilike(recordatorio.titulo, `%${q.trim()}%`), ilike(recordatorio.descripcion, `%${q.trim()}%`)));
@@ -100,6 +112,7 @@ export const rutasRecordatorios: FastifyPluginAsync = async (app) => {
     const { id } = Id.parse(req.params);
     const r = await obtenerRecordatorio(id);
     if (!r) return reply.code(404).send({ error: "No existe" });
+    await cargarNombresGrupos();
     const ocs = await db.select().from(ocurrencia).where(eq(ocurrencia.recordatorioId, id)).orderBy(desc(ocurrencia.programadaPara)).limit(200);
     return { ...serializar(r, await obtenerConfig()), ocurrencias: ocs };
   });
@@ -107,6 +120,7 @@ export const rutasRecordatorios: FastifyPluginAsync = async (app) => {
   app.post("/recordatorios", async (req) => {
     const d = Datos.parse(req.body);
     const r = await crearRecordatorio({ ...d, origen: "panel" });
+    await cargarNombresGrupos();
     return serializar(r, await obtenerConfig());
   });
 
@@ -114,6 +128,7 @@ export const rutasRecordatorios: FastifyPluginAsync = async (app) => {
     const { id } = Id.parse(req.params);
     const d = Datos.partial().parse(req.body);
     const r = await actualizarRecordatorio(id, d);
+    await cargarNombresGrupos();
     return serializar(r, await obtenerConfig());
   });
 
@@ -124,6 +139,7 @@ export const rutasRecordatorios: FastifyPluginAsync = async (app) => {
     if (!actual) throw new ErrorUsuario("No existe");
     if (actual.rrule) throw new ErrorUsuario("Los recurrentes se cambian desde el editor.");
     const r = await actualizarRecordatorio(id, { fechaHora });
+    await cargarNombresGrupos();
     return serializar(r, await obtenerConfig());
   });
 
@@ -145,6 +161,7 @@ export const rutasRecordatorios: FastifyPluginAsync = async (app) => {
         await reanudarRecordatorio(id);
         break;
       case "duplicar":
+        await cargarNombresGrupos();
         return serializar(await duplicarRecordatorio(id), await obtenerConfig());
       case "hecho":
         await marcarHecho(id);
@@ -241,6 +258,7 @@ export const rutasRecordatorios: FastifyPluginAsync = async (app) => {
       origen: "panel",
       adjuntoId: d.adjuntoId ?? null,
       listaId: d.listaId ?? null,
+      chat: d.chat ?? null,
       creadoEn: new Date(),
       actualizadoEn: new Date(),
     } satisfies Recordatorio;
