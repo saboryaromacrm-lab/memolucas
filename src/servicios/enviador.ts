@@ -1,9 +1,9 @@
 /** Lo que el resto de la app necesita de WhatsApp (permite probar sin conexión real). */
 export interface Enviador {
   conectado(): boolean;
-  /** Envía al número autorizado. Devuelve el id del mensaje de WhatsApp. */
-  enviarTexto(texto: string): Promise<string | null>;
-  enviarImagen(ruta: string, mime: string, epigrafe: string): Promise<string | null>;
+  /** Envía al número autorizado, o al grupo indicado. Devuelve el id del mensaje de WhatsApp. */
+  enviarTexto(texto: string, destino?: string | null): Promise<string | null>;
+  enviarImagen(ruta: string, mime: string, epigrafe: string, destino?: string | null): Promise<string | null>;
 }
 
 let actual: Enviador = {

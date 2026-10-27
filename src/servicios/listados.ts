@@ -2,7 +2,7 @@ import { DateTime } from "luxon";
 import { ahora, aLocal, formatearHora, nombreDia } from "../lib/fechas.js";
 import { describirRrule } from "../lib/recurrencia.js";
 import type { Recordatorio } from "../db/schema.js";
-import { eventosEntre, pendientesSinConfirmar, recordatoriosActivos, type Evento } from "./recordatorios.js";
+import { eventosEntre, pendientesSinConfirmar, recordatoriosActivos, type Ambito, type Evento } from "./recordatorios.js";
 
 export type Rango = { desde: Date; hasta: Date; etiqueta: string };
 
@@ -40,15 +40,15 @@ export function formatearEventos(eventos: Evento[], agruparPorDia: boolean): str
     .join("\n\n");
 }
 
-export async function textoListado(rango: Rango): Promise<string> {
-  const eventos = await eventosEntre(rango.desde, rango.hasta);
+export async function textoListado(rango: Rango, ambito: Ambito = null): Promise<string> {
+  const eventos = await eventosEntre(rango.desde, rango.hasta, ["activo"], ambito);
   const multiDia = aLocal(rango.desde).toISODate() !== aLocal(rango.hasta).toISODate();
   if (!eventos.length) return `No tenés nada para ${rango.etiqueta} 🙌`;
   return `📋 Para ${rango.etiqueta}:\n\n${formatearEventos(eventos, multiDia)}`;
 }
 
-export async function textoTodos(): Promise<string> {
-  const recs = (await recordatoriosActivos()).filter((r) => r.estado === "activo" || r.estado === "pausado");
+export async function textoTodos(ambito: Ambito = null): Promise<string> {
+  const recs = (await recordatoriosActivos(ambito)).filter((r) => r.estado === "activo" || r.estado === "pausado");
   if (!recs.length) return "No tenés recordatorios activos 🙌";
   const lineas = recs.slice(0, 40).map((r) => {
     const cuando = r.proximaInstancia ?? r.fechaHora;
@@ -61,8 +61,8 @@ export async function textoTodos(): Promise<string> {
   return `📋 Tus recordatorios activos (${recs.length}):\n\n${lineas.join("\n")}${extra}`;
 }
 
-export async function textoPendientes(): Promise<string> {
-  const ps = await pendientesSinConfirmar();
+export async function textoPendientes(ambito: Ambito = null): Promise<string> {
+  const ps = await pendientesSinConfirmar(ambito);
   if (!ps.length) return "";
   return `\n\n⚠️ Sin confirmar:\n${ps.map((p) => `• ${p.recordatorio.titulo}`).join("\n")}`;
 }

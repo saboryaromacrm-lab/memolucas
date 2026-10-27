@@ -11,7 +11,7 @@ const VENTANA_MIN = 120;
 export async function textoResumen(): Promise<string> {
   const cfg = await obtenerConfig();
   const r = rangoHoy();
-  const eventos = await eventosEntre(r.desde, r.hasta);
+  const eventos = await eventosEntre(r.desde, r.hasta, ["activo"], null);
   const lista = eventos.length ? formatearEventos(eventos, false) : "Nada programado 🙌";
   let texto = renderizar(plantillasDe(cfg).resumen, { nombre: cfg.nombreUsuario, lista, cantidad: eventos.length });
   if (cfg.resumenIncluirPendientes) texto += await textoPendientes();

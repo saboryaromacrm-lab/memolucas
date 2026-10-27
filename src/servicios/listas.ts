@@ -1,9 +1,9 @@
-import { asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { lista, listaItem, type Lista, type ListaItem } from "../db/schema.js";
 import { bus } from "../lib/eventos.js";
 import { normalizar } from "../lib/textos.js";
-import { ErrorUsuario } from "./recordatorios.js";
+import { ErrorUsuario, filtroChat, type Ambito } from "./recordatorios.js";
 
 export type ListaConItems = Lista & { items: ListaItem[] };
 export type ItemNuevo = { texto: string; cantidad?: string | null };
@@ -12,8 +12,8 @@ export const claveLista = (nombre: string) => normalizar(nombre).replace(/^(la |
 
 const capitalizar = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-export async function todasLasListas(): Promise<ListaConItems[]> {
-  const ls = await db.select().from(lista).orderBy(asc(lista.nombre));
+export async function todasLasListas(ambito?: Ambito): Promise<ListaConItems[]> {
+  const ls = await db.select().from(lista).where(filtroChat(lista.chat, ambito)).orderBy(asc(lista.nombre));
   if (!ls.length) return [];
   const items = await db
     .select()
@@ -31,21 +31,20 @@ export async function obtenerLista(id: number): Promise<ListaConItems | null> {
 }
 
 /** Busca por nombre: exacto, o una que contenga el nombre ("súper" encuentra "Súper chino"). */
-export async function buscarLista(nombre: string): Promise<Lista | null> {
+export async function buscarLista(nombre: string, ambito: Ambito = null): Promise<Lista | null> {
   const clave = claveLista(nombre);
   if (!clave) return null;
-  const ls = await db.select().from(lista);
+  const ls = await db.select().from(lista).where(filtroChat(lista.chat, ambito));
   return ls.find((l) => l.clave === clave) ?? ls.find((l) => l.clave.includes(clave) || clave.includes(l.clave)) ?? null;
 }
 
-export async function obtenerOCrearLista(nombre: string): Promise<Lista> {
-  const existente = await buscarLista(nombre);
+export async function obtenerOCrearLista(nombre: string, chat: string | null = null): Promise<Lista> {
+  const existente = await buscarLista(nombre, chat);
   if (existente) return existente;
   const limpio = nombre.trim().replace(/^(la |el |mi )?(lista (de |del )?)?/i, "").trim() || "Pendientes";
   const [l] = await db
     .insert(lista)
-    .values({ nombre: capitalizar(limpio), clave: claveLista(limpio) })
-    .onConflictDoUpdate({ target: lista.clave, set: { actualizadoEn: sql`now()` } })
+    .values({ nombre: capitalizar(limpio), clave: claveLista(limpio), chat })
     .returning();
   bus.avisar("listas");
   return l;
@@ -94,7 +93,11 @@ export async function renombrarLista(id: number, nombre: string) {
   const limpio = nombre.trim();
   if (!limpio) throw new ErrorUsuario("Poné un nombre.");
   const clave = claveLista(limpio);
-  const [otra] = await db.select().from(lista).where(eq(lista.clave, clave));
+  const [actual] = await db.select().from(lista).where(eq(lista.id, id));
+  const [otra] = await db
+    .select()
+    .from(lista)
+    .where(and(eq(lista.clave, clave), filtroChat(lista.chat, actual?.chat ?? null)));
   if (otra && otra.id !== id) throw new ErrorUsuario("Ya hay una lista con ese nombre.");
   await db.update(lista).set({ nombre: capitalizar(limpio), clave, actualizadoEn: sql`now()` }).where(eq(lista.id, id));
   bus.avisar("listas");

@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   boolean,
   index,
@@ -8,6 +9,7 @@ import {
   serial,
   text,
   timestamp,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 
 const ts = (nombre: string) => timestamp(nombre, { withTimezone: true });
@@ -98,15 +100,29 @@ export const adjunto = pgTable("adjunto", {
   creadoEn: creadoEn(),
 });
 
-/** Listas (súper, farmacia, pendientes…). Los ítems comprados se borran. */
-export const lista = pgTable("lista", {
-  id: serial("id").primaryKey(),
+/** Grupos de WhatsApp donde está el bot (y el dueño). */
+export const grupo = pgTable("grupo", {
+  jid: text("jid").primaryKey(),
   nombre: text("nombre").notNull(),
-  // Nombre normalizado (sin tildes ni mayúsculas) para no duplicar listas.
-  clave: text("clave").notNull().unique(),
   creadoEn: creadoEn(),
   actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
 });
+
+/** Listas (súper, farmacia, pendientes…). Los ítems comprados se borran. */
+export const lista = pgTable(
+  "lista",
+  {
+    id: serial("id").primaryKey(),
+    nombre: text("nombre").notNull(),
+    // Nombre normalizado (sin tildes ni mayúsculas) para no duplicar listas.
+    clave: text("clave").notNull(),
+    // Grupo al que pertenece (null = lista personal).
+    chat: text("chat"),
+    creadoEn: creadoEn(),
+    actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("lista_chat_clave_idx").on(sql`coalesce(${t.chat}, '')`, t.clave)],
+);
 
 export const listaItem = pgTable(
   "lista_item",
@@ -158,6 +174,8 @@ export const recordatorio = pgTable(
     adjuntoId: integer("adjunto_id").references(() => adjunto.id, { onDelete: "set null" }),
     // Si tiene una lista, el aviso trae los ítems pendientes en ese momento.
     listaId: integer("lista_id").references(() => lista.id, { onDelete: "set null" }),
+    // Grupo donde avisa (null = privado del dueño).
+    chat: text("chat"),
     creadoEn: creadoEn(),
     actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
   },
@@ -211,6 +229,9 @@ export const mensaje = pgTable(
     recordatorioId: integer("recordatorio_id").references(() => recordatorio.id, { onDelete: "set null" }),
     ocurrenciaId: integer("ocurrencia_id").references(() => ocurrencia.id, { onDelete: "set null" }),
     adjuntoId: integer("adjunto_id").references(() => adjunto.id, { onDelete: "set null" }),
+    // Grupo (null = privado) y quién lo escribió en el grupo.
+    chat: text("chat"),
+    autor: text("autor"),
     creadoEn: creadoEn(),
   },
   (t) => [index("mensaje_creado_idx").on(t.creadoEn), index("mensaje_wa_idx").on(t.waMessageId)],
@@ -221,6 +242,7 @@ export const borradorPendiente = pgTable("borrador_pendiente", {
   id: serial("id").primaryKey(),
   tipo: text("tipo").$type<"foto">().notNull().default("foto"),
   datos: jsonb("datos").$type<Record<string, unknown>>().notNull(),
+  chat: text("chat"),
   expiraEn: ts("expira_en").notNull(),
   creadoEn: creadoEn(),
 });
@@ -254,3 +276,4 @@ export type Adjunto = typeof adjunto.$inferSelect;
 export type Lista = typeof lista.$inferSelect;
 export type ListaItem = typeof listaItem.$inferSelect;
 export type Nota = typeof nota.$inferSelect;
+export type Grupo = typeof grupo.$inferSelect;

@@ -61,8 +61,9 @@ const texto = (t: string): WAMessage => ({ key: { id: `IN${++n}`, remoteJid: "54
 
 describe("bot", () => {
   const respuestas: string[] = [];
+  const destinos: (string | null)[] = [];
   const canal = {
-    responder: async (t: string) => (respuestas.push(t), `OUT${respuestas.length}`),
+    responder: async (t: string, destino?: string | null) => (respuestas.push(t), destinos.push(destino ?? null), `OUT${respuestas.length}`),
     responderImagen: async (_r: string, _m: string, t: string) => (respuestas.push(`[foto] ${t}`), `OUT${respuestas.length}`),
     descargarMedia: async () => sharp({ create: { width: 20, height: 20, channels: 3, background: "#fff" } }).jpeg().toBuffer(),
   };
@@ -72,6 +73,7 @@ describe("bot", () => {
     await baseLimpia();
     enviadorFalso();
     respuestas.length = 0;
+    destinos.length = 0;
     interpretar.mockReset();
     reloj(local("2026-10-22T08:00"));
   });
@@ -338,5 +340,101 @@ describe("bot", () => {
     expect(n.contenido).toContain("AB 123 CD");
     expect(n.adjuntoId).not.toBeNull();
     expect(await recordatoriosActivos()).toHaveLength(0);
+  });
+
+  describe("grupo de la familia", () => {
+    const G = "120363000000000001@g.us";
+    const origen = { grupo: { jid: G, nombre: "Familia" }, autor: "Ana" };
+    const enGrupo = (t: string): WAMessage => ({
+      key: { id: `G${++n}`, remoteJid: G, participant: "5491100000001@s.whatsapp.net" },
+      pushName: "Ana",
+      message: { conversation: t },
+    });
+
+    it("la charla del grupo se ignora (sin respuesta)", async () => {
+      interpretar.mockResolvedValue({ ...base, intencion: "ignorar" });
+      await bot.procesar(enGrupo("¿qué comemos hoy?"), origen);
+      expect(respuestas).toHaveLength(0);
+      const ctx = interpretar.mock.calls[0][2] as { grupo: { nombre: string; autor: string } };
+      expect(ctx.grupo).toEqual({ nombre: "Familia", autor: "Ana" });
+      const { db } = await import("../src/db/index.js");
+      const { mensaje } = await import("../src/db/schema.js");
+      const [m] = await db.select().from(mensaje);
+      expect(m.chat).toBe(G);
+      expect(m.autor).toBe("Ana");
+    });
+
+    it("un recordatorio del grupo avisa en el grupo y no se mezcla con lo personal", async () => {
+      interpretar.mockResolvedValueOnce({
+        ...base,
+        intencion: "crear_recordatorio",
+        recordatorios: [{ titulo: "Cumple de la abuela", descripcion: null, fecha_hora: "2026-10-22T09:00:00-03:00", recurrencia: null, avisos_previos_min: [], lista: null }],
+      });
+      await bot.procesar(enGrupo("recordanos a las 9 el cumple de la abuela"), origen);
+      expect(respuestas[0]).toContain("*Cumple de la abuela*");
+      expect(destinos[0]).toBe(G);
+
+      interpretar.mockResolvedValueOnce({
+        ...base,
+        intencion: "crear_recordatorio",
+        recordatorios: [{ titulo: "Algo mío", descripcion: null, fecha_hora: "2026-10-22T10:00:00-03:00", recurrencia: null, avisos_previos_min: [], lista: null }],
+      });
+      await bot.procesar(texto("recordame a las 10 algo mío"));
+      expect(destinos[1]).toBeNull();
+
+      const { textoTodos } = await import("../src/servicios/listados.js");
+      expect(await textoTodos(G)).not.toContain("Algo mío");
+      expect(await textoTodos(null)).not.toContain("Cumple de la abuela");
+
+      const wa = enviadorFalso();
+      vi.setSystemTime(local("2026-10-22T09:00"));
+      for (const id of await ocurrenciasVencidas()) await procesarOcurrencia(id);
+      expect(wa.enviados[0].destino).toBe(G);
+
+      // "listo" en el grupo confirma el aviso que está insistiendo.
+      await bot.procesar(enGrupo("listo"), origen);
+      expect(respuestas.at(-1)).toContain("Marqué *Cumple de la abuela* como hecho");
+    });
+
+    it("'listo' en el grupo sin avisos pendientes es charla", async () => {
+      interpretar.mockResolvedValue({ ...base, intencion: "ignorar" });
+      await bot.procesar(enGrupo("listo, ya salgo"), origen);
+      await bot.procesar(enGrupo("listo"), origen);
+      expect(respuestas).toHaveLength(0);
+    });
+
+    it("las notas no se usan en el grupo", async () => {
+      interpretar.mockResolvedValue({ ...base, intencion: "nota_consultar", consulta: "clave del wifi" });
+      await bot.procesar(enGrupo("bot, ¿cuál es la clave del wifi?"), origen);
+      expect(respuestas[0]).toContain("personales");
+      expect(responderConNotas).not.toHaveBeenCalled();
+      const ctx = interpretar.mock.calls[0][2] as { notas: string };
+      expect(ctx.notas).toBe("");
+    });
+
+    it("fotos y audios de la charla no hacen nada", async () => {
+      analizarFoto.mockReset();
+      await bot.procesar(
+        { key: { id: "GF1", remoteJid: G }, pushName: "Ana", message: { imageMessage: { mimetype: "image/jpeg", fileLength: 1000 } } },
+        origen,
+      );
+      expect(analizarFoto).not.toHaveBeenCalled();
+      transcribir.mockResolvedValue("ya estoy llegando");
+      interpretar.mockResolvedValue({ ...base, intencion: "ignorar" });
+      await bot.procesar({ key: { id: "GA1", remoteJid: G }, pushName: "Ana", message: { audioMessage: { seconds: 4 } } }, origen);
+      expect(respuestas).toHaveLength(0);
+    });
+
+    it("listas del grupo separadas de las personales", async () => {
+      interpretar.mockResolvedValueOnce({ ...base, intencion: "lista_agregar", lista: "súper", lista_items: [{ texto: "fideos", cantidad: null }] });
+      await bot.procesar(enGrupo("agregá fideos a la lista del súper"), origen);
+      interpretar.mockResolvedValueOnce({ ...base, intencion: "lista_agregar", lista: "súper", lista_items: [{ texto: "café", cantidad: null }] });
+      await bot.procesar(texto("agregá café a la lista del súper"));
+      const { todasLasListas } = await import("../src/servicios/listas.js");
+      const [delGrupo] = await todasLasListas(G);
+      const [mia] = await todasLasListas(null);
+      expect(delGrupo.items.map((i) => i.texto)).toEqual(["fideos"]);
+      expect(mia.items.map((i) => i.texto)).toEqual(["café"]);
+    });
   });
 });

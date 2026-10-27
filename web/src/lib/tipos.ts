@@ -18,6 +18,8 @@ export type Recordatorio = {
   origen: "whatsapp" | "panel" | "foto" | "enlace";
   adjuntoId: number | null;
   listaId: number | null;
+  chat: string | null;
+  grupoNombre: string | null;
   creadoEn: string;
   actualizadoEn: string;
   repeticion: string | null;
@@ -143,13 +145,17 @@ export type Mensaje = {
   recordatorioId: number | null;
   recordatorioTitulo: string | null;
   adjuntoUrl: string | null;
+  chat: string | null;
+  autor: string | null;
   creadoEn: string;
 };
+
+export type Grupo = { jid: string; nombre: string };
 
 export type Log = { id: number; nivel: "info" | "aviso" | "error"; origen: string; mensaje: string; detalle: unknown; creadoEn: string };
 
 export type ListaItem = { id: number; listaId: number; texto: string; cantidad: string | null; creadoEn: string };
-export type Lista = { id: number; nombre: string; clave: string; creadoEn: string; actualizadoEn: string; items: ListaItem[] };
+export type Lista = { id: number; nombre: string; clave: string; chat: string | null; creadoEn: string; actualizadoEn: string; items: ListaItem[] };
 
 export type Nota = {
   id: number;

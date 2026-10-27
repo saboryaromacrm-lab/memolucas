@@ -3,7 +3,7 @@ import { KeyRound, Link2Off, Loader2, QrCode, RefreshCw, Send, ShieldCheck, Smar
 import { Boton, Cargando, Encabezado, Modal, useAccion } from "../componentes/ui";
 import { post, put } from "../lib/api";
 import { fechaHora, haceCuanto } from "../lib/fechas";
-import type { InfoWhatsapp } from "../lib/tipos";
+import type { Grupo, InfoWhatsapp } from "../lib/tipos";
 import { useDatos } from "../lib/vivo";
 
 const ESTADOS: Record<InfoWhatsapp["estado"], [string, string]> = {
@@ -17,6 +17,7 @@ const ESTADOS: Record<InfoWhatsapp["estado"], [string, string]> = {
 
 export function WhatsApp() {
   const { datos: wa } = useDatos<InfoWhatsapp>("/api/whatsapp", ["whatsapp", "mensajes", "configuracion"]);
+  const { datos: grupos } = useDatos<Grupo[]>("/api/grupos", ["mensajes"]);
   const accion = useAccion();
   const [numero, setNumero] = useState("");
   const [desvincular, setDesvincular] = useState(false);
@@ -91,6 +92,24 @@ export function WhatsApp() {
               Guardar número
             </Boton>
             {wa.numeroAutorizado && <p className="mt-2 text-xs text-slate-500">Actual: {wa.numeroAutorizadoTexto}</p>}
+          </section>
+
+          <section className="tarjeta p-5">
+            <div className="mb-1 text-sm font-semibold text-slate-800">👨‍👩‍👧 Grupos</div>
+            <p className="mb-3 text-xs text-slate-500">
+              El bot funciona en los grupos donde estás vos. Ahí lee todo, pero solo contesta cuando le piden algo. Aparecen acá después del primer mensaje.
+            </p>
+            {grupos?.length ? (
+              <ul className="space-y-1 text-sm text-slate-700">
+                {grupos.map((g) => (
+                  <li key={g.jid} className="flex items-center gap-2">
+                    <span className="size-1.5 rounded-full bg-marca" /> {g.nombre}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-sm text-slate-500">Todavía ninguno.</p>
+            )}
           </section>
 
           <section className="tarjeta p-5 text-sm text-slate-600">

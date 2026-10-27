@@ -1,4 +1,5 @@
 import { and, asc, desc, eq, inArray, isNotNull, isNull, lte, ne, or, sql } from "drizzle-orm";
+import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { db } from "../db/index.js";
 import {
   ocurrencia,
@@ -14,6 +15,10 @@ import { obtenerConfig } from "./configuracion.js";
 
 export class ErrorUsuario extends Error {}
 
+/** Dónde: undefined = todo (panel), null = privado del dueño, texto = un grupo. */
+export type Ambito = string | null | undefined;
+export const filtroChat = (col: AnyPgColumn, ambito: Ambito) => (ambito === undefined ? undefined : ambito === null ? isNull(col) : eq(col, ambito));
+
 export type DatosRecordatorio = {
   titulo: string;
   descripcion?: string | null;
@@ -28,6 +33,8 @@ export type DatosRecordatorio = {
   origen?: "whatsapp" | "panel" | "foto" | "enlace";
   adjuntoId?: number | null;
   listaId?: number | null;
+  /** Grupo donde avisa (null o sin dato = privado). */
+  chat?: string | null;
 };
 
 // El scheduler se registra acá para evitar dependencias circulares.
@@ -157,6 +164,7 @@ export async function crearRecordatorio(d: DatosRecordatorio): Promise<Recordato
       origen: d.origen ?? "panel",
       adjuntoId: d.adjuntoId ?? null,
       listaId: d.listaId ?? null,
+      chat: d.chat ?? null,
     })
     .returning();
   const r = await reprogramar(rec);
@@ -263,6 +271,7 @@ export async function duplicarRecordatorio(id: number): Promise<Recordatorio> {
     origen: "panel",
     adjuntoId: r.adjuntoId,
     listaId: r.listaId,
+    chat: r.chat,
   });
 }
 
@@ -340,24 +349,26 @@ export async function posponerOcurrencia(ocId: number, hasta: Date): Promise<Ocu
 }
 
 /** El aviso que espera confirmación más reciente (para "listo" o "posponé 15 min"). */
-export async function ultimaOcurrenciaEnviada(recId?: number): Promise<Ocurrencia | null> {
-  const filtros = [inArray(ocurrencia.estado, ["enviada", "no_confirmada"]), isNotNull(ocurrencia.ultimoEnvioEn)];
+export async function ultimaOcurrenciaEnviada(recId?: number, ambito?: Ambito, soloInsistiendo = false): Promise<Ocurrencia | null> {
+  const filtros = [inArray(ocurrencia.estado, ["enviada", "no_confirmada"]), isNotNull(ocurrencia.ultimoEnvioEn), filtroChat(recordatorio.chat, ambito)];
   if (recId) filtros.push(eq(ocurrencia.recordatorioId, recId));
   // Primero las que están insistiendo; si no hay, la última enviada en las últimas 24 h.
   const [insistiendo] = await db
-    .select()
+    .select({ ocurrencia })
     .from(ocurrencia)
+    .innerJoin(recordatorio, eq(ocurrencia.recordatorioId, recordatorio.id))
     .where(and(...filtros, eq(ocurrencia.estado, "enviada"), isNotNull(ocurrencia.proximoEnvioEn)))
     .orderBy(desc(ocurrencia.ultimoEnvioEn))
     .limit(1);
-  if (insistiendo) return insistiendo;
+  if (insistiendo || soloInsistiendo) return insistiendo?.ocurrencia ?? null;
   const [ultima] = await db
-    .select()
+    .select({ ocurrencia })
     .from(ocurrencia)
+    .innerJoin(recordatorio, eq(ocurrencia.recordatorioId, recordatorio.id))
     .where(and(...filtros, sql`${ocurrencia.ultimoEnvioEn} > now() - interval '24 hours'`))
     .orderBy(desc(ocurrencia.ultimoEnvioEn))
     .limit(1);
-  return ultima ?? null;
+  return ultima?.ocurrencia ?? null;
 }
 
 /** El próximo aviso sin enviar de un recordatorio (para posponer algo que todavía no llegó). */
@@ -430,11 +441,11 @@ export async function recurrentesParaAvanzar(): Promise<Recordatorio[]> {
 export type Evento = { recordatorio: Recordatorio; cuando: Date };
 
 /** Instancias de los recordatorios activos entre dos fechas (expande los recurrentes). */
-export async function eventosEntre(desde: Date, hasta: Date, estados: string[] = ["activo"]): Promise<Evento[]> {
+export async function eventosEntre(desde: Date, hasta: Date, estados: string[] = ["activo"], ambito?: Ambito): Promise<Evento[]> {
   const recs = await db
     .select()
     .from(recordatorio)
-    .where(inArray(recordatorio.estado, estados as Recordatorio["estado"][]));
+    .where(and(inArray(recordatorio.estado, estados as Recordatorio["estado"][]), filtroChat(recordatorio.chat, ambito)));
   const eventos: Evento[] = [];
   for (const r of recs) {
     if (r.rrule) {
@@ -446,20 +457,27 @@ export async function eventosEntre(desde: Date, hasta: Date, estados: string[] =
   return eventos.sort((a, b) => a.cuando.getTime() - b.cuando.getTime());
 }
 
-export async function recordatoriosActivos(): Promise<Recordatorio[]> {
+export async function recordatoriosActivos(ambito?: Ambito): Promise<Recordatorio[]> {
   return db
     .select()
     .from(recordatorio)
-    .where(inArray(recordatorio.estado, ["activo", "pausado"]))
+    .where(and(inArray(recordatorio.estado, ["activo", "pausado"]), filtroChat(recordatorio.chat, ambito)))
     .orderBy(asc(recordatorio.proximaInstancia), asc(recordatorio.fechaHora));
 }
 
 /** Avisos enviados que esperan confirmación. */
-export async function pendientesSinConfirmar() {
+export async function pendientesSinConfirmar(ambito?: Ambito) {
   return db
     .select({ ocurrencia, recordatorio })
     .from(ocurrencia)
     .innerJoin(recordatorio, eq(ocurrencia.recordatorioId, recordatorio.id))
-    .where(and(eq(ocurrencia.estado, "enviada"), isNotNull(ocurrencia.proximoEnvioEn), ne(recordatorio.estado, "borrado")))
+    .where(
+      and(
+        eq(ocurrencia.estado, "enviada"),
+        isNotNull(ocurrencia.proximoEnvioEn),
+        ne(recordatorio.estado, "borrado"),
+        filtroChat(recordatorio.chat, ambito),
+      ),
+    )
     .orderBy(desc(ocurrencia.ultimoEnvioEn));
 }
