@@ -90,13 +90,17 @@ async function pedir<T extends z.ZodType>(
 
 // ───────────── Interpretación de mensajes ─────────────
 
+// La API limita a 16 los campos que aceptan "null" en todo el esquema. Por eso acá NO hay campos
+// nulables: "" significa "no corresponde", 0 en números y [] en listas. Después se pasa a null.
+const VACIO = 'Cadena vacía "" si no corresponde.';
+
 const Campos = z.object({
-  titulo: z.string().nullable(),
-  descripcion: z.string().nullable(),
-  fecha_hora: z.string().nullable().describe("ISO 8601 con offset, ej. 2026-10-24T09:00:00-03:00"),
-  recurrencia: z.string().nullable().describe("RRULE sin DTSTART, ej. FREQ=WEEKLY;BYDAY=MO"),
-  avisos_previos_min: z.array(z.number()).nullable(),
-  lista: z.string().nullable().describe("Si el recordatorio es para una lista ('recordame la lista del súper'), su nombre"),
+  titulo: z.string().describe(VACIO),
+  descripcion: z.string().describe(VACIO),
+  fecha_hora: z.string().describe(`ISO 8601 con offset, ej. 2026-10-24T09:00:00-03:00. ${VACIO}`),
+  recurrencia: z.string().describe(`RRULE sin DTSTART, ej. FREQ=WEEKLY;BYDAY=MO. ${VACIO}`),
+  avisos_previos_min: z.array(z.number()),
+  lista: z.string().describe(`Si el recordatorio es para una lista ("recordame la lista del súper"), su nombre. ${VACIO}`),
 });
 
 export const EsquemaInterpretacion = z.object({
@@ -125,28 +129,101 @@ export const EsquemaInterpretacion = z.object({
     "desconocido",
     "ignorar",
   ]),
-  recordatorios: z.array(Campos).describe("Para crear_recordatorio: uno por cada recordatorio pedido"),
-  cambios: Campos.extend({ quitar_recurrencia: z.boolean() }).nullable().describe("Para editar: solo lo que cambia, el resto null"),
+  recordatorios: z.array(Campos).describe("Para crear_recordatorio: uno por cada recordatorio pedido; si no, []"),
+  hay_cambios: z.boolean().describe("true solo para editar"),
+  cambios: Campos.extend({ quitar_recurrencia: z.boolean() }).describe('Para editar: solo lo que cambia; el resto "" o []'),
   recordatorio_ids: z.array(z.number()).describe("IDs de la lista de recordatorios a los que se refiere"),
-  referencia: z.string().nullable(),
-  listar_desde: z.string().nullable(),
-  listar_hasta: z.string().nullable(),
-  posponer_minutos: z.number().nullable(),
-  posponer_hasta: z.string().nullable(),
-  lista: z.string().nullable().describe("Nombre de la lista (súper, farmacia, pendientes…)"),
-  lista_items: z.array(z.object({ texto: z.string(), cantidad: z.string().nullable() })).describe("Para lista_agregar"),
+  referencia: z.string().describe(VACIO),
+  listar_desde: z.string().describe(`ISO 8601. ${VACIO}`),
+  listar_hasta: z.string().describe(`ISO 8601. ${VACIO}`),
+  posponer_minutos: z.number().describe("0 si no corresponde"),
+  posponer_hasta: z.string().describe(`ISO 8601. ${VACIO}`),
+  lista: z.string().describe(`Nombre de la lista (súper, farmacia, pendientes…). ${VACIO}`),
+  lista_items: z.array(z.object({ texto: z.string(), cantidad: z.string().describe(VACIO) })).describe("Para lista_agregar"),
   lista_item_ids: z.array(z.number()).describe("Para lista_quitar: IDs de los ítems"),
-  nota: z
-    .object({ titulo: z.string(), contenido: z.string(), categoria: z.string() })
-    .nullable()
-    .describe("Para nota_guardar y nota_editar"),
+  hay_nota: z.boolean().describe("true para nota_guardar y nota_editar"),
+  nota: z.object({ titulo: z.string(), contenido: z.string(), categoria: z.string() }).describe('Para nota_guardar y nota_editar; si no, campos ""'),
   nota_ids: z.array(z.number()).describe("Para nota_editar y nota_borrar"),
-  consulta: z.string().nullable().describe("Para nota_consultar: qué quiere saber"),
-  falta_info: z.string().nullable().describe("Qué falta para poder hacerlo, ej. 'hora' o 'fecha'"),
-  respuesta: z.string().nullable().describe("Texto para el usuario cuando hace falta preguntar o charlar"),
+  consulta: z.string().describe(`Para nota_consultar: qué quiere saber. ${VACIO}`),
+  falta_info: z.string().describe(`Qué falta para poder hacerlo, ej. "hora" o "fecha". ${VACIO}`),
+  respuesta: z.string().describe(`Texto para el usuario cuando hace falta preguntar o charlar. ${VACIO}`),
   confianza: z.number(),
 });
-export type Interpretacion = z.infer<typeof EsquemaInterpretacion>;
+type InterpretacionApi = z.infer<typeof EsquemaInterpretacion>;
+
+type CamposRecordatorio = {
+  titulo: string | null;
+  descripcion: string | null;
+  fecha_hora: string | null;
+  recurrencia: string | null;
+  avisos_previos_min: number[] | null;
+  lista: string | null;
+};
+
+/** Lo que usa el bot: los "no corresponde" ya convertidos a null. */
+export type Interpretacion = Omit<
+  InterpretacionApi,
+  | "recordatorios"
+  | "hay_cambios"
+  | "cambios"
+  | "referencia"
+  | "listar_desde"
+  | "listar_hasta"
+  | "posponer_minutos"
+  | "posponer_hasta"
+  | "lista"
+  | "lista_items"
+  | "hay_nota"
+  | "nota"
+  | "consulta"
+  | "falta_info"
+  | "respuesta"
+> & {
+  recordatorios: CamposRecordatorio[];
+  cambios: (CamposRecordatorio & { quitar_recurrencia: boolean }) | null;
+  referencia: string | null;
+  listar_desde: string | null;
+  listar_hasta: string | null;
+  posponer_minutos: number | null;
+  posponer_hasta: string | null;
+  lista: string | null;
+  lista_items: { texto: string; cantidad: string | null }[];
+  nota: { titulo: string; contenido: string; categoria: string } | null;
+  consulta: string | null;
+  falta_info: string | null;
+  respuesta: string | null;
+};
+
+const nulo = (s: string | null | undefined) => (s && s.trim() ? s.trim() : null);
+const campos = (c: z.infer<typeof Campos>): CamposRecordatorio => ({
+  titulo: nulo(c.titulo),
+  descripcion: nulo(c.descripcion),
+  fecha_hora: nulo(c.fecha_hora),
+  recurrencia: nulo(c.recurrencia),
+  avisos_previos_min: c.avisos_previos_min.length ? c.avisos_previos_min : null,
+  lista: nulo(c.lista),
+});
+
+export function normalizarInterpretacion(a: InterpretacionApi): Interpretacion {
+  const { hay_cambios, hay_nota, ...resto } = a;
+  const notaVacia = !a.nota.titulo.trim() && !a.nota.contenido.trim();
+  return {
+    ...resto,
+    recordatorios: a.recordatorios.map(campos),
+    cambios: hay_cambios || a.intencion === "editar" ? { ...campos(a.cambios), quitar_recurrencia: a.cambios.quitar_recurrencia } : null,
+    referencia: nulo(a.referencia),
+    listar_desde: nulo(a.listar_desde),
+    listar_hasta: nulo(a.listar_hasta),
+    posponer_minutos: a.posponer_minutos > 0 ? a.posponer_minutos : null,
+    posponer_hasta: nulo(a.posponer_hasta),
+    lista: nulo(a.lista),
+    lista_items: a.lista_items.map((x) => ({ texto: x.texto, cantidad: nulo(x.cantidad) })),
+    nota: (hay_nota || a.intencion === "nota_guardar" || a.intencion === "nota_editar") && !notaVacia ? a.nota : null,
+    consulta: nulo(a.consulta),
+    falta_info: nulo(a.falta_info),
+    respuesta: nulo(a.respuesta),
+  };
+}
 
 export type ContextoInterpretacion = {
   recordatoriosActivos: string;
@@ -168,6 +245,7 @@ Hora por defecto si no se indica: ${cfg.horaDefecto}. "A la tarde" = ${cfg.horaT
 
 Tu tarea es interpretar el último mensaje del usuario y devolver SIEMPRE el JSON de intención.
 Reglas:
+- Los campos que no correspondan van vacíos: "" en textos, 0 en números, [] en listas.
 - No inventes fechas. Si falta algo esencial (por ejemplo, "recordame llamar a Juan" sin ningún día), usá falta_info y en "respuesta" preguntá corto, ej. "¿Para cuándo te lo recuerdo?".
 - Si hay día pero no hora, usá la hora por defecto. "Mañana", "pasado", "el finde" (sábado), "el lunes" (el próximo) se resuelven con la fecha actual.
 - Relativos ("en 2 horas", "en 5 minutos") se calculan desde la hora actual exacta.
@@ -224,7 +302,7 @@ ${ctx.propuestaPendiente ?? "(ninguna)"}${ctx.respondiendoA ? `\n\n${ctx.respond
 
 export async function interpretar(cfg: Configuracion, texto: string, ctx: ContextoInterpretacion): Promise<Interpretacion> {
   const mensajes: Anthropic.MessageParam[] = [...ctx.historial, { role: "user", content: texto }];
-  return pedir(cfg, EsquemaInterpretacion, promptSistema(cfg, ctx), unirTurnos(mensajes));
+  return normalizarInterpretacion(await pedir(cfg, EsquemaInterpretacion, promptSistema(cfg, ctx), unirTurnos(mensajes)));
 }
 
 /** La API pide turnos alternados: junta mensajes seguidos del mismo rol. */
