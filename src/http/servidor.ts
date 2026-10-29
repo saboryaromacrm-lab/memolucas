@@ -15,7 +15,6 @@ import { versionSesionActual } from "./rutas/auth.js";
 import { rutasAuth } from "./rutas/auth.js";
 import { rutasConfiguracion } from "./rutas/configuracion.js";
 import { rutasEventos } from "./rutas/eventos.js";
-import { rutasListas } from "./rutas/listas.js";
 import { rutasNotas } from "./rutas/notas.js";
 import { rutasPanel } from "./rutas/panel.js";
 import { rutasRecordatorios } from "./rutas/recordatorios.js";
@@ -87,7 +86,6 @@ export async function crearServidor() {
       await privado.register(rutasConfiguracion);
       await privado.register(rutasWhatsapp);
       await privado.register(rutasPanel);
-      await privado.register(rutasListas);
       await privado.register(rutasNotas);
       await privado.register(rutasEventos);
     },

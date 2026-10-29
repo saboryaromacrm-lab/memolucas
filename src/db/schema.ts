@@ -87,6 +87,9 @@ export const configuracion = pgTable("configuracion", {
   audioModelo: text("audio_modelo").notNull().default("whisper-large-v3-turbo"),
   audioMaxSegundos: integer("audio_max_segundos").notNull().default(120),
 
+  // Opciones para tocar (encuestas de WhatsApp) en avisos y propuestas.
+  usarEncuestas: boolean("usar_encuestas").notNull().default(true),
+
   actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
 });
 
@@ -107,36 +110,6 @@ export const grupo = pgTable("grupo", {
   creadoEn: creadoEn(),
   actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
 });
-
-/** Listas (súper, farmacia, pendientes…). Los ítems comprados se borran. */
-export const lista = pgTable(
-  "lista",
-  {
-    id: serial("id").primaryKey(),
-    nombre: text("nombre").notNull(),
-    // Nombre normalizado (sin tildes ni mayúsculas) para no duplicar listas.
-    clave: text("clave").notNull(),
-    // Grupo al que pertenece (null = lista personal).
-    chat: text("chat"),
-    creadoEn: creadoEn(),
-    actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
-  },
-  (t) => [uniqueIndex("lista_chat_clave_idx").on(sql`coalesce(${t.chat}, '')`, t.clave)],
-);
-
-export const listaItem = pgTable(
-  "lista_item",
-  {
-    id: serial("id").primaryKey(),
-    listaId: integer("lista_id")
-      .notNull()
-      .references(() => lista.id, { onDelete: "cascade" }),
-    texto: text("texto").notNull(),
-    cantidad: text("cantidad"),
-    creadoEn: creadoEn(),
-  },
-  (t) => [index("lista_item_lista_idx").on(t.listaId)],
-);
 
 /** Notas: título y contenido van cifrados con APP_SECRET. */
 export const nota = pgTable("nota", {
@@ -172,8 +145,6 @@ export const recordatorio = pgTable(
     estado: text("estado").$type<EstadoRecordatorio>().notNull().default("activo"),
     origen: text("origen").$type<"whatsapp" | "panel" | "foto" | "enlace">().notNull().default("panel"),
     adjuntoId: integer("adjunto_id").references(() => adjunto.id, { onDelete: "set null" }),
-    // Si tiene una lista, el aviso trae los ítems pendientes en ese momento.
-    listaId: integer("lista_id").references(() => lista.id, { onDelete: "set null" }),
     // Grupo donde avisa (null = privado del dueño).
     chat: text("chat"),
     creadoEn: creadoEn(),
@@ -223,7 +194,7 @@ export const mensaje = pgTable(
     id: serial("id").primaryKey(),
     direccion: text("direccion").$type<"entrante" | "saliente">().notNull(),
     texto: text("texto"),
-    tipo: text("tipo").$type<"texto" | "imagen" | "reaccion" | "audio" | "otro">().notNull().default("texto"),
+    tipo: text("tipo").$type<"texto" | "imagen" | "reaccion" | "audio" | "encuesta" | "voto" | "otro">().notNull().default("texto"),
     waMessageId: text("wa_message_id"),
     intencionDetectada: text("intencion_detectada"),
     recordatorioId: integer("recordatorio_id").references(() => recordatorio.id, { onDelete: "set null" }),
@@ -246,6 +217,27 @@ export const borradorPendiente = pgTable("borrador_pendiente", {
   expiraEn: ts("expira_en").notNull(),
   creadoEn: creadoEn(),
 });
+
+export type AccionEncuesta =
+  | { tipo: "aviso"; ocurrenciaId: number }
+  | { tipo: "propuesta"; borradorId: number }
+  | { tipo: "elegir"; ids: number[]; interpretacion: Record<string, unknown> };
+
+/** Encuestas que manda el bot: la clave para descifrar los votos y qué hacer con cada opción. */
+export const encuesta = pgTable(
+  "encuesta",
+  {
+    id: serial("id").primaryKey(),
+    waMessageId: text("wa_message_id").notNull(),
+    chat: text("chat"),
+    secreto: text("secreto").notNull(),
+    opciones: jsonb("opciones").$type<string[]>().notNull(),
+    accion: jsonb("accion").$type<AccionEncuesta>().notNull(),
+    respondidaEn: ts("respondida_en"),
+    creadoEn: creadoEn(),
+  },
+  (t) => [uniqueIndex("encuesta_wa_idx").on(t.waMessageId)],
+);
 
 export const logSistema = pgTable(
   "log_sistema",
@@ -273,7 +265,5 @@ export type Recordatorio = typeof recordatorio.$inferSelect;
 export type Ocurrencia = typeof ocurrencia.$inferSelect;
 export type Configuracion = typeof configuracion.$inferSelect;
 export type Adjunto = typeof adjunto.$inferSelect;
-export type Lista = typeof lista.$inferSelect;
-export type ListaItem = typeof listaItem.$inferSelect;
 export type Nota = typeof nota.$inferSelect;
 export type Grupo = typeof grupo.$inferSelect;

@@ -11,7 +11,6 @@ import { Configuracion } from "./paginas/Configuracion";
 import { Historial } from "./paginas/Historial";
 import { Inicio } from "./paginas/Inicio";
 import { Login } from "./paginas/Login";
-import { Listas } from "./paginas/Listas";
 import { Logs } from "./paginas/Logs";
 import { Notas } from "./paginas/Notas";
 import { Recordatorios } from "./paginas/Recordatorios";
@@ -50,7 +49,6 @@ export function App() {
                 <Route path="/" element={<Inicio />} />
                 <Route path="/recordatorios" element={<Recordatorios />} />
                 <Route path="/calendario" element={<Calendario />} />
-                <Route path="/listas" element={<Listas />} />
                 <Route path="/notas" element={<Notas />} />
                 <Route path="/whatsapp" element={<WhatsApp />} />
                 <Route path="/historial" element={<Historial />} />

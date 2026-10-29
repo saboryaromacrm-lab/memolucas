@@ -47,6 +47,7 @@ const Cambios = z
     minutosAtrasado: z.number().int().min(1).max(24 * 60),
     audioModelo: z.string().trim().min(3).max(80),
     audioMaxSegundos: z.number().int().min(10).max(600),
+    usarEncuestas: z.boolean(),
   })
   .partial();
 

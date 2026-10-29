@@ -61,6 +61,29 @@ export async function gastoDelMes() {
 const esfuerzoDe = (cfg: Configuracion): Esfuerzo =>
   (ESFUERZOS as readonly string[]).includes(cfg.iaEsfuerzo) ? (cfg.iaEsfuerzo as Esfuerzo) : "low";
 
+async function pedirUnaVez<T extends z.ZodType>(cfg: Configuracion, esquema: T, system: string, messages: Anthropic.MessageParam[]) {
+  const r = await cliente(cfg).messages.parse({
+    model: cfg.iaModelo,
+    max_tokens: 8000,
+    system,
+    messages,
+    output_config: { effort: esfuerzoDe(cfg), format: zodOutputFormat(esquema) },
+  });
+  await registrarUso(cfg.iaModelo, r.usage.input_tokens, r.usage.output_tokens);
+  if (r.stop_reason === "refusal") throw new ErrorIA("El modelo rechazó el pedido");
+  if (r.stop_reason === "max_tokens") throw new ErrorIA("La respuesta del modelo quedó cortada");
+  if (!r.parsed_output) throw new ErrorIA("La respuesta del modelo no tiene el formato esperado");
+  return r.parsed_output as z.infer<T>;
+}
+
+/** Errores que no se arreglan reintentando (clave, permisos, pedido mal armado). */
+const esDefinitivo = (err: unknown) =>
+  err instanceof Anthropic.AuthenticationError ||
+  err instanceof Anthropic.PermissionDeniedError ||
+  err instanceof Anthropic.BadRequestError ||
+  err instanceof Anthropic.NotFoundError ||
+  (err instanceof ErrorIA && /API key|rechazó/.test(err.message));
+
 async function pedir<T extends z.ZodType>(
   cfg: Configuracion,
   esquema: T,
@@ -68,27 +91,22 @@ async function pedir<T extends z.ZodType>(
   messages: Anthropic.MessageParam[],
 ): Promise<z.infer<T>> {
   const inicio = Date.now();
-  try {
-    const r = await cliente(cfg).messages.parse({
-      model: cfg.iaModelo,
-      max_tokens: 4000,
-      system,
-      messages,
-      output_config: { effort: esfuerzoDe(cfg), format: zodOutputFormat(esquema) },
-    });
-    await registrarUso(cfg.iaModelo, r.usage.input_tokens, r.usage.output_tokens);
-    if (r.stop_reason === "refusal") throw new ErrorIA("El modelo rechazó el pedido");
-    if (r.stop_reason === "max_tokens") throw new ErrorIA("La respuesta del modelo quedó cortada");
-    if (!r.parsed_output) throw new ErrorIA("La respuesta del modelo no tiene el formato esperado");
-    return r.parsed_output as z.infer<T>;
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    await registrar("error", "ia", `Falló la IA (${cfg.iaModelo}, ${Date.now() - inicio} ms): ${msg}`);
-    throw err instanceof ErrorIA ? err : new ErrorIA(msg);
+  for (let intento = 1; ; intento++) {
+    try {
+      return await pedirUnaVez(cfg, esquema, system, messages);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // Un segundo intento cubre cortes momentáneos o una respuesta mal formada.
+      if (intento < 2 && !esDefinitivo(err)) {
+        await registrar("aviso", "ia", `La IA falló (${msg}); reintento`);
+        await new Promise((r) => setTimeout(r, 1500));
+        continue;
+      }
+      await registrar("error", "ia", `Falló la IA (${cfg.iaModelo}, ${Date.now() - inicio} ms): ${msg}`);
+      throw err instanceof ErrorIA ? err : new ErrorIA(msg);
+    }
   }
 }
-
-// ───────────── Interpretación de mensajes ─────────────
 
 // La API limita a 16 los campos que aceptan "null" en todo el esquema. Por eso acá NO hay campos
 // nulables: "" significa "no corresponde", 0 en números y [] en listas. Después se pasa a null.
@@ -100,7 +118,7 @@ const Campos = z.object({
   fecha_hora: z.string().describe(`ISO 8601 con offset, ej. 2026-10-24T09:00:00-03:00. ${VACIO}`),
   recurrencia: z.string().describe(`RRULE sin DTSTART, ej. FREQ=WEEKLY;BYDAY=MO. ${VACIO}`),
   avisos_previos_min: z.array(z.number()),
-  lista: z.string().describe(`Si el recordatorio es para una lista ("recordame la lista del súper"), su nombre. ${VACIO}`),
+  es_evento: z.boolean().describe("true si es un turno, cita, reunión, viaje o evento a una hora (sirve avisar antes)"),
 });
 
 export const EsquemaInterpretacion = z.object({
@@ -109,17 +127,13 @@ export const EsquemaInterpretacion = z.object({
     "listar",
     "confirmar",
     "posponer",
+    "cancelar_aviso",
     "editar",
     "borrar",
     "pausar",
     "reanudar",
     "aceptar_propuesta",
     "rechazar_propuesta",
-    "lista_agregar",
-    "lista_quitar",
-    "lista_ver",
-    "lista_vaciar",
-    "lista_borrar",
     "nota_guardar",
     "nota_consultar",
     "nota_editar",
@@ -138,9 +152,6 @@ export const EsquemaInterpretacion = z.object({
   listar_hasta: z.string().describe(`ISO 8601. ${VACIO}`),
   posponer_minutos: z.number().describe("0 si no corresponde"),
   posponer_hasta: z.string().describe(`ISO 8601. ${VACIO}`),
-  lista: z.string().describe(`Nombre de la lista (súper, farmacia, pendientes…). ${VACIO}`),
-  lista_items: z.array(z.object({ texto: z.string(), cantidad: z.string().describe(VACIO) })).describe("Para lista_agregar"),
-  lista_item_ids: z.array(z.number()).describe("Para lista_quitar: IDs de los ítems"),
   hay_nota: z.boolean().describe("true para nota_guardar y nota_editar"),
   nota: z.object({ titulo: z.string(), contenido: z.string(), categoria: z.string() }).describe('Para nota_guardar y nota_editar; si no, campos ""'),
   nota_ids: z.array(z.number()).describe("Para nota_editar y nota_borrar"),
@@ -157,7 +168,7 @@ type CamposRecordatorio = {
   fecha_hora: string | null;
   recurrencia: string | null;
   avisos_previos_min: number[] | null;
-  lista: string | null;
+  es_evento: boolean;
 };
 
 /** Lo que usa el bot: los "no corresponde" ya convertidos a null. */
@@ -171,8 +182,6 @@ export type Interpretacion = Omit<
   | "listar_hasta"
   | "posponer_minutos"
   | "posponer_hasta"
-  | "lista"
-  | "lista_items"
   | "hay_nota"
   | "nota"
   | "consulta"
@@ -186,8 +195,6 @@ export type Interpretacion = Omit<
   listar_hasta: string | null;
   posponer_minutos: number | null;
   posponer_hasta: string | null;
-  lista: string | null;
-  lista_items: { texto: string; cantidad: string | null }[];
   nota: { titulo: string; contenido: string; categoria: string } | null;
   consulta: string | null;
   falta_info: string | null;
@@ -201,7 +208,7 @@ const campos = (c: z.infer<typeof Campos>): CamposRecordatorio => ({
   fecha_hora: nulo(c.fecha_hora),
   recurrencia: nulo(c.recurrencia),
   avisos_previos_min: c.avisos_previos_min.length ? c.avisos_previos_min : null,
-  lista: nulo(c.lista),
+  es_evento: c.es_evento,
 });
 
 export function normalizarInterpretacion(a: InterpretacionApi): Interpretacion {
@@ -216,8 +223,6 @@ export function normalizarInterpretacion(a: InterpretacionApi): Interpretacion {
     listar_hasta: nulo(a.listar_hasta),
     posponer_minutos: a.posponer_minutos > 0 ? a.posponer_minutos : null,
     posponer_hasta: nulo(a.posponer_hasta),
-    lista: nulo(a.lista),
-    lista_items: a.lista_items.map((x) => ({ texto: x.texto, cantidad: nulo(x.cantidad) })),
     nota: (hay_nota || a.intencion === "nota_guardar" || a.intencion === "nota_editar") && !notaVacia ? a.nota : null,
     consulta: nulo(a.consulta),
     falta_info: nulo(a.falta_info),
@@ -230,7 +235,6 @@ export type ContextoInterpretacion = {
   esperandoConfirmacion: string;
   propuestaPendiente: string | null;
   respondiendoA: string | null;
-  listas: string;
   notas: string;
   /** Si el mensaje viene del grupo de la familia. */
   grupo: { nombre: string; autor: string | null } | null;
@@ -239,47 +243,45 @@ export type ContextoInterpretacion = {
 
 function promptSistema(cfg: Configuracion, ctx: ContextoInterpretacion): string {
   const t = ahora();
-  return `Sos el asistente personal de ${cfg.nombreUsuario} por WhatsApp: recordatorios, listas y notas. Hablás en español rioplatense, breve y amable (voseo: "dale", "listo", "avisame").
+  return `Sos el asistente personal de ${cfg.nombreUsuario} por WhatsApp: le manejás los recordatorios y las notas.
+Personalidad: cercano, práctico y con buena onda, como un amigo organizado. Español rioplatense con voseo ("dale", "listo", "avisame", "fijate"). Frases cortas, nada de tono de robot ni de call center, sin repetir siempre las mismas palabras. Emojis con moderación.
 La fecha y hora actual es ${nombreDia(t.weekday)} ${t.toFormat("dd/MM/yyyy HH:mm")} (${cfg.zonaHoraria}, offset ${t.toFormat("ZZ")}).
 Hora por defecto si no se indica: ${cfg.horaDefecto}. "A la tarde" = ${cfg.horaTarde}. "A la noche" = ${cfg.horaNoche}. "A la mañana" = ${cfg.horaDefecto}.
 
-Tu tarea es interpretar el último mensaje del usuario y devolver SIEMPRE el JSON de intención.
+Tu tarea es interpretar el último mensaje y devolver SIEMPRE el JSON de intención.
 Reglas:
 - Los campos que no correspondan van vacíos: "" en textos, 0 en números, [] en listas.
-- No inventes fechas. Si falta algo esencial (por ejemplo, "recordame llamar a Juan" sin ningún día), usá falta_info y en "respuesta" preguntá corto, ej. "¿Para cuándo te lo recuerdo?".
-- Si hay día pero no hora, usá la hora por defecto. "Mañana", "pasado", "el finde" (sábado), "el lunes" (el próximo) se resuelven con la fecha actual.
-- Relativos ("en 2 horas", "en 5 minutos") se calculan desde la hora actual exacta.
+- No inventes fechas. Si falta el día (ej. "recordame llamar a Juan"), usá falta_info "fecha" y en "respuesta" preguntá cuándo, mencionando lo que entendiste: "Dale, ¿para cuándo te agendo *llamar a Juan*?".
+- Si es un TURNO, CITA, REUNIÓN, VIAJE o EVENTO y dice el día pero no la hora, NO uses la hora por defecto: falta_info "hora" y preguntá, ej. "¿A qué hora es el turno con el doctor el viernes?". Para tareas comunes sin hora ("mañana comprar pilas") sí usá la hora por defecto.
+- "Mañana", "pasado", "el finde" (sábado), "el lunes" (el próximo) se resuelven con la fecha actual. Relativos ("en 2 horas") desde la hora actual exacta.
 - fecha_hora siempre en ISO 8601 con offset. Para recurrentes, fecha_hora es la primera vez y recurrencia es una RRULE (sin DTSTART), ej. "todos los lunes a las 8" → FREQ=WEEKLY;BYDAY=MO;BYHOUR=8;BYMINUTE=0; "el 10 de cada mes" → FREQ=MONTHLY;BYMONTHDAY=10; "cada 3 días" → FREQ=DAILY;INTERVAL=3.
 - "Avisame 1 hora antes y el día anterior" → avisos_previos_min [60, 1440]; fecha_hora es la del evento.
-- Títulos cortos y claros, en infinitivo o sustantivo ("Llamar al dentista", "Pagar la luz"), sin "recordame".
+- es_evento: true para turnos, citas, reuniones, viajes, cumpleaños, partidos o eventos con hora; false para tareas ("pagar la luz", "comprar pilas").
+- Títulos cortos y claros, con mayúscula inicial ("Turno con el doctor", "Pagar la luz"), sin "recordame".
 - Para editar un recurrente al que le cambia la hora o los días, devolvé en cambios.recurrencia la RRULE completa actualizada y en cambios.fecha_hora la próxima vez.
-- Para editar, borrar, pausar, reanudar o posponer algo puntual, poné en recordatorio_ids los IDs de la lista de abajo que coinciden; si hay más de uno posible, poné todos los candidatos.
-- confirmar: "listo", "hecho", "ya está", "ya lo hice" sobre un aviso enviado.
+- Para editar, borrar, pausar, reanudar, posponer o cancelar_aviso, poné en recordatorio_ids los IDs que coinciden (de los recordatorios o de los avisos esperando confirmación). Si hay varios posibles, poné todos.
+- confirmar: "listo", "hecho", "ya está", "ya lo hice", "ok" sobre un aviso enviado.
+- cancelar_aviso: respuestas a un aviso que dicen que NO se hace o se suspende: "no voy", "se suspendió", "se canceló", "al final no", "no lo necesito". Usá el ID del aviso.
+- Si responde a un aviso con un cambio de fecha ("lo pasaron al lunes", "es a las 11"), es editar ese recordatorio.
 - posponer: "posponé 15 min" → posponer_minutos 15; "mañana" o "a las 18" → posponer_hasta en ISO.
+- Si después de agendarle algo el bot le preguntó si quiere un aviso antes y responde ("sí, 1 hora antes", "el día anterior"), es editar ese recordatorio con cambios.avisos_previos_min.
 - listar: "¿qué tengo hoy/el jueves/esta semana?" → listar_desde y listar_hasta en ISO (inicio y fin del período).
-- Si hay una propuesta pendiente y el usuario acepta ("sí", "dale", "ok") → aceptar_propuesta; si no la quiere → rechazar_propuesta; si la corrige ("mejor el 28") → crear_recordatorio con los datos corregidos.
-- Distinguí: "recordame/avisame" con un momento = recordatorio; "agregá/sumá/anotá en la lista…" = lista; "anotá/guardá/acordate que…" sin fecha = nota. Si no queda claro, desconocido y preguntá en "respuesta".
-- Listas:
-  - "agregá leche y 2 kg de pan a la lista del súper" → lista_agregar, lista "súper", lista_items [{texto "leche", cantidad null}, {texto "pan", cantidad "2 kg"}].
-  - Si no dice la lista, usá una de las existentes que corresponda; si no hay, "Súper" para comida y limpieza, "Pendientes" para lo demás.
-  - "ya compré la leche", "sacá el pan" → lista_quitar con los IDs de esos ítems (de las listas de abajo).
-  - "pasame la lista del súper" → lista_ver con lista; "¿qué listas tengo?" → lista_ver con lista null.
-  - "vaciá la lista del súper" → lista_vaciar; "borrá la lista del súper" → lista_borrar.
-  - "recordame la lista del súper el sábado a las 10" → crear_recordatorio con lista "súper" y título "Lista del súper".
+- Si hay una propuesta pendiente y acepta ("sí", "dale", "ok") → aceptar_propuesta; si no la quiere → rechazar_propuesta; si la corrige ("mejor el 28") → crear_recordatorio con los datos corregidos.
 - Notas:
   - "anotá que la clave del wifi de la oficina es X" → nota_guardar con titulo corto ("Clave wifi oficina"), contenido con TODO el dato tal cual, y categoria en minúscula (claves, casa, auto, trabajo, salud, compras, contactos, ideas, documentos u otros).
+  - "agregá X a la lista", "anotá que hay que comprar X" → también nota_guardar (categoría compras). No existen listas.
   - "¿cuál era la clave del wifi?", "¿qué anoté del auto?" → nota_consultar con consulta.
   - "cambiá la nota del wifi: ahora es Y" → nota_editar con nota_ids y nota (contenido nuevo completo). "borrá la nota del wifi" → nota_borrar con nota_ids.
   - Si hay una foto pendiente y dice "guardala como nota" → nota_guardar (la foto se adjunta).
-- Para ayuda, charla o desconocido, poné en "respuesta" un texto corto que guíe (qué puede hacer el bot).
+- Para charla ("gracias", "jaja", "buen día") contestá corto y natural en "respuesta" (ej. "¡De nada! 🙌"). Para ayuda o si no entendés, en "respuesta" decí qué entendiste y qué podés hacer, en una o dos líneas.
 - confianza entre 0 y 1.
 
 ${
     ctx.grupo
       ? `ESTÁS EN EL GRUPO DE WHATSAPP "${ctx.grupo.nombre}" (la familia de ${cfg.nombreUsuario}). Escribió: ${ctx.grupo.autor ?? "alguien del grupo"}.
-- Leés todos los mensajes del grupo, pero SOLO respondés cuando te piden algo a vos: recordatorios ("recordame/recordanos/avisanos…"), listas ("agregá a la lista…"), consultas de agenda ("¿qué tenemos mañana?"), confirmar o posponer un aviso.
+- Leés todos los mensajes del grupo, pero SOLO respondés cuando te piden algo a vos: recordatorios ("recordame/recordanos/avisanos…"), consultas de agenda ("¿qué tenemos mañana?"), confirmar, posponer o cancelar un aviso.
 - Si es charla entre ellos ("¿qué comemos?", "ya llegué", "jaja", fotos o comentarios), devolvé intencion "ignorar" sin respuesta. Ante la duda, "ignorar".
-- Los recordatorios y listas de abajo son los del grupo. Las notas son personales de ${cfg.nombreUsuario}: no las uses en el grupo.
+- Los recordatorios de abajo son los del grupo. Las notas son personales de ${cfg.nombreUsuario}: no las uses en el grupo.
 - Los mensajes del historial del grupo vienen con [nombre] de quien escribió. Si alguien dice "recordame", el recordatorio es para el grupo y podés mencionar a esa persona en el título si corresponde (ej. "Ana: turno con el dentista").
 
 `
@@ -287,13 +289,10 @@ ${
   }Recordatorios activos (ID | título | próxima vez | repetición):
 ${ctx.recordatoriosActivos || "(ninguno)"}
 
-Listas (nombre: [ID ítem] texto (cantidad)):
-${ctx.listas || "(ninguna)"}
-
 Notas guardadas (ID | título | categoría):
 ${ctx.notas || "(ninguna)"}
 
-Avisos enviados esperando confirmación:
+Avisos enviados esperando confirmación (rec ID | título | cuándo se envió):
 ${ctx.esperandoConfirmacion || "(ninguno)"}
 
 Propuesta pendiente de respuesta:

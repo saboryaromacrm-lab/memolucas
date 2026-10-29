@@ -17,7 +17,6 @@ export type Recordatorio = {
   estado: EstadoRecordatorio;
   origen: "whatsapp" | "panel" | "foto" | "enlace";
   adjuntoId: number | null;
-  listaId: number | null;
   chat: string | null;
   grupoNombre: string | null;
   creadoEn: string;
@@ -112,6 +111,7 @@ export type Configuracion = {
   minutosAtrasado: number;
   audioModelo: string;
   audioMaxSegundos: number;
+  usarEncuestas: boolean;
   groqKeyPropia: boolean;
   groqKeyEntorno: boolean;
   apiKeyPropia: boolean;
@@ -140,7 +140,7 @@ export type Mensaje = {
   id: number;
   direccion: "entrante" | "saliente";
   texto: string | null;
-  tipo: "texto" | "imagen" | "reaccion" | "otro";
+  tipo: "texto" | "imagen" | "reaccion" | "audio" | "encuesta" | "voto" | "otro";
   intencionDetectada: string | null;
   recordatorioId: number | null;
   recordatorioTitulo: string | null;
@@ -154,8 +154,6 @@ export type Grupo = { jid: string; nombre: string };
 
 export type Log = { id: number; nivel: "info" | "aviso" | "error"; origen: string; mensaje: string; detalle: unknown; creadoEn: string };
 
-export type ListaItem = { id: number; listaId: number; texto: string; cantidad: string | null; creadoEn: string };
-export type Lista = { id: number; nombre: string; clave: string; chat: string | null; creadoEn: string; actualizadoEn: string; items: ListaItem[] };
 
 export type Nota = {
   id: number;

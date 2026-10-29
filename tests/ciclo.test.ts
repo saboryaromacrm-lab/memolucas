@@ -32,6 +32,7 @@ describe("ciclo de un recordatorio", () => {
 
   beforeEach(async () => {
     await baseLimpia();
+    await actualizarConfig({ usarEncuestas: false }); // Acá se prueba el aviso como texto; las encuestas, en bot.test.
     wa = enviadorFalso();
     t = reloj(local("2026-10-22T08:00"));
   });
@@ -54,7 +55,7 @@ describe("ciclo de un recordatorio", () => {
     t.avanzar(30);
     await barrer();
     expect(wa.enviados).toHaveLength(2);
-    expect(wa.enviados[1].texto).toContain("Te sigo recordando");
+    expect(wa.enviados[1].texto).toContain("¿Pudiste con *Pagar la luz*?");
     t.avanzar(60);
     await barrer();
     expect(wa.enviados).toHaveLength(3);
@@ -91,7 +92,7 @@ describe("ciclo de un recordatorio", () => {
     await barrer();
     expect(wa.enviados).toHaveLength(2);
     expect(wa.enviados[1].texto).toContain("Sacar la ropa");
-    expect(wa.enviados[1].texto).not.toContain("Atrasado");
+    expect(wa.enviados[1].texto).not.toContain("Se me pasó");
   });
 
   it("aviso previo 1 hora antes y a la hora del turno", async () => {
@@ -133,7 +134,7 @@ describe("ciclo de un recordatorio", () => {
     wa.online = true;
     await barrer();
     expect(wa.enviados).toHaveLength(1);
-    expect(wa.enviados[0].texto).toContain("Atrasado");
+    expect(wa.enviados[0].texto).toContain("Se me pasó");
     const [oc] = await ocs(r.id);
     expect(oc.atrasada).toBe(true);
   });

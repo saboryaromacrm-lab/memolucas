@@ -7,7 +7,8 @@ import { registrar } from "../lib/log.js";
 import { describirMinutos } from "../lib/textos.js";
 import { obtenerConfig, plantillasDe, renderizar } from "./configuracion.js";
 import { enviador } from "./enviador.js";
-import { obtenerLista, textoLista } from "./listas.js";
+import { sinFormato } from "../bot/frases.js";
+import { opcionesAviso, registrarEncuesta } from "./encuestas.js";
 import { registrarMensaje } from "./mensajes.js";
 import { avanzarRecurrente, cerrarSiCorresponde } from "./recordatorios.js";
 
@@ -55,12 +56,16 @@ export function textoAviso(oc: Ocurrencia, rec: Recordatorio, cfg: Configuracion
     intento: oc.intentos,
     tope: oc.tope,
     nombre: cfg.nombreUsuario,
-    ayuda: oc.insiste ? "\n_Respondé *listo* cuando lo hagas o *posponé 15 min*._" : "",
+    // Con encuestas, las opciones van en la encuesta.
+    ayuda: oc.insiste && !conEncuesta(oc, cfg) ? "\n_Respondé *listo* cuando lo hagas o *posponé 15 min*._" : "",
   };
   if (oc.intentos > 0) return { texto: renderizar(p.insistencia, vars), atrasada: oc.atrasada };
   if (atrasada) return { texto: renderizar(p.atrasado, vars), atrasada };
   return { texto: renderizar(oc.tipo === "previo" ? p.previo : p.aviso, vars), atrasada };
 }
+
+/** Los avisos de la hora (no los previos) llevan encuesta: hecho o posponer. */
+export const conEncuesta = (oc: Pick<Ocurrencia, "tipo">, cfg: Configuracion) => cfg.usarEncuestas && oc.tipo === "principal";
 
 /** Procesa un aviso si le toca: lo envía, programa la insistencia o lo cierra. */
 export function procesarOcurrencia(id: number): Promise<void> {
@@ -101,24 +106,32 @@ async function procesar(id: number): Promise<void> {
   const wa = enviador();
   if (!wa.conectado()) return; // Se reintenta al reconectar (barrido).
 
-  const { texto: base, atrasada } = textoAviso(oc, rec, cfg, ahora);
-  // Si el recordatorio tiene una lista, el primer aviso trae lo que falta en ese momento.
-  let texto = base;
-  if (oc.intentos === 0 && rec.listaId) {
-    const l = await obtenerLista(rec.listaId);
-    if (l) texto += `\n\n${textoLista(l)}`;
-  }
+  const { texto, atrasada } = textoAviso(oc, rec, cfg, ahora);
+  const encuesta = conEncuesta(oc, cfg);
   let waId: string | null = null;
   let adjuntoId: number | null = null;
+  let encuestaId: string | null = null;
+  const opciones = opcionesAviso(cfg);
   try {
-    if (oc.intentos === 0 && rec.adjuntoId) {
+    // La insistencia con encuesta es un solo mensaje: la pregunta con las opciones.
+    if (encuesta && oc.intentos > 0) {
+      const r = await wa.enviarEncuesta(sinFormato(texto), opciones, rec.chat).catch(async (err) => {
+        await registrar("aviso", "scheduler", "No se pudo mandar la encuesta; va como texto", err);
+        return null;
+      });
+      if (r?.id) {
+        waId = encuestaId = r.id;
+        await registrarEncuesta({ waMessageId: r.id, chat: rec.chat, secreto: r.secreto, opciones, accion: { tipo: "aviso", ocurrenciaId: oc.id } });
+      }
+    }
+    if (!waId && oc.intentos === 0 && rec.adjuntoId) {
       const [adj] = await db.select().from(adjunto).where(eq(adjunto.id, rec.adjuntoId));
       if (adj) {
         waId = await wa.enviarImagen(adj.rutaArchivo, adj.mime, texto, rec.chat);
         adjuntoId = adj.id;
       }
     }
-    if (!waId) waId = await wa.enviarTexto(texto, rec.chat);
+    if (!waId) waId = await wa.enviarTexto(encuesta && oc.intentos > 0 ? `${texto}\n_Respondé *listo* cuando lo hagas o *posponé 15 min*._` : texto, rec.chat);
   } catch (err) {
     await registrar("error", "scheduler", `No se pudo enviar el aviso de "${rec.titulo}"`, err);
     return; // Queda pendiente; el barrido lo reintenta.
@@ -141,7 +154,7 @@ async function procesar(id: number): Promise<void> {
   await registrarMensaje({
     direccion: "saliente",
     texto,
-    tipo: adjuntoId ? "imagen" : "texto",
+    tipo: encuestaId ? "encuesta" : adjuntoId ? "imagen" : "texto",
     waMessageId: waId,
     recordatorioId: rec.id,
     ocurrenciaId: oc.id,
@@ -149,6 +162,27 @@ async function procesar(id: number): Promise<void> {
     chat: rec.chat,
     intencionDetectada: oc.intentos > 0 ? "insistencia" : oc.tipo === "previo" ? "aviso_previo" : "aviso",
   });
+  // Primer aviso: abajo va la encuesta para responder con un toque.
+  if (encuesta && !encuestaId) {
+    try {
+      const r = await wa.enviarEncuesta(`¿Listo con "${sinFormato(rec.titulo)}"?`, opciones, rec.chat);
+      if (r.id) {
+        await registrarEncuesta({ waMessageId: r.id, chat: rec.chat, secreto: r.secreto, opciones, accion: { tipo: "aviso", ocurrenciaId: oc.id } });
+        await registrarMensaje({
+          direccion: "saliente",
+          tipo: "encuesta",
+          texto: `📊 ¿Listo con "${sinFormato(rec.titulo)}"?\n${opciones.map((o) => `• ${o}`).join("\n")}`,
+          waMessageId: r.id,
+          recordatorioId: rec.id,
+          ocurrenciaId: oc.id,
+          chat: rec.chat,
+          intencionDetectada: "encuesta",
+        });
+      }
+    } catch (err) {
+      await registrar("aviso", "scheduler", `No se pudo mandar la encuesta de "${rec.titulo}"`, err);
+    }
+  }
   if (proximo) await reagendar(oc.id, proximo);
 
   if (oc.tipo === "principal" && oc.intentos === 0) {
