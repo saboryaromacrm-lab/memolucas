@@ -5,12 +5,15 @@ import { actualizarConfig, invalidarConfig } from "../src/servicios/configuracio
 import { fijarEnviador, type Enviador } from "../src/servicios/enviador.js";
 
 export type Enviado = { texto: string; imagen?: string; id: string; destino?: string | null };
+export type EncuestaEnviada = { nombre: string; opciones: string[]; id: string; destino?: string | null };
 
 export function enviadorFalso() {
   const enviados: Enviado[] = [];
+  const encuestas: EncuestaEnviada[] = [];
   let n = 0;
-  const e: Enviador & { enviados: Enviado[]; online: boolean } = {
+  const e: Enviador & { enviados: Enviado[]; encuestas: EncuestaEnviada[]; online: boolean } = {
     enviados,
+    encuestas,
     online: true,
     conectado() {
       return this.online;
@@ -25,6 +28,11 @@ export function enviadorFalso() {
       enviados.push({ texto, imagen: ruta, id, destino: destino ?? null });
       return id;
     },
+    async enviarEncuesta(nombre, opciones, destino) {
+      const id = `POLL${++n}`;
+      encuestas.push({ nombre, opciones, id, destino: destino ?? null });
+      return { id, secreto: "prueba" };
+    },
   };
   fijarEnviador(e);
   return e;
@@ -37,7 +45,7 @@ export async function baseLimpia() {
     migrado = true;
   }
   await db.execute(
-    sql`truncate table mensaje, ocurrencia, recordatorio, lista_item, lista, nota, grupo, adjunto, borrador_pendiente, log_sistema, uso_ia, configuracion, acceso_panel restart identity cascade`,
+    sql`truncate table mensaje, ocurrencia, recordatorio, nota, encuesta, grupo, adjunto, borrador_pendiente, log_sistema, uso_ia, configuracion, acceso_panel restart identity cascade`,
   );
   invalidarConfig();
   await actualizarConfig({ numeroAutorizado: "5491112345678" });

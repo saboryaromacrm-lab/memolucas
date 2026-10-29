@@ -8,6 +8,8 @@ import sharp from "sharp";
 import { actualizarConfig } from "../src/servicios/configuracion.js";
 import { ocurrenciasVencidas, procesarOcurrencia } from "../src/servicios/disparador.js";
 import { recordatoriosActivos } from "../src/servicios/recordatorios.js";
+import { fijarAzar } from "../src/bot/frases.js";
+import { hashOpcion } from "../src/servicios/encuestas.js";
 import { baseLimpia, enviadorFalso, reloj } from "./ayuda.js";
 
 const interpretar = vi.fn<(...a: unknown[]) => Promise<Interpretacion>>();
@@ -45,9 +47,6 @@ const base: Interpretacion = {
   listar_hasta: null,
   posponer_minutos: null,
   posponer_hasta: null,
-  lista: null,
-  lista_items: [],
-  lista_item_ids: [],
   nota: null,
   nota_ids: [],
   consulta: null,
@@ -57,12 +56,30 @@ const base: Interpretacion = {
 };
 
 let n = 0;
-const texto = (t: string): WAMessage => ({ key: { id: `IN${++n}`, remoteJid: "5491112345678@s.whatsapp.net" }, message: { conversation: t } });
+const YO = "5491112345678@s.whatsapp.net";
+const texto = (t: string): WAMessage => ({ key: { id: `IN${++n}`, remoteJid: YO }, message: { conversation: t } });
+/** Respuesta citando un mensaje del bot (ej. el aviso). */
+const respuestaA = (citado: string, t: string): WAMessage => ({
+  key: { id: `IN${++n}`, remoteJid: YO },
+  message: { extendedTextMessage: { text: t, contextInfo: { stanzaId: citado } } },
+});
+/** Voto en una encuesta. En las pruebas, el "cifrado" es el texto de la opción. */
+const voto = (encuesta: string, opcion: string): WAMessage => ({
+  key: { id: `V${++n}`, remoteJid: YO },
+  message: { pollUpdateMessage: { pollCreationMessageKey: { id: encuesta }, vote: { encPayload: Buffer.from(opcion), encIv: Buffer.alloc(12) } } },
+});
 
 describe("bot", () => {
   const respuestas: string[] = [];
   const destinos: (string | null)[] = [];
+  const encuestas: { nombre: string; opciones: string[]; id: string }[] = [];
   const canal = {
+    responderEncuesta: async (nombre: string, opciones: string[]) => {
+      const id = `ENC${encuestas.length + 1}`;
+      encuestas.push({ nombre, opciones, id });
+      return { id, secreto: "prueba" };
+    },
+    descifrarVoto: (msg: WAMessage) => [hashOpcion(Buffer.from(msg.message!.pollUpdateMessage!.vote!.encPayload!).toString())],
     responder: async (t: string, destino?: string | null) => (respuestas.push(t), destinos.push(destino ?? null), `OUT${respuestas.length}`),
     responderImagen: async (_r: string, _m: string, t: string) => (respuestas.push(`[foto] ${t}`), `OUT${respuestas.length}`),
     descargarMedia: async () => sharp({ create: { width: 20, height: 20, channels: 3, background: "#fff" } }).jpeg().toBuffer(),
@@ -74,7 +91,9 @@ describe("bot", () => {
     enviadorFalso();
     respuestas.length = 0;
     destinos.length = 0;
+    encuestas.length = 0;
     interpretar.mockReset();
+    fijarAzar(() => 0);
     reloj(local("2026-10-22T08:00"));
   });
   afterEach(() => vi.useRealTimers());
@@ -83,10 +102,10 @@ describe("bot", () => {
     interpretar.mockResolvedValue({
       ...base,
       intencion: "crear_recordatorio",
-      recordatorios: [{ titulo: "Pagar la luz", descripcion: null, fecha_hora: "2026-10-23T10:00:00-03:00", recurrencia: null, avisos_previos_min: [], lista: null }],
+      recordatorios: [{ titulo: "Pagar la luz", descripcion: null, fecha_hora: "2026-10-23T10:00:00-03:00", recurrencia: null, avisos_previos_min: [], es_evento: false }],
     });
     await bot.procesar(texto("Recordame mañana a las 10 pagar la luz"));
-    expect(respuestas[0]).toBe("Listo ✅ Te recuerdo *Pagar la luz* mañana a las 10:00.");
+    expect(respuestas[0]).toBe("Agendado 👌\n📌 *Pagar la luz*\n🗓️ Mañana · 10:00");
     const recs = await recordatoriosActivos();
     expect(recs).toHaveLength(1);
     expect(recs[0].origen).toBe("whatsapp");
@@ -103,7 +122,7 @@ describe("bot", () => {
     interpretar.mockResolvedValue({
       ...base,
       intencion: "crear_recordatorio",
-      recordatorios: [{ titulo: "Tomar la pastilla", descripcion: null, fecha_hora: "2026-10-22T09:00:00-03:00", recurrencia: null, avisos_previos_min: [], lista: null }],
+      recordatorios: [{ titulo: "Tomar la pastilla", descripcion: null, fecha_hora: "2026-10-22T09:00:00-03:00", recurrencia: null, avisos_previos_min: [], es_evento: false }],
     });
     await bot.procesar(texto("Recordame a las 9 tomar la pastilla"));
     await bot.procesar(texto("hoy"));
@@ -113,14 +132,14 @@ describe("bot", () => {
     vi.setSystemTime(local("2026-10-22T09:00"));
     for (const id of await ocurrenciasVencidas()) await procesarOcurrencia(id);
     await bot.procesar(texto("listo"));
-    expect(respuestas.at(-1)).toContain("Marqué *Tomar la pastilla* como hecho");
+    expect(respuestas.at(-1)).toContain("*Tomar la pastilla*, hecho");
     expect(interpretar).toHaveBeenCalledTimes(1);
   });
 
   it("si la IA falla responde el mensaje de error", async () => {
     interpretar.mockRejectedValue(new Error("caída"));
     await bot.procesar(texto("algo raro"));
-    expect(respuestas[0]).toBe("Uy, no pude procesar eso. ¿Me lo repetís?");
+    expect(respuestas[0]).toBe("Se me trabó algo 😅 ¿Me lo mandás de nuevo en un ratito?");
   });
 
   it("silencio 2h", async () => {
@@ -150,6 +169,7 @@ describe("bot", () => {
     };
     await bot.procesar(foto);
     expect(respuestas[0]).toContain("¿Te lo recuerdo el 29/10");
+    expect(encuestas[0].opciones).toEqual(["✅ Dale", "✏️ Otra fecha", "❌ No"]);
     await bot.procesar(texto("dale"));
     expect(respuestas[1]).toContain("*Pagar la luz*");
     const [rec] = await recordatoriosActivos();
@@ -205,7 +225,7 @@ describe("bot", () => {
       analisis({ tipo: "receta", titulo: "Ver receta de ñoquis", accion: "crear", propuesta_fecha_hora: "2026-10-24T10:00:00-03:00", propuesta_avisos_previos_min: [] }),
     );
     await bot.procesar(texto("recordame el sábado ver esto https://recetas.com/noquis"));
-    expect(respuestas[0]).toContain("Listo ✅ Te recuerdo *Ver receta de ñoquis*");
+    expect(respuestas[0]).toContain("📌 *Ver receta de ñoquis*");
     expect(analizarEnlace.mock.calls[0][2]).toBe("recordame el sábado ver esto");
   });
 
@@ -239,7 +259,7 @@ describe("bot", () => {
     interpretar.mockResolvedValue({
       ...base,
       intencion: "crear_recordatorio",
-      recordatorios: [{ titulo: "Pagar la luz", descripcion: null, fecha_hora: "2026-10-23T10:00:00-03:00", recurrencia: null, avisos_previos_min: [], lista: null }],
+      recordatorios: [{ titulo: "Pagar la luz", descripcion: null, fecha_hora: "2026-10-23T10:00:00-03:00", recurrencia: null, avisos_previos_min: [], es_evento: false }],
     });
     await bot.procesar({ key: { id: "AUD1", remoteJid: "5491112345678@s.whatsapp.net" }, message: { audioMessage: { seconds: 5, mimetype: "audio/ogg; codecs=opus" } } });
     expect(respuestas[0]).toBe("🎙️ Entendí: “recordame mañana a las 10 pagar la luz”");
@@ -251,44 +271,6 @@ describe("bot", () => {
     await bot.procesar({ key: { id: "AUD2", remoteJid: "5491112345678@s.whatsapp.net" }, message: { audioMessage: { seconds: 500 } } });
     expect(respuestas[0]).toContain("muy largo");
     expect(transcribir).not.toHaveBeenCalled();
-  });
-
-  it("listas: agregar, ver, quitar lo comprado y recordar la lista", async () => {
-    interpretar.mockResolvedValueOnce({
-      ...base,
-      intencion: "lista_agregar",
-      lista: "súper",
-      lista_items: [
-        { texto: "leche", cantidad: null },
-        { texto: "pan", cantidad: "2 kg" },
-      ],
-    });
-    await bot.procesar(texto("agregá leche y 2 kg de pan a la lista del súper"));
-    expect(respuestas[0]).toBe("🛒 Agregué a *Súper*: leche, pan (2 kg). (2 en total)");
-
-    await bot.procesar(texto("listas"));
-    expect(respuestas[1]).toContain("• pan (2 kg)");
-
-    const { todasLasListas } = await import("../src/servicios/listas.js");
-    const [l] = await todasLasListas();
-    const leche = l.items.find((i) => i.texto === "leche")!;
-    interpretar.mockResolvedValueOnce({ ...base, intencion: "lista_quitar", lista_item_ids: [leche.id] });
-    await bot.procesar(texto("ya compré la leche"));
-    expect(respuestas[2]).toContain("saqué: leche");
-
-    interpretar.mockResolvedValueOnce({
-      ...base,
-      intencion: "crear_recordatorio",
-      recordatorios: [{ titulo: "Lista del súper", descripcion: null, fecha_hora: "2026-10-24T10:00:00-03:00", recurrencia: null, avisos_previos_min: [], lista: "súper" }],
-    });
-    await bot.procesar(texto("recordame la lista del súper el sábado a las 10"));
-    const [rec] = await recordatoriosActivos();
-    expect(rec.listaId).toBe(l.id);
-    const wa = enviadorFalso();
-    vi.setSystemTime(local("2026-10-24T10:00"));
-    for (const id of await ocurrenciasVencidas()) await procesarOcurrencia(id);
-    expect(wa.enviados[0].texto).toContain("• pan (2 kg)");
-    expect(wa.enviados[0].texto).not.toContain("leche");
   });
 
   it("notas: guarda cifrada y responde preguntas", async () => {
@@ -342,6 +324,154 @@ describe("bot", () => {
     expect(await recordatoriosActivos()).toHaveLength(0);
   });
 
+  const crear = (titulo: string, fecha: string, extra: Partial<Interpretacion["recordatorios"][number]> = {}) =>
+    interpretar.mockResolvedValueOnce({
+      ...base,
+      intencion: "crear_recordatorio",
+      recordatorios: [{ titulo, descripcion: null, fecha_hora: fecha, recurrencia: null, avisos_previos_min: [], es_evento: false, ...extra }],
+    });
+
+  it("a un turno sin aviso previo le ofrece uno", async () => {
+    crear("Turno con el doctor", "2026-10-30T09:00:00-03:00", { es_evento: true });
+    await bot.procesar(texto("tengo turno con el doctor el viernes 30 a las 9"));
+    expect(respuestas[0]).toContain("📌 *Turno con el doctor*\n🗓️ Viernes 30/10 · 9:00");
+    expect(respuestas[0]).toContain("¿Querés que te avise antes también?");
+
+    crear("Pagar la luz", "2026-10-30T09:00:00-03:00", { avisos_previos_min: [60] });
+    await bot.procesar(texto("recordame pagar la luz el viernes a las 9 con aviso 1 hora antes"));
+    expect(respuestas[1]).toContain("🔔 También te aviso 1 hora antes");
+    expect(respuestas[1]).not.toContain("¿Querés que te avise antes");
+  });
+
+  it("aviso con encuesta: posponer 15 min y después 'Hecho'", async () => {
+    const wa = enviadorFalso();
+    crear("Sacar la ropa", "2026-10-22T09:00:00-03:00");
+    await bot.procesar(texto("recordame a las 9 sacar la ropa"));
+    vi.setSystemTime(local("2026-10-22T09:00"));
+    for (const id of await ocurrenciasVencidas()) await procesarOcurrencia(id);
+    expect(wa.enviados[0].texto).toContain("⏰ *Sacar la ropa*");
+    expect(wa.enviados[0].texto).not.toContain("Respondé *listo*");
+    expect(wa.encuestas[0].opciones).toEqual(["✅ Hecho", "⏰ En 15 min", "⏰ En 1 h", "📅 Mañana a las 09:00"]);
+
+    await bot.procesar(voto(wa.encuestas[0].id, "⏰ En 15 min"));
+    expect(respuestas.at(-1)).toContain("hoy a las 9:15");
+    // Un segundo voto en la misma encuesta no hace nada.
+    await bot.procesar(voto(wa.encuestas[0].id, "✅ Hecho"));
+    expect(respuestas).toHaveLength(2);
+
+    vi.setSystemTime(local("2026-10-22T09:15"));
+    for (const id of await ocurrenciasVencidas()) await procesarOcurrencia(id);
+    expect(wa.encuestas).toHaveLength(2);
+    await bot.procesar(voto(wa.encuestas[1].id, "✅ Hecho"));
+    expect(respuestas.at(-1)).toContain("*Sacar la ropa*, hecho");
+    expect(await recordatoriosActivos()).toHaveLength(0);
+  });
+
+  it("la insistencia es una sola encuesta", async () => {
+    const wa = enviadorFalso();
+    crear("Tomar la pastilla", "2026-10-22T09:00:00-03:00");
+    await bot.procesar(texto("recordame a las 9 tomar la pastilla"));
+    vi.setSystemTime(local("2026-10-22T09:00"));
+    for (const id of await ocurrenciasVencidas()) await procesarOcurrencia(id);
+    vi.setSystemTime(local("2026-10-22T10:00"));
+    for (const id of await ocurrenciasVencidas()) await procesarOcurrencia(id);
+    expect(wa.enviados).toHaveLength(1);
+    expect(wa.encuestas).toHaveLength(2);
+    expect(wa.encuestas[1].nombre).toBe("🔁 ¿Pudiste con Tomar la pastilla?");
+    // Escribir "listo" sigue funcionando.
+    await bot.procesar(texto("listo"));
+    expect(respuestas.at(-1)).toContain("*Tomar la pastilla*, hecho");
+  });
+
+  it("'no voy' respondiendo al aviso: un turno único se cancela", async () => {
+    const wa = enviadorFalso();
+    crear("Turno dentista", "2026-10-22T09:00:00-03:00", { es_evento: true, avisos_previos_min: [60] });
+    await bot.procesar(texto("turno dentista hoy a las 9, avisame 1 hora antes"));
+    for (const id of await ocurrenciasVencidas()) await procesarOcurrencia(id);
+    expect(wa.enviados[0].texto).toContain("En 1 hora");
+    expect(wa.encuestas).toHaveLength(0); // El aviso previo no lleva encuesta.
+    interpretar.mockResolvedValueOnce({ ...base, intencion: "cancelar_aviso" });
+    await bot.procesar(respuestaA(wa.enviados[0].id, "no voy, se suspendió"));
+    expect(respuestas.at(-1)).toContain("*Turno dentista*");
+    expect(await recordatoriosActivos()).toHaveLength(0);
+  });
+
+  it("'hoy no voy' a un recurrente saltea esa vez", async () => {
+    const wa = enviadorFalso();
+    crear("Gimnasio", "2026-10-22T09:00:00-03:00", { recurrencia: "FREQ=WEEKLY;BYDAY=TH" });
+    await bot.procesar(texto("todos los jueves a las 9 gimnasio"));
+    vi.setSystemTime(local("2026-10-22T09:00"));
+    for (const id of await ocurrenciasVencidas()) await procesarOcurrencia(id);
+    interpretar.mockResolvedValueOnce({ ...base, intencion: "cancelar_aviso" });
+    await bot.procesar(respuestaA(wa.enviados[0].id, "hoy no voy"));
+    expect(respuestas.at(-1)).toContain("salteo este");
+    const [rec] = await recordatoriosActivos();
+    expect(DateTime.fromJSDate(rec.proximaInstancia!).setZone(Z).toFormat("yyyy-MM-dd HH:mm")).toBe("2026-10-29 09:00");
+    // Ya no insiste con el de hoy.
+    vi.setSystemTime(local("2026-10-22T10:00"));
+    expect(await ocurrenciasVencidas()).toHaveLength(0);
+  });
+
+  it("si hay varios, pregunta cuál con una encuesta", async () => {
+    crear("Llamar a Juan", "2026-10-23T10:00:00-03:00");
+    await bot.procesar(texto("recordame mañana a las 10 llamar a Juan"));
+    crear("Llamar a Juana", "2026-10-24T10:00:00-03:00");
+    await bot.procesar(texto("recordame el sábado a las 10 llamar a Juana"));
+    const [a, b] = await recordatoriosActivos();
+    interpretar.mockResolvedValueOnce({ ...base, intencion: "borrar", recordatorio_ids: [a.id, b.id] });
+    await bot.procesar(texto("borrá lo de llamar"));
+    expect(encuestas[0].nombre).toBe("Encontré varios. ¿Cuál querés borrar?");
+    expect(encuestas[0].opciones).toHaveLength(2);
+    await bot.procesar(voto(encuestas[0].id, encuestas[0].opciones[1]));
+    expect(respuestas.at(-1)).toContain(`*${b.titulo}*`);
+    const quedan = await recordatoriosActivos();
+    expect(quedan.map((r) => r.id)).toEqual([a.id]);
+  });
+
+  it("propuesta de una foto: 'Otra fecha' y después la fecha", async () => {
+    analizarFoto.mockResolvedValue({
+      tipo: "turno",
+      descripcion: "Turno médico",
+      util: true,
+      titulo: "Turno médico",
+      fecha_evento: "2026-10-30T09:00:00-03:00",
+      monto: null,
+      lugar: null,
+      propuesta_fecha_hora: "2026-10-30T09:00:00-03:00",
+      propuesta_avisos_previos_min: [60],
+      mensaje: "Es un turno médico el 30/10 a las 9. ¿Te lo agendo con aviso 1 hora antes?",
+      texto_visible: null,
+    });
+    await bot.procesar({ key: { id: "FOTO9", remoteJid: YO }, message: { imageMessage: { mimetype: "image/jpeg", fileLength: 1000 } } });
+    await bot.procesar(voto(encuestas[0].id, "✏️ Otra fecha"));
+    expect(respuestas.at(-1)).toContain("¿para cuándo?");
+    crear("Turno médico", "2026-10-31T11:00:00-03:00", { es_evento: true });
+    await bot.procesar(texto("el 31 a las 11"));
+    const [rec] = await recordatoriosActivos();
+    expect(rec.adjuntoId).not.toBeNull();
+  });
+
+  it("con las encuestas apagadas, contesta con texto", async () => {
+    await actualizarConfig({ usarEncuestas: false });
+    const wa = enviadorFalso();
+    crear("Sacar la basura", "2026-10-22T09:00:00-03:00");
+    await bot.procesar(texto("a las 9 sacar la basura"));
+    vi.setSystemTime(local("2026-10-22T09:00"));
+    for (const id of await ocurrenciasVencidas()) await procesarOcurrencia(id);
+    expect(wa.encuestas).toHaveLength(0);
+    expect(wa.enviados[0].texto).toContain("Respondé *listo*");
+  });
+
+  it("'agregá a la lista' se guarda como nota", async () => {
+    interpretar.mockResolvedValueOnce({
+      ...base,
+      intencion: "nota_guardar",
+      nota: { titulo: "Compras", contenido: "leche, pan", categoria: "compras" },
+    });
+    await bot.procesar(texto("agregá leche y pan a la lista"));
+    expect(respuestas[0]).toContain("Anotado: *Compras*");
+  });
+
   describe("grupo de la familia", () => {
     const G = "120363000000000001@g.us";
     const origen = { grupo: { jid: G, nombre: "Familia" }, autor: "Ana" };
@@ -368,7 +498,7 @@ describe("bot", () => {
       interpretar.mockResolvedValueOnce({
         ...base,
         intencion: "crear_recordatorio",
-        recordatorios: [{ titulo: "Cumple de la abuela", descripcion: null, fecha_hora: "2026-10-22T09:00:00-03:00", recurrencia: null, avisos_previos_min: [], lista: null }],
+        recordatorios: [{ titulo: "Cumple de la abuela", descripcion: null, fecha_hora: "2026-10-22T09:00:00-03:00", recurrencia: null, avisos_previos_min: [], es_evento: false }],
       });
       await bot.procesar(enGrupo("recordanos a las 9 el cumple de la abuela"), origen);
       expect(respuestas[0]).toContain("*Cumple de la abuela*");
@@ -377,7 +507,7 @@ describe("bot", () => {
       interpretar.mockResolvedValueOnce({
         ...base,
         intencion: "crear_recordatorio",
-        recordatorios: [{ titulo: "Algo mío", descripcion: null, fecha_hora: "2026-10-22T10:00:00-03:00", recurrencia: null, avisos_previos_min: [], lista: null }],
+        recordatorios: [{ titulo: "Algo mío", descripcion: null, fecha_hora: "2026-10-22T10:00:00-03:00", recurrencia: null, avisos_previos_min: [], es_evento: false }],
       });
       await bot.procesar(texto("recordame a las 10 algo mío"));
       expect(destinos[1]).toBeNull();
@@ -393,7 +523,7 @@ describe("bot", () => {
 
       // "listo" en el grupo confirma el aviso que está insistiendo.
       await bot.procesar(enGrupo("listo"), origen);
-      expect(respuestas.at(-1)).toContain("Marqué *Cumple de la abuela* como hecho");
+      expect(respuestas.at(-1)).toContain("*Cumple de la abuela*, hecho");
     });
 
     it("'listo' en el grupo sin avisos pendientes es charla", async () => {
@@ -423,18 +553,6 @@ describe("bot", () => {
       interpretar.mockResolvedValue({ ...base, intencion: "ignorar" });
       await bot.procesar({ key: { id: "GA1", remoteJid: G }, pushName: "Ana", message: { audioMessage: { seconds: 4 } } }, origen);
       expect(respuestas).toHaveLength(0);
-    });
-
-    it("listas del grupo separadas de las personales", async () => {
-      interpretar.mockResolvedValueOnce({ ...base, intencion: "lista_agregar", lista: "súper", lista_items: [{ texto: "fideos", cantidad: null }] });
-      await bot.procesar(enGrupo("agregá fideos a la lista del súper"), origen);
-      interpretar.mockResolvedValueOnce({ ...base, intencion: "lista_agregar", lista: "súper", lista_items: [{ texto: "café", cantidad: null }] });
-      await bot.procesar(texto("agregá café a la lista del súper"));
-      const { todasLasListas } = await import("../src/servicios/listas.js");
-      const [delGrupo] = await todasLasListas(G);
-      const [mia] = await todasLasListas(null);
-      expect(delGrupo.items.map((i) => i.texto)).toEqual(["fideos"]);
-      expect(mia.items.map((i) => i.texto)).toEqual(["café"]);
     });
   });
 });

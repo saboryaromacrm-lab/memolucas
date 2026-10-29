@@ -32,7 +32,6 @@ export type DatosRecordatorio = {
   insistirPrevios?: boolean | null;
   origen?: "whatsapp" | "panel" | "foto" | "enlace";
   adjuntoId?: number | null;
-  listaId?: number | null;
   /** Grupo donde avisa (null o sin dato = privado). */
   chat?: string | null;
 };
@@ -163,7 +162,6 @@ export async function crearRecordatorio(d: DatosRecordatorio): Promise<Recordato
       insistirPrevios: d.insistirPrevios ?? null,
       origen: d.origen ?? "panel",
       adjuntoId: d.adjuntoId ?? null,
-      listaId: d.listaId ?? null,
       chat: d.chat ?? null,
     })
     .returning();
@@ -215,7 +213,6 @@ export async function actualizarRecordatorio(id: number, cambios: Partial<DatosR
       insistenciaTope: cambios.insistenciaTope !== undefined ? cambios.insistenciaTope : actual.insistenciaTope,
       insistirPrevios: cambios.insistirPrevios !== undefined ? cambios.insistirPrevios : actual.insistirPrevios,
       adjuntoId: cambios.adjuntoId !== undefined ? cambios.adjuntoId : actual.adjuntoId,
-      listaId: cambios.listaId !== undefined ? cambios.listaId : actual.listaId,
       estado,
       actualizadoEn: sql`now()`,
     })
@@ -270,7 +267,6 @@ export async function duplicarRecordatorio(id: number): Promise<Recordatorio> {
     insistirPrevios: r.insistirPrevios,
     origen: "panel",
     adjuntoId: r.adjuntoId,
-    listaId: r.listaId,
     chat: r.chat,
   });
 }
@@ -346,6 +342,15 @@ export async function posponerOcurrencia(ocId: number, hasta: Date): Promise<Ocu
   await agendador(oc.id, hasta);
   bus.avisar("recordatorios");
   return oc;
+}
+
+/** "No voy" a un aviso que ya llegó: se cierran los avisos de esa vez (deja de insistir). */
+export async function cancelarInstancia(oc: Pick<Ocurrencia, "recordatorioId" | "instancia">) {
+  await db
+    .update(ocurrencia)
+    .set({ estado: "cancelada", proximoEnvioEn: null })
+    .where(and(eq(ocurrencia.recordatorioId, oc.recordatorioId), eq(ocurrencia.instancia, oc.instancia), inArray(ocurrencia.estado, ["pendiente", "enviada"])));
+  bus.avisar("recordatorios");
 }
 
 /** El aviso que espera confirmación más reciente (para "listo" o "posponé 15 min"). */

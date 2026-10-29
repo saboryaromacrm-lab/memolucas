@@ -1,7 +1,9 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import makeWASocket, {
   Browsers,
   DisconnectReason,
+  decryptPollVote,
   downloadMediaMessage,
   fetchLatestBaileysVersion,
   isJidBroadcast,
@@ -292,6 +294,48 @@ class ConexionWhatsApp implements Enviador {
     const r = await sock.sendMessage(destino ?? (await this.destino()), { image: imagen, mimetype: mime, caption: epigrafe });
     this.recordar(r?.key.id, r?.message);
     return r?.key.id ?? null;
+  }
+
+  async enviarEncuesta(nombre: string, opciones: string[], destino?: string | null): Promise<{ id: string | null; secreto: string }> {
+    const sock = this.sock;
+    if (!sock || !this.conectado()) throw new Error("WhatsApp no está conectado");
+    // La clave se guarda para poder leer los votos (llegan cifrados).
+    const secreto = crypto.randomBytes(32);
+    const r = await sock.sendMessage(destino ?? (await this.destino()), { poll: { name: nombre, values: opciones, selectableCount: 1, messageSecret: secreto } });
+    this.recordar(r?.key.id, r?.message);
+    return { id: r?.key.id ?? null, secreto: secreto.toString("base64") };
+  }
+
+  async responderEncuesta(nombre: string, opciones: string[], destino?: string | null): Promise<{ id: string | null; secreto: string }> {
+    const sock = this.sock;
+    if (!sock || !this.conectado()) return { id: null, secreto: "" };
+    const jid = destino ?? (await this.destino());
+    await sock.sendPresenceUpdate("composing", jid).catch(() => {});
+    await espera(600);
+    await sock.sendPresenceUpdate("paused", jid).catch(() => {});
+    return this.enviarEncuesta(nombre, opciones, jid);
+  }
+
+  /** Lee un voto. Según el chat, WhatsApp firma con el número o con el LID: se prueban las combinaciones. */
+  descifrarVoto(msg: WAMessage, secreto: string): Uint8Array[] | null {
+    const pu = msg.message?.pollUpdateMessage;
+    const pollId = pu?.pollCreationMessageKey?.id;
+    if (!pu?.vote || !pollId || !secreto) return null;
+    const usuarios = (jids: (string | null | undefined)[]) =>
+      [...new Set(jids.filter((j): j is string => !!j && !!(isPnUser(j) || isLidUser(j))).map((j) => jidNormalizedUser(j)))];
+    const creadores = usuarios([this.sock?.user?.id, this.sock?.user?.lid]);
+    const k = msg.key;
+    const votantes = usuarios([k.participant, k.participantAlt, k.remoteJid, k.remoteJidAlt]);
+    const clave = Buffer.from(secreto, "base64");
+    for (const pollCreatorJid of creadores)
+      for (const voterJid of votantes) {
+        try {
+          return decryptPollVote(pu.vote, { pollCreatorJid, pollMsgId: pollId, pollEncKey: clave, voterJid }).selectedOptions ?? [];
+        } catch {
+          // Probar la siguiente combinación.
+        }
+      }
+    return null;
   }
 
   /** Respuesta del bot: "escribiendo…" y una demora corta antes de enviar (más natural). */

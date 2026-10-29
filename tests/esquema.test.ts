@@ -40,10 +40,10 @@ describe("esquemas para Claude", () => {
   }
 
   it("los vacíos de la IA se convierten en null", () => {
-    const vacio = { titulo: "", descripcion: "", fecha_hora: "", recurrencia: "", avisos_previos_min: [], lista: "" };
+    const vacio = { titulo: "", descripcion: "", fecha_hora: "", recurrencia: "", avisos_previos_min: [], es_evento: false };
     const i = normalizarInterpretacion({
       intencion: "crear_recordatorio",
-      recordatorios: [{ ...vacio, titulo: "Turno con el doctor", fecha_hora: "2026-10-30T09:00:00-03:00" }],
+      recordatorios: [{ ...vacio, titulo: "Turno con el doctor", fecha_hora: "2026-10-30T09:00:00-03:00", es_evento: true }],
       hay_cambios: false,
       cambios: { ...vacio, quitar_recurrencia: false },
       recordatorio_ids: [],
@@ -52,9 +52,6 @@ describe("esquemas para Claude", () => {
       listar_hasta: "",
       posponer_minutos: 0,
       posponer_hasta: "",
-      lista: "",
-      lista_items: [],
-      lista_item_ids: [],
       hay_nota: false,
       nota: { titulo: "", contenido: "", categoria: "" },
       nota_ids: [],
@@ -69,7 +66,7 @@ describe("esquemas para Claude", () => {
       fecha_hora: "2026-10-30T09:00:00-03:00",
       recurrencia: null,
       avisos_previos_min: null,
-      lista: null,
+      es_evento: true,
     });
     expect(i.cambios).toBeNull();
     expect(i.nota).toBeNull();

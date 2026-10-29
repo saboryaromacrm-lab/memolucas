@@ -107,3 +107,30 @@ describe("grupos", async () => {
     expect(esMiembro([{ id: "5491187654321@s.whatsapp.net" }, { id: "111@lid" }], yo, "999@lid")).toBe(false);
   });
 });
+
+describe("votos de encuestas", async () => {
+  const { aesEncryptGCM, hmacSign, proto } = await import("baileys");
+  const { whatsapp } = await import("../src/whatsapp/conexion.js");
+  const { hashOpcion, opcionElegida } = await import("../src/servicios/encuestas.js");
+
+  /** Cifra un voto igual que WhatsApp (el bot lo creó con su LID y vota el dueño). */
+  function cifrar(secreto: Buffer, pollMsgId: string, creador: string, votante: string, opcion: string) {
+    const bin = (s: string) => Buffer.from(s);
+    const firma = Buffer.concat([bin(pollMsgId), bin(creador), bin(votante), bin("Poll Vote"), new Uint8Array([1])]);
+    const clave = hmacSign(firma, hmacSign(secreto, new Uint8Array(32), "sha256"), "sha256");
+    const iv = Buffer.alloc(12, 7);
+    const datos = proto.Message.PollVoteMessage.encode({ selectedOptions: [hashOpcion(opcion)] }).finish();
+    return { encPayload: aesEncryptGCM(datos, clave, iv, bin(`${pollMsgId}\u0000${votante}`)), encIv: iv };
+  }
+
+  it("descifra el voto probando número y LID", () => {
+    const secreto = Buffer.alloc(32, 3);
+    (whatsapp as unknown as { sock: unknown }).sock = { user: { id: "5491100000000:12@s.whatsapp.net", lid: "777000:12@lid" } };
+    const vote = cifrar(secreto, "POLL1", "777000@lid", "888000@lid", "⏰ En 1 h");
+    const msg = { key: { id: "V1", remoteJid: "888000@lid", remoteJidAlt: "5491112345678@s.whatsapp.net" }, message: { pollUpdateMessage: { pollCreationMessageKey: { id: "POLL1" }, vote } } };
+    const votadas = whatsapp.descifrarVoto(msg as never, secreto.toString("base64"));
+    expect(opcionElegida(["✅ Hecho", "⏰ En 15 min", "⏰ En 1 h"], votadas!)).toBe(2);
+    expect(whatsapp.descifrarVoto(msg as never, Buffer.alloc(32, 9).toString("base64"))).toBeNull();
+    (whatsapp as unknown as { sock: unknown }).sock = null;
+  });
+});

@@ -6,7 +6,7 @@ import { db } from "../../db/index.js";
 import { grupo, ocurrencia, recordatorio, type Configuracion, type Ocurrencia, type Recordatorio } from "../../db/schema.js";
 import { aLocal } from "../../lib/fechas.js";
 import { describirRrule, normalizarRrule } from "../../lib/recurrencia.js";
-import { describirCuando } from "../../bot/procesador.js";
+import { describirCuando } from "../../bot/formato.js";
 import { borrarAdjunto, guardarImagen, MIMES_IMAGEN, obtenerAdjunto } from "../../servicios/adjuntos.js";
 import { obtenerConfig } from "../../servicios/configuracion.js";
 import { procesarOcurrencia, textoAviso } from "../../servicios/disparador.js";
@@ -47,7 +47,6 @@ const Datos = z.object({
   insistenciaTope: z.number().int().min(0).max(50).nullish(),
   insistirPrevios: z.boolean().nullish(),
   adjuntoId: z.number().int().positive().nullish(),
-  listaId: z.number().int().positive().nullish(),
   chat: z.string().regex(/@g\.us$/).nullish(),
 });
 
@@ -257,7 +256,6 @@ export const rutasRecordatorios: FastifyPluginAsync = async (app) => {
       estado: "activo",
       origen: "panel",
       adjuntoId: d.adjuntoId ?? null,
-      listaId: d.listaId ?? null,
       chat: d.chat ?? null,
       creadoEn: new Date(),
       actualizadoEn: new Date(),

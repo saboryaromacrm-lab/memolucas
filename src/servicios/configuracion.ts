@@ -5,11 +5,11 @@ import { bus } from "../lib/eventos.js";
 import { fijarZona } from "../lib/fechas.js";
 
 export const PLANTILLAS_DEFECTO: Plantillas = {
-  confirmacion: "Listo ✅ Te recuerdo *{titulo}* {cuando}.",
-  aviso: "⏰ *{titulo}*{descripcion}{ayuda}",
-  previo: "🔔 En {falta}: *{titulo}* ({cuando}).{descripcion}{ayuda}",
-  insistencia: "🔁 Te sigo recordando: *{titulo}*. Respondé *listo* cuando lo hagas. ({intento}/{tope})",
-  atrasado: "⏰ Atrasado: *{titulo}* (era {cuando}).{descripcion}{ayuda}",
+  confirmacion: "{intro}\n📌 *{titulo}*\n🗓️ {cuando}{previos}",
+  aviso: "⏰ *{titulo}*\n🕒 {hora}{descripcion}{ayuda}",
+  previo: "🔔 *{titulo}*\nEn {falta} · {cuando}{descripcion}{ayuda}",
+  insistencia: "🔁 ¿Pudiste con *{titulo}*?{ayuda}",
+  atrasado: "⏰ *{titulo}*\n⚠️ Se me pasó: era {cuando}.{descripcion}{ayuda}",
   resumen: "☀️ Buen día, {nombre}. Esto tenés para hoy:\n{lista}",
 };
 

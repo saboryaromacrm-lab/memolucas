@@ -53,6 +53,7 @@ const EDITABLES = [
   "minutosAtrasado",
   "audioModelo",
   "audioMaxSegundos",
+  "usarEncuestas",
 ] as const;
 type Editable = Pick<Cfg, (typeof EDITABLES)[number]>;
 
@@ -196,37 +197,47 @@ export function Configuracion() {
           {seccion === "audios" && <SeccionAudios datos={datos} form={form} set={set} recargar={recargar} />}
 
           {seccion === "mensajes" && (
-            <Tarjeta
-              titulo="Mensajes del bot"
-              texto="Variables: {titulo} {descripcion} {cuando} {hora} {fecha} {falta} {intento} {tope} {nombre} {ayuda} {lista}. Usá *negrita* y _cursiva_ como en WhatsApp."
-            >
-              {(Object.keys(datos.plantillasDefecto) as (keyof Plantillas)[]).map((k) => (
-                <Campo
-                  key={k}
-                  etiqueta={
-                    { confirmacion: "Confirmación al crear", aviso: "Aviso", previo: "Aviso previo", insistencia: "Insistencia", atrasado: "Aviso atrasado", resumen: "Resumen diario" }[k]
-                  }
-                >
-                  <textarea
-                    className="campo min-h-16 font-mono text-xs"
-                    value={form.plantillas[k] ?? datos.plantillasDefecto[k]}
-                    onChange={(e) => set("plantillas", { ...form.plantillas, [k]: e.target.value })}
-                  />
-                  {form.plantillas[k] && form.plantillas[k] !== datos.plantillasDefecto[k] && (
-                    <button
-                      className="mt-1 flex items-center gap-1 text-xs text-slate-500 hover:text-slate-800"
-                      onClick={() => {
-                        const p = { ...form.plantillas };
-                        delete p[k];
-                        set("plantillas", p);
-                      }}
-                    >
-                      <RotateCcw className="size-3" /> Restaurar original
-                    </button>
-                  )}
-                </Campo>
-              ))}
-            </Tarjeta>
+            <>
+              <Tarjeta titulo="Opciones para tocar" texto="Encuestas de WhatsApp en los avisos y cuando el bot te propone algo. Igual podés responder escribiendo.">
+                <Interruptor
+                  activo={form.usarEncuestas}
+                  onChange={(v) => set("usarEncuestas", v)}
+                  etiqueta="Mandar opciones para tocar"
+                  ayuda="✅ Hecho · ⏰ En 15 min · ⏰ En 1 h · 📅 Mañana"
+                />
+              </Tarjeta>
+              <Tarjeta
+                titulo="Mensajes del bot"
+                texto="Variables: {titulo} {descripcion} {cuando} {hora} {fecha} {falta} {intento} {tope} {nombre} {ayuda} {lista}; en la confirmación también {intro} y {previos}. Usá *negrita* y _cursiva_ como en WhatsApp."
+              >
+                {(Object.keys(datos.plantillasDefecto) as (keyof Plantillas)[]).map((k) => (
+                  <Campo
+                    key={k}
+                    etiqueta={
+                      { confirmacion: "Confirmación al crear", aviso: "Aviso", previo: "Aviso previo", insistencia: "Insistencia", atrasado: "Aviso atrasado", resumen: "Resumen diario" }[k]
+                    }
+                  >
+                    <textarea
+                      className="campo min-h-16 font-mono text-xs"
+                      value={form.plantillas[k] ?? datos.plantillasDefecto[k]}
+                      onChange={(e) => set("plantillas", { ...form.plantillas, [k]: e.target.value })}
+                    />
+                    {form.plantillas[k] && form.plantillas[k] !== datos.plantillasDefecto[k] && (
+                      <button
+                        className="mt-1 flex items-center gap-1 text-xs text-slate-500 hover:text-slate-800"
+                        onClick={() => {
+                          const p = { ...form.plantillas };
+                          delete p[k];
+                          set("plantillas", p);
+                        }}
+                      >
+                        <RotateCcw className="size-3" /> Restaurar original
+                      </button>
+                    )}
+                  </Campo>
+                ))}
+              </Tarjeta>
+            </>
           )}
 
           {seccion === "seguridad" && (

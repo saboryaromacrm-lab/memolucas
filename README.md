@@ -15,8 +15,12 @@ Le escribís al bot como a una persona (*"recordame mañana a las 10 pagar la lu
   - con *"recordame el viernes ver esto"* lo crea directo;
   - el aviso trae el link y la imagen de portada.
   Si el sitio no deja leer el link (pasa con Instagram), te pide una captura de pantalla y le agrega el link al recordatorio.
-- **Confirmar**: *listo*, *hecho*, ✅ o reaccionar con 👍/✅ al aviso. Si no confirmás, insiste cada 60 min (configurable) hasta un tope y lo marca "no confirmado".
+- **Opciones para tocar** (encuestas de WhatsApp): el aviso trae *✅ Hecho · ⏰ En 15 min · ⏰ En 1 h · 📅 Mañana*; las propuestas de fotos y links, *✅ Dale · ✏️ Otra fecha · ❌ No*; y si hay varios recordatorios parecidos, te deja elegir cuál. Escribir sigue funcionando igual. Se apaga en Configuración → Mensajes.
+- **Confirmar**: *listo*, *hecho*, ✅, reaccionar con 👍/✅ al aviso o tocar *✅ Hecho*. Si no confirmás, insiste cada 60 min (configurable) hasta un tope y lo marca "no confirmado".
 - **Posponer**: *"posponé 15 min"*, *"mañana"*, *"en 2 horas"*.
+- **Responder al aviso**: *"no voy"* o *"se suspendió"* lo cancela (si se repite, saltea solo esa vez); *"lo pasaron al lunes"* lo cambia.
+- **Pregunta lo que falta**: a un turno sin hora le pregunta la hora, y a un evento sin aviso previo le ofrece uno.
+- **Notas cifradas**: *"anotá que la clave del wifi es…"*, *"anotá comprar leche y pan"*, *"¿cuál era la clave del wifi?"*.
 - **Editar, borrar, pausar y reanudar**: *"cambiá lo del dentista a las 11"*, *"borrá lo de la basura"*.
 - **Comandos rápidos sin IA**: `hoy`, `mañana`, `semana`, `lista`, `listo`, `ayuda`, `silencio 2h` / `silencio off`.
 - Solo responde a **tu número**. Todo lo demás (otros números, grupos) se ignora y queda en el log.

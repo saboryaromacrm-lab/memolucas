@@ -4,11 +4,9 @@ import { and, desc, eq, gt } from "drizzle-orm";
 import { DateTime } from "luxon";
 import type Anthropic from "@anthropic-ai/sdk";
 import { db } from "../db/index.js";
-import { adjunto, borradorPendiente, mensaje, ocurrencia, type Ocurrencia, type Recordatorio } from "../db/schema.js";
+import { adjunto, borradorPendiente, mensaje, ocurrencia, type AccionEncuesta, type Ocurrencia, type Recordatorio } from "../db/schema.js";
 import { ahora, aLocal, formatearCuando } from "../lib/fechas.js";
 import { registrar } from "../lib/log.js";
-import { describirRrule } from "../lib/recurrencia.js";
-import { describirMinutos } from "../lib/textos.js";
 import { borrarAdjunto, guardarImagen, imagenParaIa, MIMES_IMAGEN } from "../servicios/adjuntos.js";
 import { actualizarConfig, obtenerConfig, plantillasDe, renderizar } from "../servicios/configuracion.js";
 import { listarRango } from "./rangos.js";
@@ -17,10 +15,12 @@ import { mensajePorWaId, registrarMensaje, ultimosMensajes } from "../servicios/
 import {
   actualizarRecordatorio,
   borrarRecordatorio,
+  cancelarInstancia,
   confirmarOcurrencia,
   crearRecordatorio,
   ErrorUsuario,
   filtroChat,
+  marcarHecho,
   obtenerRecordatorio,
   pausarRecordatorio,
   pendientesSinConfirmar,
@@ -33,28 +33,24 @@ import {
 } from "../servicios/recordatorios.js";
 import { EMOJIS_CONFIRMACION, TEXTO_AYUDA, detectarComando, esAfirmativo, esNegativo } from "./comandos.js";
 import { extraerUrls, leerEnlace, textoSinUrls, type VistaPreviaWa } from "../servicios/enlaces.js";
-import { analizarEnlace, analizarFoto, interpretar, responderConNotas, type Interpretacion } from "./ia.js";
+import { analizarEnlace, analizarFoto, ErrorIA, interpretar, responderConNotas, type Interpretacion } from "./ia.js";
 import { ErrorAudio, transcribir } from "../servicios/audio.js";
-import {
-  agregarItems,
-  borrarLista,
-  buscarLista,
-  obtenerLista,
-  obtenerOCrearLista,
-  quitarItems,
-  textoLista,
-  todasLasListas,
-  vaciarLista,
-} from "../servicios/listas.js";
 import { actualizarNota, borrarNota, crearNota, obtenerNota, relacionadas, todasLasNotas } from "../servicios/notas.js";
 import { obtenerAdjunto } from "../servicios/adjuntos.js";
 import { normalizar } from "../lib/textos.js";
+import { encuestaPorWaId, marcarRespondida, opcionElegida, opcionesAviso, OPCIONES_PROPUESTA, registrarEncuesta } from "../servicios/encuestas.js";
+import { cuandoBonito, textoPrevios } from "./formato.js";
+import { frases, sinFormato } from "./frases.js";
 
 /** Lo que el procesador necesita de WhatsApp. */
 export interface CanalBot {
   /** destino: grupo (null = privado del dueño). citar: mensaje al que responde (en grupos). */
   responder(texto: string, destino?: string | null, citar?: WAMessage): Promise<string | null>;
   responderImagen(ruta: string, mime: string, epigrafe: string, destino?: string | null): Promise<string | null>;
+  /** Encuesta para tocar una opción. Devuelve su id y la clave para leer los votos. */
+  responderEncuesta(nombre: string, opciones: string[], destino?: string | null): Promise<{ id: string | null; secreto: string }>;
+  /** Opciones votadas (como hash), o null si no se pudo descifrar. */
+  descifrarVoto(msg: WAMessage, secreto: string): Uint8Array[] | null;
   descargarMedia(msg: WAMessage): Promise<Buffer>;
 }
 
@@ -68,7 +64,7 @@ const chat = (): string | null => contexto.getStore()?.grupo?.jid ?? null;
 const enGrupo = () => !!contexto.getStore()?.grupo;
 
 /** En grupos, fotos y links solo se procesan si se lo piden al bot. */
-const PIDE_BOT = /\b(recorda|recordame|recordanos|recuerden|avisa|avisame|avisanos|anota|nota|lista|agrega|guarda|guardalo|guardala|memo|memolucas|bot)\b/;
+const PIDE_BOT = /\b(recorda|recordame|recordanos|recuerden|avisa|avisame|avisanos|anota|nota|agrega|guarda|guardalo|guardala|memo|memolucas|bot)\b/;
 const MINUTOS_BORRADOR_GRUPO = 30;
 
 /** Registra un mensaje con el chat y el autor del contexto actual. */
@@ -78,7 +74,9 @@ const registrarAqui = (m: Parameters<typeof registrarMensaje>[0]) =>
 /** "guardala como nota", "anotá esto": la foto va a notas y no a recordatorios. */
 const PIDE_NOTA = /\b(nota|anota|anotala|anotalo)\b/;
 
-const ERROR_IA = "Uy, no pude procesar eso. ¿Me lo repetís?";
+/** Si falta más que esto, al confirmar un evento se ofrece un aviso previo. */
+const HORAS_OFRECER_PREVIO = 3;
+const MAX_OPCIONES_ENCUESTA = 12;
 const HORAS_BORRADOR = 24;
 
 type DatosBorrador = {
@@ -105,32 +103,36 @@ function vistaPrevia(msg: WAMessage): VistaPreviaWa | null {
   return { titulo: e.title ?? null, descripcion: e.description ?? null, miniatura: e.jpegThumbnail?.length ? Buffer.from(e.jpegThumbnail) : null };
 }
 
-async function guardarBorrador(datos: DatosBorrador) {
+async function guardarBorrador(datos: DatosBorrador): Promise<number> {
   // Una sola propuesta abierta por chat. En grupos dura poco, para no tomar un "dale" de otra charla.
   await db.delete(borradorPendiente).where(filtroChat(borradorPendiente.chat, chat()));
   const ms = enGrupo() ? MINUTOS_BORRADOR_GRUPO * 60_000 : HORAS_BORRADOR * 3_600_000;
-  await db.insert(borradorPendiente).values({ tipo: "foto", datos, chat: chat(), expiraEn: new Date(Date.now() + ms) });
+  const [b] = await db.insert(borradorPendiente).values({ tipo: "foto", datos, chat: chat(), expiraEn: new Date(Date.now() + ms) }).returning();
+  return b.id;
 }
 
 // ───────────── Helpers de texto ─────────────
 
-export function describirCuando(r: Pick<Recordatorio, "rrule" | "fechaHora" | "proximaInstancia" | "avisosPreviosMin">): string {
-  let texto = r.rrule ? describirRrule(r.rrule, r.fechaHora) : formatearCuando(r.proximaInstancia ?? r.fechaHora);
-  const previos = r.avisosPreviosMin.filter((m) => m > 0).sort((a, b) => a - b);
-  if (previos.length) texto += ` (con aviso ${previos.map((m) => `${describirMinutos(m)} antes`).join(" y ")})`;
-  return texto;
-}
-
-async function textoConfirmacion(r: Recordatorio): Promise<string> {
+/** "Agendado 👌 / 📌 *Título* / 🗓️ Viernes 30/10 · 9:00 / 🔔 También te aviso…". */
+async function textoConfirmacion(r: Recordatorio, conIntro = true): Promise<string> {
   const cfg = await obtenerConfig();
-  return renderizar(plantillasDe(cfg).confirmacion, {
+  const texto = renderizar(plantillasDe(cfg).confirmacion, {
+    intro: conIntro ? frases.intro() : "",
     titulo: r.titulo,
-    cuando: describirCuando(r),
+    cuando: cuandoBonito(r),
+    previos: textoPrevios(r),
     hora: aLocal(r.proximaInstancia ?? r.fechaHora).toFormat("H:mm"),
     fecha: aLocal(r.proximaInstancia ?? r.fechaHora).toFormat("dd/MM"),
     descripcion: r.descripcion ?? "",
     nombre: cfg.nombreUsuario,
   });
+  return texto.trim();
+}
+
+/** A un turno o evento sin aviso previo, y con tiempo, se le ofrece uno. */
+function convieneOfrecerPrevio(r: Recordatorio, esEvento: boolean): boolean {
+  if (!esEvento || r.rrule || r.avisosPreviosMin.some((m) => m > 0)) return false;
+  return (r.proximaInstancia ?? r.fechaHora).getTime() - Date.now() > HORAS_OFRECER_PREVIO * 3_600_000;
 }
 
 function fechaDe(iso: string | null | undefined): Date | null {
@@ -151,11 +153,11 @@ function idCitado(msg: WAMessage): string | null {
 
 // ───────────── Borradores (propuestas de fotos) ─────────────
 
-async function borradorActivo() {
+async function borradorActivo(id?: number) {
   const [b] = await db
     .select()
     .from(borradorPendiente)
-    .where(and(gt(borradorPendiente.expiraEn, new Date()), filtroChat(borradorPendiente.chat, chat())))
+    .where(and(gt(borradorPendiente.expiraEn, new Date()), filtroChat(borradorPendiente.chat, chat()), id ? eq(borradorPendiente.id, id) : undefined))
     .orderBy(desc(borradorPendiente.id))
     .limit(1);
   return b ? { id: b.id, datos: b.datos as unknown as DatosBorrador } : null;
@@ -164,6 +166,8 @@ async function borradorActivo() {
 async function cerrarBorrador(id: number) {
   await db.delete(borradorPendiente).where(eq(borradorPendiente.id, id));
 }
+
+type Ctx = { ocCitada: number | null; borrador: Awaited<ReturnType<typeof borradorActivo>> };
 
 // ───────────── Procesador ─────────────
 
@@ -182,6 +186,30 @@ export class Procesador {
     });
   }
 
+  /** Manda una encuesta (si están activadas). Devuelve false si no se pudo, para contestar con texto. */
+  private async encuesta(nombre: string, opciones: string[], accion: AccionEncuesta, extra: { recordatorioId?: number | null } = {}): Promise<boolean> {
+    const cfg = await obtenerConfig();
+    if (!cfg.usarEncuestas || opciones.length < 2 || opciones.length > MAX_OPCIONES_ENCUESTA) return false;
+    try {
+      const r = await this.canal.responderEncuesta(sinFormato(nombre), opciones, chat());
+      if (!r.id) return false;
+      await registrarEncuesta({ waMessageId: r.id, chat: chat(), secreto: r.secreto, opciones, accion });
+      await registrarAqui({
+        direccion: "saliente",
+        tipo: "encuesta",
+        texto: `📊 ${sinFormato(nombre)}\n${opciones.map((o) => `• ${o}`).join("\n")}`,
+        waMessageId: r.id,
+        recordatorioId: extra.recordatorioId ?? null,
+        ocurrenciaId: accion.tipo === "aviso" ? accion.ocurrenciaId : null,
+        intencionDetectada: "encuesta",
+      });
+      return true;
+    } catch (err) {
+      await registrar("aviso", "bot", "No se pudo mandar la encuesta", err);
+      return false;
+    }
+  }
+
   async procesar(msg: WAMessage, origen: OrigenMensaje = { grupo: null, autor: null }): Promise<void> {
     return contexto.run({ ...origen, msg }, () => this.procesarAqui(msg));
   }
@@ -190,6 +218,7 @@ export class Procesador {
     const m = msg.message;
     if (!m) return;
     if (m.reactionMessage) return this.reaccion(msg);
+    if (m.pollUpdateMessage) return this.voto(msg);
     if (m.imageMessage) return this.foto(msg);
     if (m.audioMessage) return this.audio(msg);
     const texto = textoMensaje(msg);
@@ -244,7 +273,50 @@ export class Procesador {
     const oc = await confirmarOcurrencia(original.ocurrenciaId);
     if (!oc) return;
     const rec = await obtenerRecordatorio(oc.recordatorioId);
-    await this.decir(`Listo ✅ Marqué *${rec?.titulo ?? "el recordatorio"}* como hecho.`, { recordatorioId: oc.recordatorioId, intencion: "confirmar" });
+    await this.decir(frases.hecho(rec?.titulo ?? "el recordatorio"), { recordatorioId: oc.recordatorioId, intencion: "confirmar" });
+  }
+
+  /** Voto en una encuesta del bot: se toma el primero y se responde corto. */
+  private async voto(msg: WAMessage) {
+    const pu = msg.message!.pollUpdateMessage!;
+    const id = pu.pollCreationMessageKey?.id;
+    if (!id || !pu.vote) return;
+    const enc = await encuestaPorWaId(id);
+    if (!enc || (enc.chat ?? null) !== chat()) return;
+    const votadas = this.canal.descifrarVoto(msg, enc.secreto);
+    if (!votadas) return void (await registrar("aviso", "bot", "No se pudo leer un voto de encuesta"));
+    const elegida = opcionElegida(enc.opciones, votadas);
+    if (elegida < 0) return; // Sacó el voto.
+    if (!(await marcarRespondida(enc.id))) return; // Ya se había votado.
+    await registrarAqui({ direccion: "entrante", tipo: "voto", texto: enc.opciones[elegida], waMessageId: msg.key.id, intencionDetectada: "voto" });
+    const a = enc.accion;
+    switch (a.tipo) {
+      case "aviso": {
+        if (elegida === 0) return this.confirmar(a.ocurrenciaId);
+        const cfg = await obtenerConfig();
+        const [h, mi] = cfg.horaDefecto.split(":").map(Number);
+        const hasta =
+          elegida === 1
+            ? new Date(Date.now() + 15 * 60_000)
+            : elegida === 2
+              ? new Date(Date.now() + 60 * 60_000)
+              : ahora().plus({ days: 1 }).set({ hour: h || 9, minute: mi || 0, second: 0, millisecond: 0 }).toJSDate();
+        return this.posponerA(a.ocurrenciaId, hasta);
+      }
+      case "propuesta": {
+        const b = await borradorActivo(a.borradorId);
+        if (!b) return this.decir(frases.yaCerrado());
+        if (elegida === 0 && b.datos.propuesta) return this.aceptarBorrador(b.id, b.datos);
+        if (elegida === 2) return this.rechazarBorrador(b.id, b.datos);
+        return this.decir(frases.otraFecha(), { intencion: "falta_info" }); // El borrador queda: la fecha que diga lo usa.
+      }
+      case "elegir": {
+        const recId = a.ids[elegida];
+        if (!recId) return;
+        const interp = { ...(a.interpretacion as unknown as Interpretacion), recordatorio_ids: [recId] };
+        return this.ejecutarSeguro(interp, { ocCitada: null, borrador: await borradorActivo() });
+      }
+    }
   }
 
   private async foto(msg: WAMessage) {
@@ -301,8 +373,14 @@ export class Procesador {
     } catch {
       respuesta = "Guardé la foto 📎. ¿Cuándo querés que te la recuerde?";
     }
-    await guardarBorrador(datosBorrador);
-    await this.decir(respuesta, { intencion: "propuesta_foto" });
+    const borradorId = await guardarBorrador(datosBorrador);
+    await this.proponer(respuesta, borradorId, !!datosBorrador.propuesta, "propuesta_foto");
+  }
+
+  /** Mensaje con la propuesta y, si hay una fecha propuesta, la encuesta para responder con un toque. */
+  private async proponer(texto: string, borradorId: number, conPropuesta: boolean, intencion: string) {
+    await this.decir(texto, { intencion });
+    if (conPropuesta) await this.encuesta("¿Lo agendo?", OPCIONES_PROPUESTA, { tipo: "propuesta", borradorId });
   }
 
   /** Foto con "guardala como nota": la IA lee el texto de la imagen y se guarda en notas. */
@@ -322,7 +400,7 @@ export class Procesador {
       // Sin IA, se guarda igual con el texto del pie.
     }
     const n = await crearNota({ titulo, contenido, categoria, adjuntoId });
-    return this.decir(`🗒️ Guardé la nota *${n.titulo}* con la foto. Preguntame cuando la necesites.`, { intencion: "nota_guardar" });
+    return this.decir(`🗒️ Guardé la nota *${n.titulo}* con la foto. Cuando la necesites, preguntame.`, { intencion: "nota_guardar" });
   }
 
   private async texto(msg: WAMessage, texto: string, tipo: "texto" | "audio" = "texto", eco?: string) {
@@ -373,8 +451,6 @@ export class Procesador {
         }
         case "ayuda":
           return this.decir(TEXTO_AYUDA, { intencion: "ayuda" });
-        case "listas":
-          return this.decir(await this.textoListas(), { intencion: "lista_ver" });
         case "notas":
           return this.decir(await this.textoNotas(), { intencion: "nota_consultar" });
         case "silencio": {
@@ -391,7 +467,7 @@ export class Procesador {
         case "confirmar": {
           const oc = ocCitada ? { id: ocCitada } : await ultimaOcurrenciaEnviada(undefined, chat());
           if (!oc) {
-            if (cmd.explicito) return this.decir("No tengo ningún aviso esperando confirmación 👌");
+            if (cmd.explicito) return this.decir(frases.nadaPendiente());
             return; // "ok" suelto: no hace falta responder.
           }
           return this.confirmar(oc.id);
@@ -404,8 +480,11 @@ export class Procesador {
     let interp: Interpretacion;
     try {
       interp = await interpretar(cfg, texto, await this.contexto(historial, borrador?.datos ?? null, ocCitada));
-    } catch {
-      return this.decir(ERROR_IA, { intencion: "error_ia" });
+    } catch (err) {
+      if (enGrupo()) return; // En el grupo no se interrumpe la charla con errores.
+      if (err instanceof ErrorIA && /clave/i.test(err.message))
+        return this.decir("Me falta la clave de Claude para entenderte. Cargala en el panel (Configuración → IA).", { intencion: "error_ia" });
+      return this.decir(frases.errorTecnico(), { intencion: "error_ia" });
     }
     await anotar(interp.intencion);
     if (interp.intencion === "ignorar") {
@@ -413,12 +492,16 @@ export class Procesador {
       interp = { ...interp, intencion: "desconocido" }; // En privado siempre se contesta.
     }
     if (eco) await this.decir(eco, { intencion: "transcripcion" });
+    return this.ejecutarSeguro(interp, { ocCitada, borrador });
+  }
+
+  private async ejecutarSeguro(interp: Interpretacion, ctx: Ctx) {
     try {
-      await this.ejecutar(interp, { ocCitada, borrador });
+      await this.ejecutar(interp, ctx);
     } catch (err) {
       if (err instanceof ErrorUsuario) return this.decir(`🤔 ${err.message}`);
       await registrar("error", "bot", "Error ejecutando la intención", err);
-      return this.decir(ERROR_IA);
+      return this.decir(frases.errorTecnico());
     }
   }
 
@@ -454,11 +537,9 @@ export class Procesador {
     if (ocCitada) {
       const [oc] = await db.select().from(ocurrencia).where(eq(ocurrencia.id, ocCitada));
       const r = oc ? await obtenerRecordatorio(oc.recordatorioId) : null;
-      if (r) respondiendoA = `El usuario está respondiendo al aviso de "${r.titulo}" (ID ${r.id}). Si dice solo un momento ("mañana", "en 2 horas", "a las 18"), es posponer ese aviso.`;
+      if (r)
+        respondiendoA = `El usuario está respondiendo al aviso de "${r.titulo}" (ID ${r.id}${r.rrule ? ", se repite" : ""}). Si dice solo un momento ("mañana", "en 2 horas", "a las 18"), es posponer ese aviso. Si dice que no va o que se suspendió, es cancelar_aviso. Si dice que lo cambiaron de día u hora, es editar.`;
     }
-    const listas = (await todasLasListas(chat()))
-      .map((l) => `${l.nombre}: ${l.items.map((i) => `[${i.id}] ${i.texto}${i.cantidad ? ` (${i.cantidad})` : ""}`).join("; ") || "(vacía)"}`)
-      .join("\n");
     // Las notas son personales: en el grupo no se muestran.
     const notas = (enGrupo() ? [] : await todasLasNotas())
       .slice(0, 100)
@@ -468,7 +549,6 @@ export class Procesador {
     return {
       grupo: g?.grupo ? { nombre: g.grupo.nombre, autor: g.autor } : null,
       respondiendoA,
-      listas,
       notas,
       recordatoriosActivos: activos.slice(0, 80).map(lineaRec).join("\n"),
       esperandoConfirmacion: esperandoTxt.join("\n"),
@@ -511,7 +591,7 @@ export class Procesador {
       a = await analizarEnlace(cfg, { ...contenido, url }, textoUsuario);
     } catch {
       await guardarBorrador({ url, adjuntoId, titulo: contenido.titulo, descripcion: contenido.descripcion ?? "" });
-      return this.decir(`Leí el link${contenido.titulo ? ` (*${contenido.titulo}*)` : ""}. ¿Cuándo querés que te lo recuerde?`, {
+      return this.decir(`Leí el link${contenido.titulo ? ` (*${contenido.titulo}*)` : ""}. ¿Cuándo querés que te lo recuerde? 🗓️`, {
         intencion: "enlace",
       });
     }
@@ -538,24 +618,17 @@ export class Procesador {
       }
     }
 
-    await guardarBorrador({
+    const conPropuesta = a.accion !== "preguntar" && !!futura;
+    const borradorId = await guardarBorrador({
       url,
       adjuntoId,
       titulo: a.titulo,
       descripcion: a.resumen,
-      propuesta:
-        a.accion !== "preguntar" && futura
-          ? { titulo: a.titulo, fechaHora: futura.toISOString(), avisosPreviosMin: a.propuesta_avisos_previos_min, descripcion: a.lugar ? `Lugar: ${a.lugar}` : null }
-          : null,
+      propuesta: conPropuesta
+        ? { titulo: a.titulo, fechaHora: futura!.toISOString(), avisosPreviosMin: a.propuesta_avisos_previos_min, descripcion: a.lugar ? `Lugar: ${a.lugar}` : null }
+        : null,
     });
-    return this.decir(a.mensaje, { intencion: "propuesta_enlace" });
-  }
-
-  private async textoListas(): Promise<string> {
-    const ls = await todasLasListas(chat());
-    if (!ls.length) return "No tenés listas todavía. Probá: _agregá leche a la lista del súper_ 🛒";
-    if (ls.length === 1) return textoLista(ls[0]);
-    return `📝 Tus listas:\n${ls.map((l) => `• *${l.nombre}* (${l.items.length})`).join("\n")}\n\nPedime una: _pasame la lista del súper_.`;
+    return this.proponer(a.mensaje, borradorId, conPropuesta, "propuesta_enlace");
   }
 
   private async textoNotas(): Promise<string> {
@@ -567,11 +640,18 @@ export class Procesador {
 
   private async confirmar(ocId: number) {
     const oc = await confirmarOcurrencia(ocId);
-    if (!oc) return this.decir("Ese aviso ya estaba cerrado 👌");
+    if (!oc) return this.decir(frases.yaCerrado());
     const rec = await obtenerRecordatorio(oc.recordatorioId);
-    return this.decir(`Listo ✅ ¡Bien ahí! Marqué *${rec?.titulo ?? "el recordatorio"}* como hecho.`, {
-      recordatorioId: oc.recordatorioId,
-      intencion: "confirmar",
+    return this.decir(frases.hecho(rec?.titulo ?? "el recordatorio"), { recordatorioId: oc.recordatorioId, intencion: "confirmar" });
+  }
+
+  private async posponerA(ocId: number, hasta: Date) {
+    const pos = await posponerOcurrencia(ocId, hasta);
+    if (!pos) return this.decir(frases.yaCerrado());
+    const rec = await obtenerRecordatorio(pos.recordatorioId);
+    return this.decir(frases.pospuesto(rec?.titulo ?? "el recordatorio", formatearCuando(hasta)), {
+      recordatorioId: pos.recordatorioId,
+      intencion: "posponer",
     });
   }
 
@@ -593,35 +673,43 @@ export class Procesador {
   private async rechazarBorrador(id: number, d: DatosBorrador) {
     await cerrarBorrador(id);
     if (d.adjuntoId) await borrarAdjunto(d.adjuntoId);
-    await this.decir("Dale, no te lo recuerdo 👍", { intencion: "rechazar_propuesta" });
+    await this.decir(frases.rechazado(), { intencion: "rechazar_propuesta" });
   }
 
-  private async elegir(ids: number[], accion: string): Promise<Recordatorio | null> {
-    const recs = (await Promise.all(ids.map((i) => obtenerRecordatorio(i)))).filter((r): r is Recordatorio => !!r && (r.chat ?? null) === chat());
+  /** Si hay uno solo, lo devuelve. Si hay varios, pregunta cuál (encuesta o lista) y devuelve null. */
+  private async elegir(ids: number[], accion: string, interp?: Interpretacion): Promise<Recordatorio | null> {
+    const recs = (await Promise.all([...new Set(ids)].map((i) => obtenerRecordatorio(i)))).filter(
+      (r): r is Recordatorio => !!r && r.estado !== "borrado" && (r.chat ?? null) === chat(),
+    );
     if (recs.length === 1) return recs[0];
     if (!recs.length) {
-      await this.decir(`No encontré cuál querés ${accion}. ¿Me decís el nombre? (Escribí *lista* para verlos todos)`);
+      await this.decir(`No encontré cuál querés ${accion} 🤔. ¿Me decís el nombre? (Con *lista* te muestro todos)`);
       return null;
     }
-    const opciones = recs.map((r, i) => `${i + 1}) *${r.titulo}* — ${describirCuando(r)}`).join("\n");
+    if (interp) {
+      const opciones = recs.map((r, k) => `${k + 1}) ${sinFormato(r.titulo)} · ${cuandoBonito(r)}`.slice(0, 95));
+      const guardada = { ...interp, recordatorio_ids: [] } as unknown as Record<string, unknown>;
+      if (await this.encuesta(`Encontré varios. ¿Cuál querés ${accion}?`, opciones, { tipo: "elegir", ids: recs.map((r) => r.id), interpretacion: guardada }))
+        return null;
+    }
+    const opciones = recs.map((r, k) => `${k + 1}) *${r.titulo}* — ${cuandoBonito(r)}`).join("\n");
     await this.decir(`Encontré varios:\n${opciones}\n\n¿Cuál querés ${accion}?`);
     return null;
   }
 
-  private async ejecutar(i: Interpretacion, ctx: { ocCitada: number | null; borrador: Awaited<ReturnType<typeof borradorActivo>> }) {
+  private async ejecutar(i: Interpretacion, ctx: Ctx) {
     switch (i.intencion) {
       case "crear_recordatorio": {
         const items = i.recordatorios.filter((r) => r.titulo && fechaDe(r.fecha_hora));
-        if (i.falta_info || !items.length) return this.decir(i.respuesta ?? "¿Para cuándo te lo recuerdo?", { intencion: "falta_info" });
+        if (i.falta_info || !items.length) return this.decir(i.respuesta ?? "¿Para cuándo te lo recuerdo? 🗓️", { intencion: "falta_info" });
         const respuestas: string[] = [];
+        let ofrecer = false;
         let conFoto = ctx.borrador?.datos.adjuntoId ?? null;
         let link = ctx.borrador?.datos.url ?? null;
         for (const it of items) {
-          const listaId = it.lista ? (await obtenerOCrearLista(it.lista, chat())).id : null;
           const datos: DatosRecordatorio = {
             chat: chat(),
             titulo: it.titulo!,
-            listaId,
             descripcion: conLink(it.descripcion, link),
             fechaHora: fechaDe(it.fecha_hora)!,
             rrule: it.recurrencia,
@@ -632,17 +720,19 @@ export class Procesador {
           const rec = await crearRecordatorio(datos);
           conFoto = null; // La foto y el link van solo con el primero.
           link = null;
-          respuestas.push(await textoConfirmacion(rec));
+          respuestas.push(await textoConfirmacion(rec, !respuestas.length));
+          ofrecer ||= items.length === 1 && convieneOfrecerPrevio(rec, it.es_evento);
         }
         if (ctx.borrador) await cerrarBorrador(ctx.borrador.id);
-        return this.decir(respuestas.join("\n"), { intencion: "crear_recordatorio" });
+        if (ofrecer) respuestas.push("¿Querés que te avise antes también? Decime, por ejemplo, *1 hora antes* o *el día anterior*.");
+        return this.decir(respuestas.join("\n\n"), { intencion: "crear_recordatorio" });
       }
       case "aceptar_propuesta":
         if (ctx.borrador?.datos.propuesta) return this.aceptarBorrador(ctx.borrador.id, ctx.borrador.datos);
         return this.decir(i.respuesta ?? "¿Qué querés que te recuerde y cuándo?");
       case "rechazar_propuesta":
         if (ctx.borrador) return this.rechazarBorrador(ctx.borrador.id, ctx.borrador.datos);
-        return this.decir("Dale 👍");
+        return this.decir(frases.rechazado());
       case "listar": {
         const desde = fechaDe(i.listar_desde);
         const hasta = fechaDe(i.listar_hasta);
@@ -653,7 +743,7 @@ export class Procesador {
         let oc: Pick<Ocurrencia, "id"> | null = ctx.ocCitada ? { id: ctx.ocCitada } : null;
         if (!oc && i.recordatorio_ids.length === 1) oc = await ultimaOcurrenciaEnviada(i.recordatorio_ids[0], chat());
         oc ??= await ultimaOcurrenciaEnviada(undefined, chat());
-        if (!oc) return this.decir("No tengo ningún aviso esperando confirmación 👌");
+        if (!oc) return this.decir(frases.nadaPendiente());
         return this.confirmar(oc.id);
       }
       case "posponer": {
@@ -663,21 +753,19 @@ export class Procesador {
         if (!oc && i.recordatorio_ids.length === 1)
           oc = (await ultimaOcurrenciaEnviada(i.recordatorio_ids[0], chat())) ?? (await proximaOcurrenciaPendiente(i.recordatorio_ids[0]));
         if (!oc && i.recordatorio_ids.length > 1) {
-          await this.elegir(i.recordatorio_ids, "posponer");
+          await this.elegir(i.recordatorio_ids, "posponer", i);
           return;
         }
         oc ??= await ultimaOcurrenciaEnviada(undefined, chat());
-        if (!oc) return this.decir("No encontré qué posponer. ¿Me decís cuál?");
-        const pos = await posponerOcurrencia(oc.id, hasta);
-        if (!pos) return this.decir("Ese aviso ya estaba cerrado 👌");
-        const rec = await obtenerRecordatorio(pos.recordatorioId);
-        return this.decir(`Dale ⏰ Te vuelvo a recordar *${rec?.titulo ?? ""}* ${formatearCuando(hasta)}.`, {
-          recordatorioId: pos.recordatorioId,
-          intencion: "posponer",
-        });
+        if (!oc) return this.decir("No encontré qué posponer 🤔. ¿Me decís cuál?");
+        return this.posponerA(oc.id, hasta);
       }
+      case "cancelar_aviso":
+        return this.cancelarAviso(i, ctx);
       case "editar": {
-        const rec = await this.elegir(i.recordatorio_ids, "cambiar");
+        let ids = i.recordatorio_ids;
+        if (!ids.length && ctx.ocCitada) ids = [(await this.ocurrencia(ctx.ocCitada))?.recordatorioId ?? 0];
+        const rec = await this.elegir(ids, "cambiar", i);
         if (!rec || !i.cambios) return rec ? this.decir(i.respuesta ?? "¿Qué querés cambiarle?") : undefined;
         const c = i.cambios;
         const cambios: Partial<DatosRecordatorio> = {};
@@ -689,68 +777,35 @@ export class Procesador {
         if (c.quitar_recurrencia) cambios.rrule = null;
         if (c.avisos_previos_min) cambios.avisosPreviosMin = c.avisos_previos_min;
         if (!Object.keys(cambios).length) return this.decir(i.respuesta ?? "¿Qué querés cambiarle?");
+        // Un aviso que ya llegó y se movió de fecha deja de insistir.
+        if (cambios.fechaHora && ctx.ocCitada) {
+          const oc = await this.ocurrencia(ctx.ocCitada);
+          if (oc?.recordatorioId === rec.id && oc.estado === "enviada") await cancelarInstancia(oc);
+        }
         const nuevo = await actualizarRecordatorio(rec.id, cambios);
-        return this.decir(`Listo ✏️ *${nuevo.titulo}*: ${describirCuando(nuevo)}.`, { recordatorioId: rec.id, intencion: "editar" });
-      }
-      case "borrar": {
-        const rec = await this.elegir(i.recordatorio_ids, "borrar");
-        if (!rec) return;
-        await borrarRecordatorio(rec.id);
-        return this.decir(`Listo 🗑️ Borré *${rec.titulo}*.`, { recordatorioId: rec.id, intencion: "borrar" });
-      }
-      case "pausar": {
-        const rec = await this.elegir(i.recordatorio_ids, "pausar");
-        if (!rec) return;
-        await pausarRecordatorio(rec.id);
-        return this.decir(`⏸️ Pausé *${rec.titulo}*. Decime "reanudá ${rec.titulo.toLowerCase()}" cuando quieras retomarlo.`, {
+        return this.decir(`${frases.editado(nuevo.titulo)}\n📌 *${nuevo.titulo}*\n🗓️ ${cuandoBonito(nuevo)}${textoPrevios(nuevo)}`, {
           recordatorioId: rec.id,
-          intencion: "pausar",
+          intencion: "editar",
         });
       }
+      case "borrar": {
+        const rec = await this.elegir(i.recordatorio_ids, "borrar", i);
+        if (!rec) return;
+        await borrarRecordatorio(rec.id);
+        return this.decir(frases.borrado(rec.titulo), { recordatorioId: rec.id, intencion: "borrar" });
+      }
+      case "pausar": {
+        const rec = await this.elegir(i.recordatorio_ids, "pausar", i);
+        if (!rec) return;
+        await pausarRecordatorio(rec.id);
+        return this.decir(frases.pausado(rec.titulo), { recordatorioId: rec.id, intencion: "pausar" });
+      }
       case "reanudar": {
-        const rec = await this.elegir(i.recordatorio_ids, "reanudar");
+        const rec = await this.elegir(i.recordatorio_ids, "reanudar", i);
         if (!rec) return;
         await reanudarRecordatorio(rec.id);
         const r = (await obtenerRecordatorio(rec.id))!;
-        return this.decir(`▶️ Reanudé *${r.titulo}*: ${describirCuando(r)}.`, { recordatorioId: rec.id, intencion: "reanudar" });
-      }
-      case "lista_agregar": {
-        const items = i.lista_items.filter((x) => x.texto.trim());
-        if (!items.length) return this.decir(i.respuesta ?? "¿Qué querés agregar a la lista?");
-        const l = await obtenerOCrearLista(i.lista ?? "Pendientes", chat());
-        const nuevos = await agregarItems(l.id, items);
-        const total = (await obtenerLista(l.id))?.items.length ?? 0;
-        if (!nuevos.length) return this.decir(`Eso ya estaba en *${l.nombre}* 👌 (${total} en total)`, { intencion: "lista_agregar" });
-        const lineas = nuevos.map((x) => `${x.texto}${x.cantidad ? ` (${x.cantidad})` : ""}`).join(", ");
-        return this.decir(`🛒 Agregué a *${l.nombre}*: ${lineas}. (${total} en total)`, { intencion: "lista_agregar" });
-      }
-      case "lista_quitar": {
-        const propios = new Set((await todasLasListas(chat())).flatMap((l) => l.items.map((x) => x.id)));
-        const borrados = await quitarItems(i.lista_item_ids.filter((id) => propios.has(id)));
-        if (!borrados.length) return this.decir(i.respuesta ?? "No encontré eso en tus listas 🤔. Escribí *listas* para verlas.");
-        const l = await obtenerLista(borrados[0].listaId);
-        const quedan = l?.items.length ?? 0;
-        return this.decir(
-          `✅ Listo, saqué: ${borrados.map((b) => b.texto).join(", ")}.${l ? ` En *${l.nombre}* ${quedan ? `quedan ${quedan}` : "no queda nada 🙌"}.` : ""}`,
-          { intencion: "lista_quitar" },
-        );
-      }
-      case "lista_ver": {
-        if (!i.lista) return this.decir(await this.textoListas(), { intencion: "lista_ver" });
-        const l = await buscarLista(i.lista, chat());
-        if (!l) return this.decir(`No tenés una lista "${i.lista}". ${await this.textoListas()}`);
-        return this.decir(textoLista((await obtenerLista(l.id))!), { intencion: "lista_ver" });
-      }
-      case "lista_vaciar":
-      case "lista_borrar": {
-        const l = i.lista ? await buscarLista(i.lista, chat()) : null;
-        if (!l) return this.decir("¿Qué lista? Escribí *listas* para verlas.");
-        if (i.intencion === "lista_vaciar") {
-          await vaciarLista(l.id);
-          return this.decir(`🧹 Vacié *${l.nombre}*.`, { intencion: i.intencion });
-        }
-        await borrarLista(l.id);
-        return this.decir(`🗑️ Borré la lista *${l.nombre}*.`, { intencion: i.intencion });
+        return this.decir(frases.reanudado(r.titulo, cuandoBonito(r)), { recordatorioId: rec.id, intencion: "reanudar" });
       }
       case "nota_guardar":
       case "nota_consultar":
@@ -761,13 +816,40 @@ export class Procesador {
       case "ayuda":
         return this.decir(TEXTO_AYUDA, { intencion: "ayuda" });
       default:
-        return this.decir(i.respuesta ?? "No te entendí bien 🤔. Probá con algo como _recordame mañana a las 10 pagar la luz_, o escribí *ayuda*.", {
-          intencion: i.intencion,
-        });
+        return this.decir(i.respuesta ?? frases.noEntendi(), { intencion: i.intencion });
     }
   }
 
-  private async notas(i: Interpretacion, ctx: { ocCitada: number | null; borrador: Awaited<ReturnType<typeof borradorActivo>> }) {
+  private async ocurrencia(id: number): Promise<Ocurrencia | null> {
+    const [oc] = await db.select().from(ocurrencia).where(eq(ocurrencia.id, id));
+    return oc ?? null;
+  }
+
+  /** "No voy", "se suspendió": un único se borra; de un recurrente se saltea esa vez. */
+  private async cancelarAviso(i: Interpretacion, ctx: Ctx) {
+    let oc: Ocurrencia | null = ctx.ocCitada ? await this.ocurrencia(ctx.ocCitada) : null;
+    let ids = oc ? [oc.recordatorioId] : i.recordatorio_ids;
+    if (!ids.length) {
+      oc = await ultimaOcurrenciaEnviada(undefined, chat());
+      ids = oc ? [oc.recordatorioId] : [];
+    }
+    if (!ids.length) return this.decir(i.respuesta ?? "¿Cuál querés cancelar? Decime el nombre 🙂");
+    const rec = await this.elegir(ids, "cancelar", i);
+    if (!rec) return;
+    if (!rec.rrule) {
+      await borrarRecordatorio(rec.id);
+      return this.decir(frases.cancelado(rec.titulo), { recordatorioId: rec.id, intencion: "cancelar_aviso" });
+    }
+    oc ??= await ultimaOcurrenciaEnviada(rec.id, chat());
+    // Si esa vez ya pasó (el aviso llegó), se cierra; si todavía no, se saltea la próxima.
+    if (oc && oc.recordatorioId === rec.id && oc.instancia.getTime() <= Date.now()) await cancelarInstancia(oc);
+    else await marcarHecho(rec.id);
+    const r = (await obtenerRecordatorio(rec.id))!;
+    const proximo = r.estado === "activo" ? cuandoBonito(r) : "no hay más";
+    return this.decir(frases.salteado(r.titulo, proximo), { recordatorioId: rec.id, intencion: "cancelar_aviso" });
+  }
+
+  private async notas(i: Interpretacion, ctx: Ctx) {
     switch (i.intencion) {
       case "nota_guardar": {
         if (!i.nota || !(i.nota.contenido.trim() || i.nota.titulo.trim())) return this.decir(i.respuesta ?? "¿Qué querés que anote?");
@@ -781,7 +863,7 @@ export class Procesador {
         }
         const n = await crearNota({ ...i.nota, contenido, adjuntoId: b?.datos.adjuntoId ?? null });
         if (b) await cerrarBorrador(b.id);
-        return this.decir(`🗒️ Anotado: *${n.titulo}*${b?.datos.adjuntoId ? " (con la foto)" : ""}. Preguntame cuando lo necesites.`, {
+        return this.decir(`🗒️ Anotado: *${n.titulo}*${b?.datos.adjuntoId ? " (con la foto)" : ""}. Cuando lo necesites, preguntame.`, {
           intencion: "nota_guardar",
         });
       }
