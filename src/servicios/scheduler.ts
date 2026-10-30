@@ -8,6 +8,7 @@ import { recortarLogs, registrar } from "../lib/log.js";
 import { obtenerConfig } from "./configuracion.js";
 import { fijarReagendador, ocurrenciasVencidas, procesarOcurrencia } from "./disparador.js";
 import { avanzarRecurrente, fijarAgendador, recurrentesParaAvanzar } from "./recordatorios.js";
+import { limpiarArchivosViejos } from "./compras.js";
 import { revisarResumenDiario } from "./resumen.js";
 
 const COLA_DISPARO = "disparo";
@@ -42,10 +43,12 @@ export async function barrer(): Promise<void> {
   }
 }
 
-/** Mantenimiento una vez por hora: recorta logs y, si está activado, borra fotos viejas. */
+/** Mantenimiento una vez por hora: recorta logs, borra los escaneos de compras viejos y, si está activado, las fotos viejas. */
 async function mantenimiento() {
   await recortarLogs(500);
   const cfg = await obtenerConfig();
+  const compras = await limpiarArchivosViejos(cfg.comprasDiasArchivo);
+  if (compras) await registrar("info", "mantenimiento", `Se borraron los archivos de ${compras} comprobantes de más de ${cfg.comprasDiasArchivo} días`);
   if (!cfg.limpiezaFotosActiva) return;
   const limite = new Date(Date.now() - cfg.limpiezaFotosDias * 86_400_000);
   // Fotos de recordatorios terminados y sin cambios desde hace N días.

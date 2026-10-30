@@ -10,6 +10,7 @@ import {
   Menu,
   MessageCircle,
   Plus,
+  Receipt,
   ScrollText,
   Settings,
   StickyNote,
@@ -26,6 +27,7 @@ const SECCIONES = [
   // Notas y Calendario van en la barra inferior del celular (posiciones 3 y 4).
   { a: "/notas", texto: "Notas", icono: StickyNote },
   { a: "/calendario", texto: "Calendario", icono: CalendarDays },
+  { a: "/compras", texto: "Compras", icono: Receipt },
   { a: "/whatsapp", texto: "WhatsApp", icono: MessageCircle },
   { a: "/historial", texto: "Historial", icono: History },
   { a: "/configuracion", texto: "Configuración", icono: Settings },

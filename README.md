@@ -20,6 +20,13 @@ Le escribís al bot como a una persona (*"recordame mañana a las 10 pagar la lu
 - **Posponer**: *"posponé 15 min"*, *"mañana"*, *"en 2 horas"*.
 - **Responder al aviso**: *"no voy"* o *"se suspendió"* lo cancela (si se repite, saltea solo esa vez); *"lo pasaron al lunes"* lo cambia.
 - **Pregunta lo que falta**: a un turno sin hora le pregunta la hora, y a un evento sin aviso previo le ofrece uno.
+- **Compras (facturas de proveedores)**: en el grupo marcado como "de compras" (o por privado, con "factura" en el pie o mandando el PDF) lee facturas, notas de crédito y débito, remitos, tickets y papeles internos con el instructivo de Coffit, y los pasa al JSON que carga el ERP.
+  - Junta las fotos de la misma persona que llegan seguidas (varias hojas) y pone 👀 al recibirlas.
+  - Rehace las cuentas por su lado (cada renglón, subtotal y total). Si no cierran, relee con un modelo más potente; si siguen sin cerrar, queda "a revisar" con la diferencia.
+  - Responde con un resumen y las opciones ✅ Confirmar · ✏️ Corregir · ❌ Descartar. Para corregir alcanza con escribir, por ejemplo, "el renglón 3 son 12 unidades".
+  - Avisa si el comprobante ya estaba cargado.
+  - Al confirmar lo manda por POST al ERP (`{ comprobantes: [...] }`, con la clave como `Authorization: Bearer`). Sin dirección, queda en el panel para copiar o descargar el JSON.
+  - Las fotos y PDF se borran a los 30 días (configurable); los datos quedan. Todo se configura en Configuración → Compras, incluso el instructivo.
 - **Notas cifradas**: *"anotá que la clave del wifi es…"*, *"anotá comprar leche y pan"*, *"¿cuál era la clave del wifi?"*.
 - **Editar, borrar, pausar y reanudar**: *"cambiá lo del dentista a las 11"*, *"borrá lo de la basura"*.
 - **Comandos rápidos sin IA**: `hoy`, `mañana`, `semana`, `lista`, `listo`, `ayuda`, `silencio 2h` / `silencio off`.

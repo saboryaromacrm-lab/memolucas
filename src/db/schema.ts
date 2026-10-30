@@ -90,6 +90,17 @@ export const configuracion = pgTable("configuracion", {
   // Opciones para tocar (encuestas de WhatsApp) en avisos y propuestas.
   usarEncuestas: boolean("usar_encuestas").notNull().default(true),
 
+  // Compras (facturas de proveedores): lectura con IA y envío al ERP.
+  comprasModelo: text("compras_modelo").notNull().default("claude-sonnet-5-5"),
+  comprasModeloReintento: text("compras_modelo_reintento").notNull().default("claude-opus-5-5"),
+  /** Instructivo para la IA; vacío = el que viene con la app. */
+  comprasInstructivo: text("compras_instructivo").notNull().default(""),
+  comprasEsperaSeg: integer("compras_espera_seg").notNull().default(60),
+  comprasDiasArchivo: integer("compras_dias_archivo").notNull().default(30),
+  erpUrl: text("erp_url").notNull().default(""),
+  erpTokenCifrado: text("erp_token_cifrado"),
+  erpEnvioAuto: boolean("erp_envio_auto").notNull().default(true),
+
   actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
 });
 
@@ -107,6 +118,8 @@ export const adjunto = pgTable("adjunto", {
 export const grupo = pgTable("grupo", {
   jid: text("jid").primaryKey(),
   nombre: text("nombre").notNull(),
+  /** Grupo de compras: toda foto o PDF es un comprobante y no se hacen recordatorios. */
+  compras: boolean("compras").notNull().default(false),
   creadoEn: creadoEn(),
   actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
 });
@@ -221,7 +234,8 @@ export const borradorPendiente = pgTable("borrador_pendiente", {
 export type AccionEncuesta =
   | { tipo: "aviso"; ocurrenciaId: number }
   | { tipo: "propuesta"; borradorId: number }
-  | { tipo: "elegir"; ids: number[]; interpretacion: Record<string, unknown> };
+  | { tipo: "elegir"; ids: number[]; interpretacion: Record<string, unknown> }
+  | { tipo: "comprobante"; comprobanteId: number };
 
 /** Encuestas que manda el bot: la clave para descifrar los votos y qué hacer con cada opción. */
 export const encuesta = pgTable(
@@ -267,3 +281,34 @@ export type Configuracion = typeof configuracion.$inferSelect;
 export type Adjunto = typeof adjunto.$inferSelect;
 export type Nota = typeof nota.$inferSelect;
 export type Grupo = typeof grupo.$inferSelect;
+export type FilaComprobante = typeof comprobante.$inferSelect;
+
+/** Comprobantes de compra leídos con IA. Los datos (el JSON del instructivo) van cifrados. */
+export const comprobante = pgTable(
+  "comprobante",
+  {
+    id: serial("id").primaryKey(),
+    chat: text("chat"),
+    autor: text("autor"),
+    estado: text("estado").$type<"pendiente" | "revisar" | "confirmado" | "descartado">().notNull(),
+    datosCifrados: text("datos_cifrados").notNull(),
+    /** Hash para detectar el mismo comprobante cargado dos veces. */
+    clave: text("clave"),
+    fecha: text("fecha"),
+    total: numeric("total", { precision: 16, scale: 2 }),
+    cierra: boolean("cierra").notNull(),
+    modelo: text("modelo"),
+    adjuntoIds: integer("adjunto_ids").array().notNull().default([]),
+    archivosBorrados: boolean("archivos_borrados").notNull().default(false),
+    /** Mensaje con el resumen que mandó el bot (para responderle). */
+    waMessageId: text("wa_message_id"),
+    /** Hasta cuándo el próximo mensaje del chat se toma como corrección. */
+    corrigiendoHasta: ts("corrigiendo_hasta"),
+    confirmadoEn: ts("confirmado_en"),
+    enviadoEn: ts("enviado_en"),
+    envioError: text("envio_error"),
+    creadoEn: creadoEn(),
+    actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
+  },
+  (t) => [index("comprobante_clave_idx").on(t.clave), index("comprobante_creado_idx").on(t.creadoEn)],
+);

@@ -7,6 +7,7 @@ import { get } from "./lib/api";
 import { fijarZona } from "./lib/fechas";
 import { cerrarVivo } from "./lib/vivo";
 import { Calendario } from "./paginas/Calendario";
+import { Compras } from "./paginas/Compras";
 import { Configuracion } from "./paginas/Configuracion";
 import { Historial } from "./paginas/Historial";
 import { Inicio } from "./paginas/Inicio";
@@ -50,6 +51,7 @@ export function App() {
                 <Route path="/recordatorios" element={<Recordatorios />} />
                 <Route path="/calendario" element={<Calendario />} />
                 <Route path="/notas" element={<Notas />} />
+                <Route path="/compras" element={<Compras />} />
                 <Route path="/whatsapp" element={<WhatsApp />} />
                 <Route path="/historial" element={<Historial />} />
                 <Route path="/configuracion" element={<Configuracion />} />

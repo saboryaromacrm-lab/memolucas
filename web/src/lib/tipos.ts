@@ -112,6 +112,15 @@ export type Configuracion = {
   audioModelo: string;
   audioMaxSegundos: number;
   usarEncuestas: boolean;
+  comprasModelo: string;
+  comprasModeloReintento: string;
+  comprasInstructivo: string;
+  comprasEsperaSeg: number;
+  comprasDiasArchivo: number;
+  erpUrl: string;
+  erpEnvioAuto: boolean;
+  erpTokenCargado: boolean;
+  instructivoComprasDefecto: string;
   groqKeyPropia: boolean;
   groqKeyEntorno: boolean;
   apiKeyPropia: boolean;
@@ -150,7 +159,67 @@ export type Mensaje = {
   creadoEn: string;
 };
 
-export type Grupo = { jid: string; nombre: string };
+export type Grupo = { jid: string; nombre: string; compras: boolean };
+
+export type EstadoCompra = "pendiente" | "revisar" | "confirmado" | "descartado";
+
+/** Comprobante de compra en la lista (el JSON completo viene en "datos" al abrirlo). */
+export type Compra = {
+  id: number;
+  estado: EstadoCompra;
+  titulo: string;
+  proveedor: string;
+  fecha: string | null;
+  total: string | null;
+  moneda: "PES" | "DOL" | "";
+  renglones: number;
+  clase: "mercaderia" | "gasto" | "mixta" | "dudoso";
+  cierra: boolean;
+  diferencias: string;
+  dudas: string[];
+  autor: string | null;
+  grupoNombre: string | null;
+  modelo: string | null;
+  archivos: { url: string; mime: string }[];
+  archivosBorrados: boolean;
+  confirmadoEn: string | null;
+  enviadoEn: string | null;
+  envioError: string | null;
+  creadoEn: string;
+};
+
+export type ComprobanteDatos = {
+  archivo: string;
+  clase: string;
+  motivoClase: string;
+  encabezado: Record<string, string | number>;
+  renglones: {
+    clase: string;
+    codigo: string;
+    descripcion: string;
+    cantidad: number;
+    unidad: string;
+    unidadesPorBulto: number;
+    precioUnitario: number;
+    descuentos: number[];
+    importe: number;
+    alicuotaIva: number;
+    cierra: boolean;
+  }[];
+  pie: {
+    subtotal: number;
+    bonificacionPct: number;
+    bonificacionImporte: number;
+    ivas: { alicuota: number; importe: number }[];
+    percepciones: { nombre: string; tipo: string; alicuota: number; importe: number }[];
+    impuestosInternos: number;
+    otrosImpuestos: number;
+    total: number;
+  };
+  pagoQueFigura: { figura: boolean; medio: string; fecha: string; importe: number; referencia: string };
+  controles: { sumaRenglones: number; cierraSubtotal: boolean; cierraTotal: boolean; diferencias: string };
+  dudas: string[];
+};
 
 export type Log = { id: number; nivel: "info" | "aviso" | "error"; origen: string; mensaje: string; detalle: unknown; creadoEn: string };
 

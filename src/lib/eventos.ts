@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 
-export type TipoCambio = "recordatorios" | "whatsapp" | "configuracion" | "mensajes" | "logs" | "notas";
+export type TipoCambio = "recordatorios" | "whatsapp" | "configuracion" | "mensajes" | "logs" | "notas" | "compras";
 
 /** Bus interno: avisa al panel (por SSE) que algo cambió para que se actualice solo. */
 class Bus extends EventEmitter {

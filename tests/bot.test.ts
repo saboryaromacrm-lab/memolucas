@@ -82,6 +82,7 @@ describe("bot", () => {
     descifrarVoto: (msg: WAMessage) => [hashOpcion(Buffer.from(msg.message!.pollUpdateMessage!.vote!.encPayload!).toString())],
     responder: async (t: string, destino?: string | null) => (respuestas.push(t), destinos.push(destino ?? null), `OUT${respuestas.length}`),
     responderImagen: async (_r: string, _m: string, t: string) => (respuestas.push(`[foto] ${t}`), `OUT${respuestas.length}`),
+    reaccionar: async () => {},
     descargarMedia: async () => sharp({ create: { width: 20, height: 20, channels: 3, background: "#fff" } }).jpeg().toBuffer(),
   };
   const bot = new Procesador(canal);

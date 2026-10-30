@@ -61,15 +61,28 @@ export async function gastoDelMes() {
 const esfuerzoDe = (cfg: Configuracion): Esfuerzo =>
   (ESFUERZOS as readonly string[]).includes(cfg.iaEsfuerzo) ? (cfg.iaEsfuerzo as Esfuerzo) : "low";
 
-async function pedirUnaVez<T extends z.ZodType>(cfg: Configuracion, esquema: T, system: string, messages: Anthropic.MessageParam[]) {
-  const r = await cliente(cfg).messages.parse({
-    model: cfg.iaModelo,
-    max_tokens: 8000,
-    system,
-    messages,
-    output_config: { effort: esfuerzoDe(cfg), format: zodOutputFormat(esquema) },
-  });
-  await registrarUso(cfg.iaModelo, r.usage.input_tokens, r.usage.output_tokens);
+/** Para pedidos distintos de la charla (ej. leer facturas): otro modelo, más tokens y más tiempo. */
+export type OpcionesPedido = { modelo?: string; maxTokens?: number; timeoutMs?: number; esfuerzo?: Esfuerzo };
+
+async function pedirUnaVez<T extends z.ZodType>(
+  cfg: Configuracion,
+  esquema: T,
+  system: string,
+  messages: Anthropic.MessageParam[],
+  op: OpcionesPedido = {},
+) {
+  const modelo = op.modelo ?? cfg.iaModelo;
+  const r = await cliente(cfg).messages.parse(
+    {
+      model: modelo,
+      max_tokens: op.maxTokens ?? 8000,
+      system,
+      messages,
+      output_config: { effort: op.esfuerzo ?? esfuerzoDe(cfg), format: zodOutputFormat(esquema) },
+    },
+    op.timeoutMs ? { timeout: op.timeoutMs } : undefined,
+  );
+  await registrarUso(modelo, r.usage.input_tokens, r.usage.output_tokens);
   if (r.stop_reason === "refusal") throw new ErrorIA("El modelo rechazó el pedido");
   if (r.stop_reason === "max_tokens") throw new ErrorIA("La respuesta del modelo quedó cortada");
   if (!r.parsed_output) throw new ErrorIA("La respuesta del modelo no tiene el formato esperado");
@@ -84,16 +97,17 @@ const esDefinitivo = (err: unknown) =>
   err instanceof Anthropic.NotFoundError ||
   (err instanceof ErrorIA && /API key|rechazó/.test(err.message));
 
-async function pedir<T extends z.ZodType>(
+export async function pedir<T extends z.ZodType>(
   cfg: Configuracion,
   esquema: T,
   system: string,
   messages: Anthropic.MessageParam[],
+  op: OpcionesPedido = {},
 ): Promise<z.infer<T>> {
   const inicio = Date.now();
   for (let intento = 1; ; intento++) {
     try {
-      return await pedirUnaVez(cfg, esquema, system, messages);
+      return await pedirUnaVez(cfg, esquema, system, messages, op);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       // Un segundo intento cubre cortes momentáneos o una respuesta mal formada.
@@ -102,7 +116,7 @@ async function pedir<T extends z.ZodType>(
         await new Promise((r) => setTimeout(r, 1500));
         continue;
       }
-      await registrar("error", "ia", `Falló la IA (${cfg.iaModelo}, ${Date.now() - inicio} ms): ${msg}`);
+      await registrar("error", "ia", `Falló la IA (${op.modelo ?? cfg.iaModelo}, ${Date.now() - inicio} ms): ${msg}`);
       throw err instanceof ErrorIA ? err : new ErrorIA(msg);
     }
   }
@@ -320,7 +334,9 @@ function unirTurnos(ms: Anthropic.MessageParam[]): Anthropic.MessageParam[] {
 // ───────────── Fotos ─────────────
 
 export const EsquemaFoto = z.object({
-  tipo: z.enum(["factura", "turno", "entrada", "invitacion", "receta", "otro"]),
+  tipo: z
+    .enum(["factura", "compra", "turno", "entrada", "invitacion", "receta", "otro"])
+    .describe('"factura": servicio o cuenta a pagar con vencimiento (luz, gas, tarjeta). "compra": comprobante de un proveedor por mercadería o insumos ya comprados (factura, remito, ticket)'),
   descripcion: z.string().describe("Qué es, en una frase"),
   util: z.boolean().describe("true si tiene datos para armar un recordatorio"),
   titulo: z.string().nullable(),

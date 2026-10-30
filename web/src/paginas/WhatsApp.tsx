@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { KeyRound, Link2Off, Loader2, QrCode, RefreshCw, Send, ShieldCheck, Smartphone } from "lucide-react";
-import { Boton, Cargando, Encabezado, Modal, useAccion } from "../componentes/ui";
+import { Boton, Cargando, Encabezado, Interruptor, Modal, useAccion } from "../componentes/ui";
 import { post, put } from "../lib/api";
 import { fechaHora, haceCuanto } from "../lib/fechas";
 import type { Grupo, InfoWhatsapp } from "../lib/tipos";
@@ -17,7 +17,7 @@ const ESTADOS: Record<InfoWhatsapp["estado"], [string, string]> = {
 
 export function WhatsApp() {
   const { datos: wa } = useDatos<InfoWhatsapp>("/api/whatsapp", ["whatsapp", "mensajes", "configuracion"]);
-  const { datos: grupos } = useDatos<Grupo[]>("/api/grupos", ["mensajes"]);
+  const { datos: grupos, recargar: recargarGrupos } = useDatos<Grupo[]>("/api/grupos", ["mensajes"]);
   const accion = useAccion();
   const [numero, setNumero] = useState("");
   const [desvincular, setDesvincular] = useState(false);
@@ -100,10 +100,15 @@ export function WhatsApp() {
               El bot funciona en los grupos donde estás vos. Ahí lee todo, pero solo contesta cuando le piden algo. Aparecen acá después del primer mensaje.
             </p>
             {grupos?.length ? (
-              <ul className="space-y-1 text-sm text-slate-700">
+              <ul className="divide-y divide-slate-100">
                 {grupos.map((g) => (
-                  <li key={g.jid} className="flex items-center gap-2">
-                    <span className="size-1.5 rounded-full bg-marca" /> {g.nombre}
+                  <li key={g.jid} className="py-1.5">
+                    <Interruptor
+                      activo={g.compras}
+                      onChange={(v) => void accion(() => put(`/api/grupos/${encodeURIComponent(g.jid)}`, { compras: v }), v ? "Ahora es el grupo de compras" : "Volvió a ser un grupo normal").then(recargarGrupos)}
+                      etiqueta={g.nombre}
+                      ayuda={g.compras ? "🧾 Grupo de compras: toda foto o PDF es un comprobante" : "Grupo normal (recordatorios)"}
+                    />
                   </li>
                 ))}
               </ul>
