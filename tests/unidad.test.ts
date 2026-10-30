@@ -181,3 +181,50 @@ describe("controles de comprobantes", async () => {
     expect(claveDe(a)).not.toBe(claveDe(b));
   });
 });
+
+describe("factura con impuestos incluidos en los renglones", async () => {
+  const { controlar } = await import("../src/lib/comprobantes.js");
+  const { facturaDePrueba } = await import("./fabrica.js");
+
+  // Factura A real de Salta Refrescos: el importe de cada renglón ya trae IVA e impuesto interno.
+  const salta = () => {
+    const f = facturaDePrueba();
+    f.renglones = [
+      { ...f.renglones[0], descripcion: "BENEDICTINO C/GAS 500*15 VR", cantidad: 2, unidad: "UN", precioUnitario: 12499.93, descuentos: [], importe: 24999.86 },
+      { ...f.renglones[0], descripcion: "SIFON SODA BENEDICTINO 2000*6P", cantidad: 1, unidad: "UN", precioUnitario: 11000, descuentos: [], importe: 11000 },
+    ];
+    f.pie = {
+      subtotal: 29064.27,
+      bonificacionPct: 0,
+      bonificacionImporte: 0,
+      ivas: [{ alicuota: 21, importe: 6103.5 }],
+      percepciones: [
+        { nombre: "Percepc. IVA", tipo: "iva", alicuota: 0, importe: 871.93 },
+        { nombre: "Percepc. DGR", tipo: "iibb", alicuota: 0, importe: 896.9 },
+      ],
+      impuestosInternos: 832.09,
+      otrosImpuestos: 0,
+      total: 37768.69,
+    };
+    return f;
+  };
+
+  it("cierra con el subtotal neto impreso", () => {
+    expect(controlar(salta()).cierra).toBe(true);
+  });
+
+  it("cierra también con el subtotal con impuestos (el de arriba) o sin subtotal", () => {
+    const conImpuestos = salta();
+    conImpuestos.pie.subtotal = 35999.86;
+    expect(controlar(conImpuestos).cierra).toBe(true);
+    const sinSubtotal = salta();
+    sinSubtotal.pie.subtotal = 0;
+    expect(controlar(sinSubtotal).cierra).toBe(true);
+  });
+
+  it("si se lee mal un número, sigue sin cerrar", () => {
+    const f = salta();
+    f.renglones[0].importe = 2499.86;
+    expect(controlar(f).cierra).toBe(false);
+  });
+});

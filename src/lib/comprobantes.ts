@@ -101,17 +101,25 @@ export function controlar(c: Comprobante): { comprobante: Comprobante; cierra: b
   const p = c.pie;
   const sumaRenglones = r2(suma(renglones.map((r) => r.importe)));
   const tolerancia = Math.max(TOLERANCIA, 0.01 * renglones.length);
+  const ivas = suma(p.ivas.map((i) => i.importe));
+  const percepciones = suma(p.percepciones.map((x) => x.importe));
+  // Hay proveedores (ej. bebidas) que cobran cada renglón con el IVA y los impuestos internos incluidos.
+  const impuestosEnRenglones = ivas + p.impuestosInternos;
   let cierraSubtotal = true;
   if (p.subtotal > 0) {
-    // Según el comprobante, el subtotal viene antes o después de la bonificación general.
-    cierraSubtotal = [sumaRenglones, sumaRenglones - p.bonificacionImporte].some((s) => Math.abs(s - p.subtotal) <= tolerancia);
+    // Según el comprobante, el subtotal viene antes o después de la bonificación general, o es el neto sin impuestos.
+    cierraSubtotal = [sumaRenglones, sumaRenglones - p.bonificacionImporte, sumaRenglones - impuestosEnRenglones].some(
+      (s) => Math.abs(s - p.subtotal) <= tolerancia,
+    );
     if (!cierraSubtotal) diferencias.push(`La suma de los renglones da ${pesos(sumaRenglones)} y el subtotal dice ${pesos(p.subtotal)}`);
   }
 
   const base = p.subtotal > 0 ? p.subtotal : sumaRenglones;
-  const agregados = suma(p.ivas.map((i) => i.importe)) + suma(p.percepciones.map((x) => x.importe)) + p.impuestosInternos + p.otrosImpuestos;
+  const agregados = impuestosEnRenglones + percepciones + p.otrosImpuestos;
   const bonificacion = p.bonificacionImporte || (p.bonificacionPct ? (base * p.bonificacionPct) / 100 : 0);
   const candidatos = [base - bonificacion + agregados, base + agregados];
+  // Renglones con impuestos incluidos y sin subtotal impreso: solo se suman las percepciones.
+  if (impuestosEnRenglones > 0) candidatos.push(sumaRenglones - p.bonificacionImporte + percepciones + p.otrosImpuestos);
   const sinImportes = p.total === 0 && sumaRenglones === 0;
   const cierraTotal = sinImportes || (p.total > 0 && candidatos.some((t) => Math.abs(t - p.total) <= tolerancia + 0.01 * (p.ivas.length + p.percepciones.length)));
   if (!cierraTotal)
