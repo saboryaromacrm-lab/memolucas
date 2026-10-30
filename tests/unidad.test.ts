@@ -228,3 +228,19 @@ describe("factura con impuestos incluidos en los renglones", async () => {
     expect(controlar(f).cierra).toBe(false);
   });
 });
+
+describe("datos del cliente", async () => {
+  const { sinDatosDelCliente } = await import("../src/lib/comprobantes.js");
+  const { facturaDePrueba } = await import("./fabrica.js");
+
+  it("se vacían sin cambiar el formato y se sacan las dudas sobre el receptor", () => {
+    const f = facturaDePrueba();
+    f.encabezado = { ...f.encabezado, cuitReceptor: "23356782429", razonSocialReceptor: "LORENZO LUCAS EMANUEL", condicionVentaImpresa: "Contado" };
+    f.dudas = ["El receptor impreso es LORENZO LUCAS EMANUEL, no Coffit", "La Percepc. Mun. figura en $0,00"];
+    const c = sinDatosDelCliente(f);
+    expect(c.encabezado).toMatchObject({ cuitReceptor: "", razonSocialReceptor: "", condicionVentaImpresa: "" });
+    expect(Object.keys(c.encabezado)).toEqual(Object.keys(f.encabezado));
+    expect(c.encabezado.razonSocialEmisor).toBe("Distribuidora del Café SA");
+    expect(c.dudas).toEqual(["La Percepc. Mun. figura en $0,00"]);
+  });
+});

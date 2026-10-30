@@ -71,6 +71,15 @@ export type Comprobante = z.infer<typeof EsquemaComprobante>;
 
 export const EsquemaComprobantes = z.object({ comprobantes: z.array(EsquemaComprobante) });
 
+/** Todo lo que se manda es de Coffit: los datos del cliente no se usan (van vacíos para no romper el formato). */
+export function sinDatosDelCliente(c: Comprobante): Comprobante {
+  return {
+    ...c,
+    encabezado: { ...c.encabezado, cuitReceptor: "", razonSocialReceptor: "", condicionVentaImpresa: "" },
+    dudas: c.dudas.filter((d) => !/\b(receptor|cliente)\b/i.test(d)),
+  };
+}
+
 const TOLERANCIA = 1;
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const suma = (ns: number[]) => ns.reduce((a, b) => a + b, 0);
