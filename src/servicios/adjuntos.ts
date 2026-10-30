@@ -14,11 +14,18 @@ const EXTENSIONES: Record<string, string> = {
   "image/gif": "gif",
 };
 export const MIMES_IMAGEN = Object.keys(EXTENSIONES);
+const EXTENSIONES_ARCHIVO: Record<string, string> = { ...EXTENSIONES, "application/pdf": "pdf" };
 
 export async function guardarImagen(datos: Buffer, mime: string) {
   if (!EXTENSIONES[mime]) throw new Error("Formato de imagen no soportado");
+  return guardarArchivo(datos, mime);
+}
+
+/** Imágenes y PDF (los comprobantes de compra pueden venir en PDF). */
+export async function guardarArchivo(datos: Buffer, mime: string) {
+  if (!EXTENSIONES_ARCHIVO[mime]) throw new Error("Formato de archivo no soportado");
   await fs.mkdir(rutas.media, { recursive: true });
-  const nombre = `${Date.now()}-${crypto.randomBytes(8).toString("hex")}.${EXTENSIONES[mime]}`;
+  const nombre = `${Date.now()}-${crypto.randomBytes(8).toString("hex")}.${EXTENSIONES_ARCHIVO[mime]}`;
   const ruta = path.join(rutas.media, nombre);
   await fs.writeFile(ruta, datos);
   const [fila] = await db.insert(adjunto).values({ rutaArchivo: ruta, mime, tamano: datos.length }).returning();
@@ -29,6 +36,16 @@ export async function guardarImagen(datos: Buffer, mime: string) {
 export async function imagenParaIa(datos: Buffer): Promise<{ datos: Buffer; mime: string }> {
   try {
     const salida = await sharp(datos).rotate().resize({ width: 1568, height: 1568, fit: "inside", withoutEnlargement: true }).jpeg({ quality: 85 }).toBuffer();
+    return { datos: salida, mime: "image/jpeg" };
+  } catch {
+    return { datos, mime: "image/jpeg" };
+  }
+}
+
+/** Para leer comprobantes: más resolución que la de imagenParaIa (los números son chicos). */
+export async function imagenParaComprobante(datos: Buffer): Promise<{ datos: Buffer; mime: string }> {
+  try {
+    const salida = await sharp(datos).rotate().resize({ width: 2400, height: 2400, fit: "inside", withoutEnlargement: true }).jpeg({ quality: 90 }).toBuffer();
     return { datos: salida, mime: "image/jpeg" };
   } catch {
     return { datos, mime: "image/jpeg" };

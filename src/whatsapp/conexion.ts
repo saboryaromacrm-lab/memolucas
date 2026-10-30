@@ -363,6 +363,12 @@ class ConexionWhatsApp implements Enviador {
     return this.enviarImagen(ruta, mime, epigrafe, jid);
   }
 
+  async reaccionar(msg: WAMessage, emoji: string): Promise<void> {
+    const sock = this.sock;
+    if (!sock || !this.conectado() || !msg.key.remoteJid) return;
+    await sock.sendMessage(msg.key.remoteJid, { react: { text: emoji, key: msg.key } });
+  }
+
   async descargarMedia(msg: WAMessage): Promise<Buffer> {
     const sock = this.sock;
     if (!sock) throw new Error("WhatsApp no está conectado");

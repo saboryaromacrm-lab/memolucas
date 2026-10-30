@@ -134,3 +134,50 @@ describe("votos de encuestas", async () => {
     (whatsapp as unknown as { sock: unknown }).sock = null;
   });
 });
+
+describe("controles de comprobantes", async () => {
+  const { controlar, claveDe, textoResumen } = await import("../src/lib/comprobantes.js");
+  const { facturaDePrueba } = await import("./fabrica.js");
+
+  it("una factura que cierra (descuento por renglón y renglón por bulto)", () => {
+    const r = controlar(facturaDePrueba());
+    expect(r.cierra).toBe(true);
+    expect(r.comprobante.controles.sumaRenglones).toBe(159000);
+    expect(textoResumen(r.comprobante, r.cierra)).toContain("Total *$ 197.160,00* ✅ cierra");
+  });
+
+  it("marca el renglón y el total que no cierran, sin corregir nada", () => {
+    const f = facturaDePrueba();
+    f.renglones[0].importe = 13500; // Se leyó mal un cero.
+    const r = controlar(f);
+    expect(r.cierra).toBe(false);
+    expect(r.comprobante.renglones[0].cierra).toBe(false);
+    expect(r.comprobante.renglones[0].importe).toBe(13500);
+    expect(r.comprobante.controles.cierraSubtotal).toBe(false);
+    expect(r.comprobante.controles.diferencias).toContain("Renglón 1");
+    expect(textoResumen(r.comprobante, r.cierra)).toContain("No cierra");
+  });
+
+  it("acepta la bonificación general y los redondeos de hasta $1", () => {
+    const f = facturaDePrueba();
+    f.pie = { ...f.pie, bonificacionPct: 10, bonificacionImporte: 15900, subtotal: 159000, ivas: [{ alicuota: 21, importe: 30051 }], percepciones: [], total: 173151.6 };
+    expect(controlar(f).cierra).toBe(true);
+  });
+
+  it("un remito sin precios cierra", () => {
+    const f = facturaDePrueba();
+    f.encabezado.tipo = "remito";
+    f.renglones = f.renglones.map((r) => ({ ...r, precioUnitario: 0, importe: 0, descuentos: [] }));
+    f.pie = { ...f.pie, subtotal: 0, ivas: [], percepciones: [], total: 0 };
+    expect(controlar(f).cierra).toBe(true);
+  });
+
+  it("la clave del comprobante ignora ceros y guiones", () => {
+    const a = facturaDePrueba();
+    const b = facturaDePrueba();
+    b.encabezado = { ...b.encabezado, cuitEmisor: "30712345678", puntoVenta: "12", numero: "4567" };
+    expect(claveDe(a)).toBe(claveDe(b));
+    b.encabezado.numero = "4568";
+    expect(claveDe(a)).not.toBe(claveDe(b));
+  });
+});

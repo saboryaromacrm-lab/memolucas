@@ -1,3 +1,4 @@
+import { INSTRUCTIVO_COMPRAS } from "../../bot/instructivo-compras.js";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { cambiarPin } from "./auth.js";
@@ -48,12 +49,19 @@ const Cambios = z
     audioModelo: z.string().trim().min(3).max(80),
     audioMaxSegundos: z.number().int().min(10).max(600),
     usarEncuestas: z.boolean(),
+    comprasModelo: z.string().trim().min(3).max(80),
+    comprasModeloReintento: z.string().trim().max(80),
+    comprasInstructivo: z.string().max(100_000),
+    comprasEsperaSeg: z.number().int().min(0).max(600),
+    comprasDiasArchivo: z.number().int().min(1).max(3650),
+    erpUrl: z.union([z.literal(""), z.url({ protocol: /^https?$/ })]),
+    erpEnvioAuto: z.boolean(),
   })
   .partial();
 
 export async function configPublica() {
   const cfg = await obtenerConfig();
-  const { iaApiKeyCifrada, groqApiKeyCifrada, ...resto } = cfg;
+  const { iaApiKeyCifrada, groqApiKeyCifrada, erpTokenCifrado, ...resto } = cfg;
   return {
     ...resto,
     apiKeyPropia: !!iaApiKeyCifrada,
@@ -64,6 +72,8 @@ export async function configPublica() {
     modelos: MODELOS,
     esfuerzos: ESFUERZOS,
     plantillasDefecto: PLANTILLAS_DEFECTO,
+    erpTokenCargado: !!erpTokenCifrado,
+    instructivoComprasDefecto: INSTRUCTIVO_COMPRAS,
   };
 }
 
@@ -94,6 +104,13 @@ export const rutasConfiguracion: FastifyPluginAsync = async (app) => {
     if (clave && !/^gsk_[\x21-\x7e]+$/.test(clave))
       throw new ErrorUsuario("Eso no parece una API key de Groq (empieza con gsk_). Copiala con el botón de copiar.");
     await actualizarConfig({ groqApiKeyCifrada: clave ? cifrar(clave) : null });
+    return configPublica();
+  });
+
+  app.put("/configuracion/erp-token", async (req) => {
+    const { token } = z.object({ token: z.string().trim().max(2000).nullable() }).parse(req.body);
+    if (token && !/^[\x21-\x7e]+$/.test(token)) throw new ErrorUsuario("La clave tiene caracteres raros: copiala de nuevo.");
+    await actualizarConfig({ erpTokenCifrado: token ? cifrar(token) : null });
     return configPublica();
   });
 

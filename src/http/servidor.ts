@@ -13,6 +13,7 @@ import { entorno } from "../entorno.js";
 import { ErrorUsuario } from "../servicios/recordatorios.js";
 import { versionSesionActual } from "./rutas/auth.js";
 import { rutasAuth } from "./rutas/auth.js";
+import { rutasCompras } from "./rutas/compras.js";
 import { rutasConfiguracion } from "./rutas/configuracion.js";
 import { rutasEventos } from "./rutas/eventos.js";
 import { rutasNotas } from "./rutas/notas.js";
@@ -87,6 +88,7 @@ export async function crearServidor() {
       await privado.register(rutasWhatsapp);
       await privado.register(rutasPanel);
       await privado.register(rutasNotas);
+      await privado.register(rutasCompras);
       await privado.register(rutasEventos);
     },
     { prefix: "/api" },

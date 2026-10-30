@@ -12,6 +12,7 @@ const SECCIONES = [
   ["resumen", "Resumen diario"],
   ["ia", "IA"],
   ["audios", "Audios"],
+  ["compras", "Compras"],
   ["mensajes", "Mensajes"],
   ["seguridad", "Seguridad"],
   ["respaldo", "Respaldo"],
@@ -54,6 +55,13 @@ const EDITABLES = [
   "audioModelo",
   "audioMaxSegundos",
   "usarEncuestas",
+  "comprasModelo",
+  "comprasModeloReintento",
+  "comprasInstructivo",
+  "comprasEsperaSeg",
+  "comprasDiasArchivo",
+  "erpUrl",
+  "erpEnvioAuto",
 ] as const;
 type Editable = Pick<Cfg, (typeof EDITABLES)[number]>;
 
@@ -195,6 +203,8 @@ export function Configuracion() {
           {seccion === "ia" && <SeccionIA datos={datos} form={form} set={set} recargar={recargar} />}
 
           {seccion === "audios" && <SeccionAudios datos={datos} form={form} set={set} recargar={recargar} />}
+
+          {seccion === "compras" && <SeccionCompras datos={datos} form={form} set={set} recargar={recargar} />}
 
           {seccion === "mensajes" && (
             <>
@@ -556,6 +566,101 @@ function SeccionAudios({
           <Campo etiqueta="Duración máxima (segundos)">
             <Numero valor={form.audioMaxSegundos} min={10} onChange={(v) => set("audioMaxSegundos", v)} />
           </Campo>
+        </div>
+      </Tarjeta>
+    </>
+  );
+}
+
+function SeccionCompras({
+  datos,
+  form,
+  set,
+  recargar,
+}: {
+  datos: Cfg;
+  form: Editable;
+  set: <K extends keyof Editable>(k: K, v: Editable[K]) => void;
+  recargar: () => Promise<void>;
+}) {
+  const accion = useAccion();
+  const [token, setToken] = useState("");
+  const modelo = (k: "comprasModelo" | "comprasModeloReintento", vacio?: string) => (
+    <select className="campo" value={form[k]} onChange={(e) => set(k, e.target.value)}>
+      {vacio !== undefined && <option value="">{vacio}</option>}
+      {datos.modelos.map((m) => (
+        <option key={m.id} value={m.id}>
+          {m.nombre}
+        </option>
+      ))}
+    </select>
+  );
+  return (
+    <>
+      <Tarjeta
+        titulo="Lectura de comprobantes"
+        texto="Facturas, remitos y tickets de proveedores. Se leen en el grupo marcado como “de compras” (en WhatsApp) o por privado con “factura” en el pie o en PDF."
+      >
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Campo etiqueta="Modelo para leer" ayuda="Sonnet lee bien los números chicos a buen precio.">
+            {modelo("comprasModelo")}
+          </Campo>
+          <Campo etiqueta="Si las cuentas no cierran, releer con" ayuda="Se queda con la lectura que tenga menos diferencias.">
+            {modelo("comprasModeloReintento", "No releer")}
+          </Campo>
+          <Campo etiqueta="Espera para juntar hojas (segundos)" ayuda="Las fotos de la misma persona que llegan dentro de este tiempo se leen juntas.">
+            <Numero valor={form.comprasEsperaSeg} min={0} onChange={(v) => set("comprasEsperaSeg", v)} />
+          </Campo>
+          <Campo etiqueta="Días que se guardan las fotos y PDF" ayuda="Después se borran; los datos quedan siempre.">
+            <Numero valor={form.comprasDiasArchivo} min={1} onChange={(v) => set("comprasDiasArchivo", v)} />
+          </Campo>
+        </div>
+      </Tarjeta>
+      <Tarjeta titulo="Instructivo para la IA" texto="Cómo tiene que leer los comprobantes. El formato del JSON se mantiene fijo para que el ERP lo pueda cargar.">
+        <textarea
+          className="campo min-h-80 font-mono text-xs"
+          value={form.comprasInstructivo || datos.instructivoComprasDefecto}
+          onChange={(e) => set("comprasInstructivo", e.target.value)}
+        />
+        {form.comprasInstructivo && form.comprasInstructivo !== datos.instructivoComprasDefecto && (
+          <button className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-800" onClick={() => set("comprasInstructivo", "")}>
+            <RotateCcw className="size-3" /> Restaurar original
+          </button>
+        )}
+      </Tarjeta>
+      <Tarjeta
+        titulo="Envío al ERP"
+        texto="Al confirmar un comprobante, se manda por POST a esta dirección con el JSON { comprobantes: [...] }. Sin dirección, quedan en Compras para copiar o descargar."
+      >
+        <Campo etiqueta="Dirección (URL)">
+          <input className="campo font-mono text-xs" placeholder="https://api.saboryaroma.com/…" value={form.erpUrl} onChange={(e) => set("erpUrl", e.target.value.trim())} />
+        </Campo>
+        <Interruptor activo={form.erpEnvioAuto} onChange={(v) => set("erpEnvioAuto", v)} etiqueta="Mandarlo solo al confirmar" ayuda="Si lo apagás, se manda desde Compras con “Enviar al ERP”." />
+        <div>
+          <label className="etiqueta">Clave del ERP (opcional)</label>
+          <p className="mb-2 text-xs text-slate-500">
+            {datos.erpTokenCargado ? "Hay una clave cargada (guardada cifrada). Va como “Authorization: Bearer …”." : "Sin clave. Si el ERP pide una, cargala acá."}
+          </p>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <input className="campo font-mono text-xs" type="password" placeholder="Clave o token" value={token} onChange={(e) => setToken(e.target.value)} autoComplete="off" />
+            <Boton
+              icono={<KeyRound className="size-4" />}
+              disabled={!token.trim()}
+              onClick={async () => {
+                if (await accion(() => put("/api/configuracion/erp-token", { token }), "Clave del ERP guardada")) {
+                  setToken("");
+                  await recargar();
+                }
+              }}
+            >
+              Guardar
+            </Boton>
+            {datos.erpTokenCargado && (
+              <Boton variante="peligro" onClick={async () => (await accion(() => put("/api/configuracion/erp-token", { token: null }), "Clave quitada")) && recargar()}>
+                Quitar
+              </Boton>
+            )}
+          </div>
         </div>
       </Tarjeta>
     </>

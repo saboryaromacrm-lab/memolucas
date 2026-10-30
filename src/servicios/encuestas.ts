@@ -6,6 +6,7 @@ import { encuesta, type AccionEncuesta, type Configuracion } from "../db/schema.
 /** Opciones de un aviso: hecho o posponer. */
 export const opcionesAviso = (cfg: Configuracion) => ["✅ Hecho", "⏰ En 15 min", "⏰ En 1 h", `📅 Mañana a las ${cfg.horaDefecto}`];
 export const OPCIONES_PROPUESTA = ["✅ Dale", "✏️ Otra fecha", "❌ No"];
+export const OPCIONES_COMPROBANTE = ["✅ Confirmar", "✏️ Corregir", "❌ Descartar"];
 
 export async function registrarEncuesta(e: { waMessageId: string; chat: string | null; secreto: string; opciones: string[]; accion: AccionEncuesta }) {
   const [fila] = await db.insert(encuesta).values(e).onConflictDoNothing().returning();
