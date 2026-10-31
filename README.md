@@ -27,6 +27,14 @@ Le escribís al bot como a una persona (*"recordame mañana a las 10 pagar la lu
   - Avisa si el comprobante ya estaba cargado.
   - Al confirmar lo manda por POST al ERP (`{ comprobantes: [...] }`, con la clave como `Authorization: Bearer`). Sin dirección, queda en el panel para copiar o descargar el JSON.
   - Las fotos y PDF se borran a los 30 días (configurable); los datos quedan. Todo se configura en Configuración → Compras, incluso el instructivo.
+- **Panel de compras de Coffit** (en `comprascoff.saboryaroma.com`, aparte de Memolucas, pensado para el celular):
+  - cada persona entra con su propia clave, que se da de alta desde Memolucas (Configuración → Compras → Personas con acceso);
+  - saca foto a la factura (o elige de la galería o sube un PDF), agrega las hojas que haga falta y toca "Leer factura";
+  - la lectura es la misma que la del bot (instructivo, controles, relectura, repetidos) y corre en segundo plano: se puede seguir cargando;
+  - sin señal, las fotos quedan guardadas en el celular y se suben solas al volver la conexión;
+  - para corregir: escribir qué está mal (lo aplica la IA) o editar los datos en un formulario; después confirmar (se manda al ERP) o descartar;
+  - colores de Coffit (marrón, naranja y beige); el logo se sube desde Memolucas y también arma el ícono de la app;
+  - las facturas del panel y las del grupo de WhatsApp son una sola lista.
 - **Notas cifradas**: *"anotá que la clave del wifi es…"*, *"anotá comprar leche y pan"*, *"¿cuál era la clave del wifi?"*.
 - **Editar, borrar, pausar y reanudar**: *"cambiá lo del dentista a las 11"*, *"borrá lo de la basura"*.
 - **Comandos rápidos sin IA**: `hoy`, `mañana`, `semana`, `lista`, `listo`, `ayuda`, `silencio 2h` / `silencio off`.

@@ -6,6 +6,7 @@ import { crearServidor } from "./http/servidor.js";
 import { logger, registrar } from "./lib/log.js";
 import { obtenerConfig } from "./servicios/configuracion.js";
 import { fijarEnviador } from "./servicios/enviador.js";
+import { retomarLecturas } from "./servicios/panel-compras.js";
 import { barrer, detenerScheduler, iniciarScheduler } from "./servicios/scheduler.js";
 import { whatsapp } from "./whatsapp/conexion.js";
 
@@ -38,8 +39,9 @@ async function arrancar() {
   whatsapp.onConectado(() => setTimeout(() => void barrer(), 5000));
   whatsapp.iniciar().catch((err) => void registrar("error", "whatsapp", "No se pudo iniciar WhatsApp", err));
 
-  // 5) Lo que debió dispararse mientras la app estaba apagada.
+  // 5) Lo que debió dispararse mientras la app estaba apagada, y las facturas que quedaron a medio leer.
   void barrer();
+  void retomarLecturas();
   await registrar("info", "sistema", "Memolucas arrancó");
 
   let cerrando = false;

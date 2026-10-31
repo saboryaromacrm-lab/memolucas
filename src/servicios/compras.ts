@@ -48,6 +48,7 @@ export async function buscarDuplicado(c: Comprobante, sinId?: number): Promise<F
 export async function guardarComprobante(d: {
   chat: string | null;
   autor: string | null;
+  origen?: FilaComprobante["origen"];
   datos: Comprobante;
   cierra: boolean;
   modelo: string | null;
@@ -58,6 +59,7 @@ export async function guardarComprobante(d: {
     .values({
       chat: d.chat,
       autor: d.autor,
+      origen: d.origen ?? "whatsapp",
       estado: d.cierra ? "pendiente" : "revisar",
       modelo: d.modelo,
       adjuntoIds: d.adjuntoIds,

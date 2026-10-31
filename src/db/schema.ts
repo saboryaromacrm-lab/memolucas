@@ -100,6 +100,11 @@ export const configuracion = pgTable("configuracion", {
   erpUrl: text("erp_url").notNull().default(""),
   erpTokenCifrado: text("erp_token_cifrado"),
   erpEnvioAuto: boolean("erp_envio_auto").notNull().default(true),
+  /** Panel de compras (para el colaborador): su dirección, su logo y su bloqueo por intentos. */
+  comprasDominio: text("compras_dominio").notNull().default("comprascoff.saboryaroma.com"),
+  comprasLogoAdjuntoId: integer("compras_logo_adjunto_id"),
+  comprasIntentosFallidos: integer("compras_intentos_fallidos").notNull().default(0),
+  comprasBloqueadoHasta: ts("compras_bloqueado_hasta"),
 
   actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
 });
@@ -282,6 +287,8 @@ export type Adjunto = typeof adjunto.$inferSelect;
 export type Nota = typeof nota.$inferSelect;
 export type Grupo = typeof grupo.$inferSelect;
 export type FilaComprobante = typeof comprobante.$inferSelect;
+export type UsuarioCompras = typeof usuarioCompras.$inferSelect;
+export type LecturaCompras = typeof lecturaCompras.$inferSelect;
 
 /** Comprobantes de compra leídos con IA. Los datos (el JSON del instructivo) van cifrados. */
 export const comprobante = pgTable(
@@ -290,6 +297,8 @@ export const comprobante = pgTable(
     id: serial("id").primaryKey(),
     chat: text("chat"),
     autor: text("autor"),
+    /** Por dónde llegó: el bot de WhatsApp o el panel de compras. */
+    origen: text("origen").$type<"whatsapp" | "panel">().notNull().default("whatsapp"),
     estado: text("estado").$type<"pendiente" | "revisar" | "confirmado" | "descartado">().notNull(),
     datosCifrados: text("datos_cifrados").notNull(),
     /** Hash para detectar el mismo comprobante cargado dos veces. */
@@ -311,4 +320,38 @@ export const comprobante = pgTable(
     actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
   },
   (t) => [index("comprobante_clave_idx").on(t.clave), index("comprobante_creado_idx").on(t.creadoEn)],
+);
+
+/** Personas que entran al panel de compras, cada una con su clave. */
+export const usuarioCompras = pgTable("usuario_compras", {
+  id: serial("id").primaryKey(),
+  nombre: text("nombre").notNull(),
+  claveHash: text("clave_hash").notNull(),
+  activo: boolean("activo").notNull().default(true),
+  // Se incrementa al cambiar la clave o desactivarla: cierra sus sesiones.
+  version: integer("version").notNull().default(1),
+  ultimoIngreso: ts("ultimo_ingreso"),
+  creadoEn: creadoEn(),
+});
+
+/** Fotos o PDF subidos desde el panel de compras mientras se leen (o si la lectura falló). */
+export const lecturaCompras = pgTable(
+  "lectura_compras",
+  {
+    id: serial("id").primaryKey(),
+    /** Lo genera el celular: si se reintenta la subida, no se duplica. */
+    clienteId: text("cliente_id").notNull(),
+    usuarioId: integer("usuario_id"),
+    autor: text("autor"),
+    estado: text("estado").$type<"leyendo" | "lista" | "error" | "repetido" | "vacia">().notNull().default("leyendo"),
+    adjuntoIds: integer("adjunto_ids").array().notNull().default([]),
+    nombres: text("nombres").array().notNull().default([]),
+    comprobanteIds: integer("comprobante_ids").array().notNull().default([]),
+    mensaje: text("mensaje"),
+    /** El aviso (error, repetido) ya se vio y se cerró. */
+    cerrada: boolean("cerrada").notNull().default(false),
+    creadoEn: creadoEn(),
+    actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("lectura_cliente_idx").on(t.clienteId)],
 );

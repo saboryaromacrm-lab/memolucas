@@ -56,6 +56,7 @@ const Cambios = z
     comprasDiasArchivo: z.number().int().min(1).max(3650),
     erpUrl: z.union([z.literal(""), z.url({ protocol: /^https?$/ })]),
     erpEnvioAuto: z.boolean(),
+    comprasDominio: z.string().trim().toLowerCase().regex(/^[a-z0-9.-]{3,100}$/, "Escribí solo la dirección, ej. comprascoff.saboryaroma.com"),
   })
   .partial();
 

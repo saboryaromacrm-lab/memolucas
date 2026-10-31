@@ -121,6 +121,8 @@ export type Configuracion = {
   erpEnvioAuto: boolean;
   erpTokenCargado: boolean;
   instructivoComprasDefecto: string;
+  comprasDominio: string;
+  comprasLogoAdjuntoId: number | null;
   groqKeyPropia: boolean;
   groqKeyEntorno: boolean;
   apiKeyPropia: boolean;
@@ -182,6 +184,7 @@ export type Compra = {
   modelo: string | null;
   archivos: { url: string; mime: string }[];
   archivosBorrados: boolean;
+  origen: "whatsapp" | "panel";
   confirmadoEn: string | null;
   enviadoEn: string | null;
   envioError: string | null;
