@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import fs from "node:fs/promises";
 import type { WAMessage } from "baileys";
 import { and, desc, eq, gt } from "drizzle-orm";
 import { DateTime } from "luxon";
@@ -17,7 +16,7 @@ import {
 } from "../db/schema.js";
 import { ahora, aLocal, formatearCuando } from "../lib/fechas.js";
 import { registrar } from "../lib/log.js";
-import { borrarAdjunto, guardarArchivo, guardarImagen, imagenParaComprobante, imagenParaIa, MIMES_IMAGEN } from "../servicios/adjuntos.js";
+import { borrarAdjunto, guardarArchivo, guardarImagen, imagenParaIa, MIMES_IMAGEN } from "../servicios/adjuntos.js";
 import { actualizarConfig, obtenerConfig, plantillasDe, renderizar } from "../servicios/configuracion.js";
 import { listarRango } from "./rangos.js";
 import { rangoHoy, rangoManana, rangoSemana, textoListado, textoTodos } from "../servicios/listados.js";
@@ -57,10 +56,8 @@ import {
   OPCIONES_PROPUESTA,
   registrarEncuesta,
 } from "../servicios/encuestas.js";
-import { controlar, textoResumen, tituloComprobante, type Comprobante } from "../lib/comprobantes.js";
+import { textoResumen, tituloComprobante, type Comprobante } from "../lib/comprobantes.js";
 import {
-  actualizarDatos,
-  buscarDuplicado,
   comprobanteEnCorreccion,
   comprobantePorMensaje,
   confirmarComprobante,
@@ -68,11 +65,9 @@ import {
   empezarCorreccion,
   esGrupoCompras,
   fijarMensaje,
-  guardarComprobante,
-  leerDatos,
   obtenerComprobante,
 } from "../servicios/compras.js";
-import { corregirComprobante, leerComprobantes, type ArchivoParaIa } from "./ia-compras.js";
+import { corregirConTexto, leerYGuardar, textoRepetido } from "../servicios/lectura-compras.js";
 import { cuandoBonito, textoPrevios } from "./formato.js";
 import { frases, sinFormato } from "./frases.js";
 
@@ -467,69 +462,20 @@ export class Procesador {
     await Promise.all([...this.leyendo]);
   }
 
-  private async archivosParaIa(archivos: { adjuntoId: number; nombre: string }[]): Promise<ArchivoParaIa[]> {
-    const salida: ArchivoParaIa[] = [];
-    for (const a of archivos) {
-      const adj = await obtenerAdjunto(a.adjuntoId);
-      if (!adj) continue;
-      const datos = await fs.readFile(adj.rutaArchivo).catch(() => null);
-      if (!datos) continue;
-      if (adj.mime === "application/pdf") salida.push({ nombre: a.nombre, mime: adj.mime, datos });
-      else salida.push({ nombre: a.nombre, ...(await imagenParaComprobante(datos)) });
-    }
-    return salida;
-  }
-
   private async leerLote(archivos: ArchivoLote[]) {
-    const cfg = await obtenerConfig();
-    const paraIa = await this.archivosParaIa(archivos);
-    let lectura: ReturnType<typeof controlar>[];
-    let modelo = cfg.comprasModelo;
+    let resultados: Awaited<ReturnType<typeof leerYGuardar>>;
     try {
-      lectura = (await leerComprobantes(cfg, paraIa, modelo)).map(controlar);
+      resultados = await leerYGuardar(archivos, { chat: chat(), autor: contexto.getStore()?.autor ?? null, origen: "whatsapp" });
     } catch (err) {
       if (err instanceof ErrorIA && /API key/i.test(err.message))
         return this.decir("Me falta la clave de Claude para leer comprobantes. Cargala en el panel (Configuración → IA).");
       return this.decir("No pude leer el comprobante 😕. ¿Me lo mandás de nuevo? Que se vea entero, derecho y con buena luz.", { intencion: "error_ia" });
     }
-    // Si las cuentas no cierran, se vuelve a leer con el modelo más potente y queda la lectura con menos diferencias.
-    const fallas = (l: typeof lectura) => l.reduce((t, x) => t + x.fallas, 0);
-    if (lectura.some((x) => !x.cierra) && cfg.comprasModeloReintento) {
-      const aviso = lectura.flatMap((x) => (x.cierra ? [] : [x.comprobante.controles.diferencias])).join(". ");
-      try {
-        const otra = (await leerComprobantes(cfg, paraIa, cfg.comprasModeloReintento, aviso)).map(controlar);
-        if (otra.length && fallas(otra) <= fallas(lectura)) {
-          lectura = otra;
-          modelo = cfg.comprasModeloReintento;
-        }
-      } catch {
-        // Queda la primera lectura.
-      }
+    if (!resultados.length) return this.decir("No encontré ningún comprobante en eso 🤔. Mandame la foto o el PDF de la factura, remito o ticket.");
+    for (const r of resultados) {
+      if (r.tipo === "repetido") await this.decir(`⚠️ Ese comprobante ya estaba cargado: ${textoRepetido(r)}. No lo cargo de nuevo.`, { intencion: "comprobante_repetido" });
+      else await this.mostrarComprobante(r.fila, r.datos);
     }
-    if (!lectura.length) {
-      for (const a of archivos) await borrarAdjunto(a.adjuntoId);
-      return this.decir("No encontré ningún comprobante en eso 🤔. Mandame la foto o el PDF de la factura, remito o ticket.");
-    }
-    const usados = new Set<number>();
-    for (const x of lectura) {
-      const repetido = await buscarDuplicado(x.comprobante);
-      if (repetido) {
-        const d = leerDatos(repetido);
-        await this.decir(
-          `⚠️ Ese comprobante ya estaba cargado: *${tituloComprobante(d)}* de ${d.encabezado.razonSocialEmisor || "proveedor sin nombre"}${
-            repetido.autor ? `, lo mandó ${repetido.autor}` : ""
-          } el ${aLocal(repetido.creadoEn).toFormat("dd/MM")}. No lo cargo de nuevo.`,
-          { intencion: "comprobante_repetido" },
-        );
-        continue;
-      }
-      const propios = archivos.filter((a) => x.comprobante.archivo.includes(a.nombre));
-      const ids = (propios.length ? propios : archivos).map((a) => a.adjuntoId);
-      ids.forEach((id) => usados.add(id));
-      const fila = await guardarComprobante({ chat: chat(), autor: contexto.getStore()?.autor ?? null, datos: x.comprobante, cierra: x.cierra, modelo, adjuntoIds: ids });
-      await this.mostrarComprobante(fila, x.comprobante);
-    }
-    for (const a of archivos) if (!usados.has(a.adjuntoId)) await borrarAdjunto(a.adjuntoId);
   }
 
   /** Resumen del comprobante y la encuesta para confirmarlo. */
@@ -595,15 +541,12 @@ export class Procesador {
   }
 
   private async corregirCompra(fila: FilaComprobante, correccion: string) {
-    const cfg = await obtenerConfig();
-    const archivos = fila.archivosBorrados ? [] : await this.archivosParaIa(fila.adjuntoIds.map((id) => ({ adjuntoId: id, nombre: `archivo-${id}` })));
-    let nuevo: Comprobante;
+    let r: Awaited<ReturnType<typeof corregirConTexto>>;
     try {
-      nuevo = await corregirComprobante(cfg, leerDatos(fila), correccion, archivos);
+      r = await corregirConTexto(fila, correccion);
     } catch {
       return this.decir(frases.errorTecnico());
     }
-    const r = await actualizarDatos(fila.id, nuevo);
     await this.mostrarComprobante(r.fila, r.datos);
   }
 

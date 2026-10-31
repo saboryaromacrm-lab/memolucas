@@ -135,6 +135,7 @@ export function Compras() {
                   <span className="mt-0.5 block truncate text-xs text-slate-500">
                     {c.titulo} · {fechaCorta(c.fecha)} · {c.renglones} renglón{c.renglones === 1 ? "" : "es"}
                     {c.autor && ` · ${c.autor}`}
+                    {c.origen === "panel" && " · Panel de compras"}
                   </span>
                 </span>
                 <span className="shrink-0 text-right">
@@ -237,7 +238,7 @@ function Detalle({ id, onCerrar }: { id: number; onCerrar: () => void }) {
               </p>
             )}
             <dl className="space-y-1 text-xs text-slate-500">
-              <div>Cargado {fechaHora(c.creadoEn)}{c.autor ? ` por ${c.autor}` : ""}{c.grupoNombre ? ` en ${c.grupoNombre}` : ""}</div>
+              <div>Cargado {fechaHora(c.creadoEn)}{c.autor ? ` por ${c.autor}` : ""}{c.grupoNombre ? ` en ${c.grupoNombre}` : ""}{c.origen === "panel" ? " desde el panel de compras" : ""}</div>
               {c.modelo && <div>Leído con {c.modelo}</div>}
               {c.enviadoEn && <div className="text-marca-profundo">Enviado al ERP {fechaHora(c.enviadoEn)}</div>}
               {c.envioError && <div className="text-red-600">Último error al enviar: {c.envioError}</div>}

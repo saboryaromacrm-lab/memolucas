@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { and, inArray, isNotNull, lt, notInArray, sql } from "drizzle-orm";
+import { and, inArray, isNotNull, lt, ne, notInArray, sql } from "drizzle-orm";
 import { PgBoss } from "pg-boss";
 import { db } from "../db/index.js";
 import { adjunto, borradorPendiente, recordatorio } from "../db/schema.js";
@@ -56,10 +56,19 @@ async function mantenimiento() {
     .select({ id: recordatorio.adjuntoId })
     .from(recordatorio)
     .where(and(isNotNull(recordatorio.adjuntoId), inArray(recordatorio.estado, ["activo", "pausado"])));
+  // Los archivos de compras tienen su propio plazo, y el logo del panel de compras no se borra.
+  const deCompras = sql`select unnest(adjunto_ids) from comprobante union select unnest(adjunto_ids) from lectura_compras`;
   const viejos = await db
     .select()
     .from(adjunto)
-    .where(and(lt(adjunto.creadoEn, limite), notInArray(adjunto.id, sql`(${enUso})`)));
+    .where(
+      and(
+        lt(adjunto.creadoEn, limite),
+        notInArray(adjunto.id, sql`(${enUso})`),
+        notInArray(adjunto.id, sql`(${deCompras})`),
+        cfg.comprasLogoAdjuntoId ? ne(adjunto.id, cfg.comprasLogoAdjuntoId) : undefined,
+      ),
+    );
   for (const a of viejos) {
     await fs.rm(a.rutaArchivo, { force: true });
     await db.delete(adjunto).where(sql`${adjunto.id} = ${a.id}`);

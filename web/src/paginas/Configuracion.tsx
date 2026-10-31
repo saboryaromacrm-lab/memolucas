@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Download, KeyRound, PlugZap, RotateCcw, Save, Upload } from "lucide-react";
+import { Download, ExternalLink, KeyRound, PlugZap, RotateCcw, Save, Trash2, Upload, UserPlus } from "lucide-react";
 import { Boton, Cargando, Encabezado, Interruptor, useAccion, useAviso } from "../componentes/ui";
-import { post, put } from "../lib/api";
+import { api, del, post, put } from "../lib/api";
 import type { Configuracion as Cfg, Plantillas } from "../lib/tipos";
 import { useDatos } from "../lib/vivo";
 
@@ -62,6 +62,7 @@ const EDITABLES = [
   "comprasDiasArchivo",
   "erpUrl",
   "erpEnvioAuto",
+  "comprasDominio",
 ] as const;
 type Editable = Pick<Cfg, (typeof EDITABLES)[number]>;
 
@@ -597,6 +598,7 @@ function SeccionCompras({
   );
   return (
     <>
+      <PanelCompras datos={datos} form={form} set={set} recargar={recargar} />
       <Tarjeta
         titulo="Lectura de comprobantes"
         texto="Facturas, remitos y tickets de proveedores. Se leen en el grupo marcado como “de compras” (en WhatsApp) o por privado con “factura” en el pie o en PDF."
@@ -661,6 +663,126 @@ function SeccionCompras({
               </Boton>
             )}
           </div>
+        </div>
+      </Tarjeta>
+    </>
+  );
+}
+
+type PersonaCompras = { id: number; nombre: string; activo: boolean; ultimoIngreso: string | null };
+
+/** El panel de compras de Coffit (para el colaborador): dirección, logo y quién entra. */
+function PanelCompras({
+  datos,
+  form,
+  set,
+  recargar,
+}: {
+  datos: Cfg;
+  form: Editable;
+  set: <K extends keyof Editable>(k: K, v: Editable[K]) => void;
+  recargar: () => Promise<void>;
+}) {
+  const accion = useAccion();
+  const { datos: personas, recargar: recargarPersonas } = useDatos<PersonaCompras[]>("/api/compras-usuarios", ["configuracion"]);
+  const [nombre, setNombre] = useState("");
+  const [clave, setClave] = useState("");
+  const archivo = useRef<HTMLInputElement>(null);
+  const url = `https://${datos.comprasDominio}`;
+  return (
+    <>
+      <Tarjeta titulo="Panel de compras" texto="Un panel aparte, solo de compras de Coffit, para cargar facturas sacándoles foto desde el celular.">
+        <Campo etiqueta="Dirección del panel" ayuda="Tiene que estar agregada como dominio en Dokploy (misma app, puerto 3000).">
+          <input className="campo font-mono text-xs" value={form.comprasDominio} onChange={(e) => set("comprasDominio", e.target.value.trim().toLowerCase())} />
+        </Campo>
+        <a href={url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-sm font-medium text-marca-profundo hover:underline">
+          Abrir {datos.comprasDominio} <ExternalLink className="size-3.5" />
+        </a>
+        <div>
+          <label className="etiqueta">Logo</label>
+          <div className="flex flex-wrap items-center gap-3">
+            {datos.comprasLogoAdjuntoId ? (
+              <img src={`/api/adjuntos/${datos.comprasLogoAdjuntoId}`} alt="Logo" className="h-14 rounded-lg border border-slate-200 bg-[#3b2416] p-2" />
+            ) : (
+              <span className="text-sm text-slate-500">Sin logo (se ve “Coffit” escrito).</span>
+            )}
+            <input
+              ref={archivo}
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              className="hidden"
+              onChange={async (e) => {
+                const f = e.target.files?.[0];
+                e.target.value = "";
+                if (!f) return;
+                const datosForm = new FormData();
+                datosForm.append("logo", f);
+                if (await accion(() => api("/api/configuracion/compras-logo", { formulario: datosForm }), "Logo cargado")) await recargar();
+              }}
+            />
+            <Boton chico icono={<Upload className="size-3.5" />} onClick={() => archivo.current?.click()}>
+              {datos.comprasLogoAdjuntoId ? "Cambiar" : "Subir logo"}
+            </Boton>
+            {datos.comprasLogoAdjuntoId && (
+              <Boton chico variante="peligro" onClick={async () => (await accion(() => del("/api/configuracion/compras-logo"), "Logo quitado")) && recargar()}>
+                Quitar
+              </Boton>
+            )}
+          </div>
+          <p className="mt-1 text-xs text-slate-500">Mejor en PNG con fondo transparente. También se usa para el ícono de la app en el celular.</p>
+        </div>
+      </Tarjeta>
+
+      <Tarjeta titulo="Personas con acceso" texto="Cada una entra al panel de compras con su propia clave (4 a 8 números). Pueden cargar, corregir y confirmar facturas.">
+        {personas?.length ? (
+          <ul className="divide-y divide-slate-100">
+            {personas.map((p) => (
+              <li key={p.id} className="flex flex-wrap items-center gap-3 py-2">
+                <span className="min-w-0 flex-1">
+                  <span className={`block text-sm font-medium ${p.activo ? "text-slate-800" : "text-slate-400 line-through"}`}>{p.nombre}</span>
+                  <span className="block text-xs text-slate-500">{p.ultimoIngreso ? `Entró por última vez el ${new Date(p.ultimoIngreso).toLocaleString("es-AR")}` : "Todavía no entró"}</span>
+                </span>
+                <Boton
+                  chico
+                  icono={<KeyRound className="size-3.5" />}
+                  onClick={async () => {
+                    const nueva = prompt(`Nueva clave para ${p.nombre} (4 a 8 números):`);
+                    if (nueva && (await accion(() => put(`/api/compras-usuarios/${p.id}`, { clave: nueva.trim() }), "Clave cambiada"))) await recargarPersonas();
+                  }}
+                >
+                  Clave
+                </Boton>
+                <Interruptor activo={p.activo} onChange={async (v) => (await accion(() => put(`/api/compras-usuarios/${p.id}`, { activo: v }), v ? "Activada" : "Desactivada")) && recargarPersonas()} />
+                <button
+                  aria-label="Borrar"
+                  className="rounded-lg p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600"
+                  onClick={async () => confirm(`¿Borrar a ${p.nombre}?`) && (await accion(() => del(`/api/compras-usuarios/${p.id}`), "Borrada")) && recargarPersonas()}
+                >
+                  <Trash2 className="size-4" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-sm text-slate-500">Todavía no hay nadie. Agregá a tu colaborador acá abajo.</p>
+        )}
+        <div className="grid gap-2 sm:grid-cols-[1fr_10rem_auto]">
+          <input className="campo" placeholder="Nombre (ej. Martín)" value={nombre} onChange={(e) => setNombre(e.target.value)} />
+          <input className="campo tracking-widest" inputMode="numeric" maxLength={8} placeholder="Clave" value={clave} onChange={(e) => setClave(e.target.value.replace(/\D/g, ""))} />
+          <Boton
+            variante="primario"
+            icono={<UserPlus className="size-4" />}
+            disabled={!nombre.trim() || clave.length < 4}
+            onClick={async () => {
+              if (await accion(() => post("/api/compras-usuarios", { nombre, clave }), `Listo: ${nombre.trim()} ya puede entrar`)) {
+                setNombre("");
+                setClave("");
+                await recargarPersonas();
+              }
+            }}
+          >
+            Agregar
+          </Boton>
         </div>
       </Tarjeta>
     </>
