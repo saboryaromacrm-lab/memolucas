@@ -4,6 +4,7 @@ import {
   Camera,
   Check,
   CheckCircle2,
+  ClipboardPaste,
   ChevronLeft,
   CloudUpload,
   FileText,
@@ -248,7 +249,7 @@ function Cargador() {
   const pdf = useRef<HTMLInputElement>(null);
   const avisar = useAviso();
 
-  const agregar = async (lista: FileList | null) => {
+  const agregar = async (lista: FileList | File[] | null) => {
     if (!lista?.length) return;
     setPreparando(true);
     const nuevas = await Promise.all([...lista].map(async (f) => {
@@ -268,8 +269,83 @@ function Cargador() {
     avisar("Factura enviada: se está leyendo");
   };
 
+  /** Lo que llega pegado o arrastrado: las fotos van como hojas y cada PDF se manda a leer directo. */
+  const recibir = useRef<(archivos: File[]) => Promise<void>>(async () => {});
+  recibir.current = async (archivos) => {
+    const pdfs = archivos.filter((f) => f.type === "application/pdf");
+    const fotos = archivos.filter((f) => f.type.startsWith("image/"));
+    if (!pdfs.length && !fotos.length) return avisar("Eso no es una foto ni un PDF", "error");
+    for (const f of pdfs) await encolar([f]);
+    if (pdfs.length) avisar(pdfs.length === 1 ? "PDF enviado: se está leyendo" : `${pdfs.length} PDF enviados: se están leyendo`);
+    if (fotos.length) await agregar(fotos);
+  };
+
+  // Ctrl+V en cualquier parte del panel (salvo escribiendo en un campo o con una factura abierta).
+  useEffect(() => {
+    const pegar = (e: ClipboardEvent) => {
+      const destino = e.target as HTMLElement | null;
+      if (destino?.closest("input, textarea, [contenteditable]") || document.querySelector("[data-superpuesto]")) return;
+      const archivos = [...(e.clipboardData?.files ?? [])];
+      if (!archivos.length) return;
+      e.preventDefault();
+      void recibir.current(archivos);
+    };
+    document.addEventListener("paste", pegar);
+    return () => document.removeEventListener("paste", pegar);
+  }, []);
+
+  // Arrastrar y soltar desde una carpeta de la compu.
+  const [arrastrando, setArrastrando] = useState(false);
+  useEffect(() => {
+    const conArchivos = (e: DragEvent) => !!e.dataTransfer?.types.includes("Files") && !document.querySelector("[data-superpuesto]");
+    const entra = (e: DragEvent) => {
+      if (!conArchivos(e)) return;
+      e.preventDefault();
+      setArrastrando(true);
+    };
+    const sale = (e: DragEvent) => !e.relatedTarget && setArrastrando(false);
+    const suelta = (e: DragEvent) => {
+      if (!conArchivos(e)) return;
+      e.preventDefault();
+      setArrastrando(false);
+      void recibir.current([...(e.dataTransfer?.files ?? [])]);
+    };
+    window.addEventListener("dragenter", entra);
+    window.addEventListener("dragover", entra);
+    window.addEventListener("dragleave", sale);
+    window.addEventListener("drop", suelta);
+    return () => {
+      window.removeEventListener("dragenter", entra);
+      window.removeEventListener("dragover", entra);
+      window.removeEventListener("dragleave", sale);
+      window.removeEventListener("drop", suelta);
+    };
+  }, []);
+
+  /** Botón Pegar: lee lo copiado (en el celular puede pedir permiso). */
+  const pegarDelPortapapeles = async () => {
+    try {
+      const archivos: File[] = [];
+      for (const item of await navigator.clipboard.read()) {
+        const tipo = item.types.find((t) => t.startsWith("image/") || t === "application/pdf");
+        if (!tipo) continue;
+        const blob = await item.getType(tipo);
+        archivos.push(new File([blob], tipo === "application/pdf" ? "pegado.pdf" : `pegada.${tipo.split("/")[1]}`, { type: tipo }));
+      }
+      if (!archivos.length) return avisar("No hay ninguna foto copiada. Copiá la foto y volvé a tocar Pegar.", "error");
+      await recibir.current(archivos);
+    } catch {
+      avisar("El navegador no dejó leer lo copiado. Probá con Ctrl+V, o mantené apretado en la pantalla y elegí Pegar.", "error");
+    }
+  };
+
   return (
     <section className="tarjeta overflow-hidden">
+      {arrastrando && (
+        <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-cafe/80 p-6">
+          <div className="rounded-3xl border-4 border-dashed border-naranja px-8 py-12 text-center text-xl font-semibold text-beige">Soltá acá la foto o el PDF de la factura</div>
+        </div>
+      )}
       <input ref={camara} type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => (void agregar(e.target.files), (e.target.value = ""))} />
       <input ref={galeria} type="file" accept="image/*" multiple className="hidden" onChange={(e) => (void agregar(e.target.files), (e.target.value = ""))} />
       <input
@@ -290,14 +366,18 @@ function Cargador() {
           <button onClick={() => camara.current?.click()} className="flex w-full items-center justify-center gap-3 rounded-2xl bg-naranja py-5 text-lg font-semibold text-white shadow-md active:scale-[0.99]">
             {preparando ? <Loader2 className="size-6 animate-spin" /> : <Camera className="size-6" />} Sacar foto a la factura
           </button>
-          <div className="mt-3 grid grid-cols-2 gap-2">
+          <div className="mt-3 grid grid-cols-3 gap-2">
             <button onClick={() => galeria.current?.click()} className="flex items-center justify-center gap-2 rounded-xl border border-stone-300 py-3 text-sm font-medium text-stone-700 active:bg-stone-50">
               <Images className="size-4" /> Galería
             </button>
             <button onClick={() => pdf.current?.click()} className="flex items-center justify-center gap-2 rounded-xl border border-stone-300 py-3 text-sm font-medium text-stone-700 active:bg-stone-50">
               <FileText className="size-4" /> PDF
             </button>
+            <button onClick={() => void pegarDelPortapapeles()} className="flex items-center justify-center gap-2 rounded-xl border border-stone-300 py-3 text-sm font-medium text-stone-700 active:bg-stone-50">
+              <ClipboardPaste className="size-4" /> Pegar
+            </button>
           </div>
+          <p className="mt-2 hidden text-center text-xs text-stone-500 sm:block">También podés pegar una foto con Ctrl+V o arrastrarla acá.</p>
         </div>
       ) : (
         <div className="p-4">
@@ -439,7 +519,7 @@ function VistaComprobante({ id, onCerrar }: { id: number; onCerrar: () => void }
   };
 
   return (
-    <div className="fixed inset-0 z-40 overflow-y-auto bg-[#faf5ee]">
+    <div data-superpuesto className="fixed inset-0 z-40 overflow-y-auto bg-[#faf5ee]">
       <div className="mx-auto max-w-xl pb-32">
         <header className="sticky top-0 z-10 flex items-center gap-2 bg-cafe px-2 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] text-beige shadow-md">
           <button aria-label="Volver" onClick={onCerrar} className="rounded-lg p-1.5 hover:bg-white/10">
