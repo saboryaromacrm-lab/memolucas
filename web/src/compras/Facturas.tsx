@@ -5,7 +5,7 @@ import { post, put } from "../lib/api";
 import type { Compra, ComprobanteDatos } from "../lib/tipos";
 import { BuscadorProducto } from "./BuscadorProducto";
 import { Cargador, EstadoCola, TarjetaLectura, type Lectura } from "./Cargador";
-import { atajosBloqueados, fechaCorta, Hoja, plata, useVivo, type Ancho } from "./comun";
+import { atajosBloqueados, fechaCorta, Hoja, nombrePeriodo, plata, useVivo, type Ancho } from "./comun";
 import { CompraManualForm } from "./CompraManual";
 import { Correccion } from "./Correccion";
 import type { Producto } from "./Productos";
@@ -74,12 +74,14 @@ function Cierra({ c }: { c: Compra }) {
   );
 }
 
-export function Facturas({ ancho }: { ancho: Ancho }) {
-  const { datos, recargar } = useVivo<{ lecturas: Lectura[]; compras: Compra[] }>("/api/c/compras");
-  const [filtro, setFiltro] = useState<Filtro>("abiertas");
+/** inicial: con qué filtros abre (desde Métricas). periodo: un mes ("2026-10") o un día, por la fecha de la factura. */
+export function Facturas({ ancho, inicial }: { ancho: Ancho; inicial?: { formaPagoId?: number; periodo?: string } }) {
+  const [periodo, setPeriodo] = useState(inicial?.periodo ?? null);
+  const { datos, recargar } = useVivo<{ lecturas: Lectura[]; compras: Compra[] }>(`/api/c/compras${periodo ? `?periodo=${periodo}` : ""}`);
+  const [filtro, setFiltro] = useState<Filtro>(inicial ? "todas" : "abiertas");
   const [q, setQ] = useState("");
   const [proveedorId, setProveedorId] = useState<number | null>(null);
-  const [formaPagoId, setFormaPagoId] = useState<number | null>(null);
+  const [formaPagoId, setFormaPagoId] = useState<number | null>(inicial?.formaPagoId ?? null);
   const [abierta, setAbierta] = useState<number | null>(null);
   const [elegidas, setElegidas] = useState<Set<number>>(new Set());
   const [confirmando, setConfirmando] = useState(false);
@@ -191,6 +193,11 @@ export function Facturas({ ancho }: { ancho: Ancho }) {
           {t}
         </button>
       ))}
+      {periodo && (
+        <button onClick={() => setPeriodo(null)} title="Quitar el filtro de fecha" className="flex items-center gap-1 rounded-full bg-naranja px-3 py-1.5 text-sm font-medium text-white">
+          {nombrePeriodo(periodo)} <X className="size-3.5" />
+        </button>
+      )}
     </div>
   );
   const filtrosPor = (opciones.proveedores.length > 0 || opciones.formas.length > 0) && (
@@ -203,7 +210,7 @@ export function Facturas({ ancho }: { ancho: Ancho }) {
   );
   const vacio = (
     <p className="px-4 py-10 text-center text-sm text-stone-500">
-      {q || proveedorId || formaPagoId ? "No hay facturas con esa búsqueda." : filtro === "abiertas" ? "No hay facturas para revisar 🙌" : "Todavía no hay facturas acá."}
+      {q || proveedorId || formaPagoId || periodo ? "No hay facturas con esa búsqueda." : filtro === "abiertas" ? "No hay facturas para revisar 🙌" : "Todavía no hay facturas acá."}
     </p>
   );
   const cargando = (

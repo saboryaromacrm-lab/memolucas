@@ -15,6 +15,7 @@ import { normalizarRenglones, type ProductoNormalizado } from "../bot/ia-product
 import type { Comprobante } from "../lib/comprobantes.js";
 import { bus } from "../lib/eventos.js";
 import { registrar } from "../lib/log.js";
+import { celda, csv, numero } from "../lib/csv.js";
 import { costosFinales, preciosDe, variacion, type Precios } from "../lib/precios.js";
 import { normalizar } from "../lib/textos.js";
 import { leerDatos } from "./compras.js";
@@ -386,10 +387,7 @@ export async function actualizarCompra(id: number, c: { unidadCompra?: PrecioPro
 
 // ───────────── Excel ─────────────
 
-const numero = (n: number | null | undefined) => (n === null || n === undefined ? "" : n.toFixed(2).replace(".", ","));
-const celda = (s: string) => `"${s.replace(/"/g, '""')}"`;
-
-/** CSV para Excel (separado con ; y con coma decimal, como lo abre Excel en español). */
+/** CSV para Excel con la lista de productos y su último precio. */
 export async function productosCsv(): Promise<string> {
   const filas = (await listarProductos()).map((p) => {
     const u = p.ultima;
@@ -407,5 +405,5 @@ export async function productosCsv(): Promise<string> {
     ].join(";");
   });
   const titulos = "Producto;Categoría;Clase;Último proveedor;Fecha;Precio bulto;Precio unidad;Precio kg/l;Medida;Variación %";
-  return `﻿${[titulos, ...filas].join("\r\n")}`;
+  return csv([titulos, ...filas]);
 }

@@ -40,7 +40,7 @@ export async function crearUsuario(nombre: string, clave: string) {
   return u;
 }
 
-export async function actualizarUsuario(id: number, c: { nombre?: string; clave?: string; activo?: boolean }) {
+export async function actualizarUsuario(id: number, c: { nombre?: string; clave?: string; activo?: boolean; metricas?: boolean }) {
   const actual = await obtenerUsuario(id);
   if (!actual) throw new ErrorUsuario("No existe esa persona");
   const cambios: Partial<typeof usuarioCompras.$inferInsert> = {};
@@ -50,6 +50,7 @@ export async function actualizarUsuario(id: number, c: { nombre?: string; clave?
     cambios.claveHash = await hash(c.clave);
   }
   if (c.activo !== undefined) cambios.activo = c.activo;
+  if (c.metricas !== undefined) cambios.metricas = c.metricas;
   // Cambiar la clave o desactivarla cierra sus sesiones abiertas.
   const cerrarSesiones = !!c.clave || c.activo === false;
   const [u] = await db

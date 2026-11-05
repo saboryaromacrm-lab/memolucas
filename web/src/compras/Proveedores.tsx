@@ -29,11 +29,11 @@ type Ficha = Proveedor & {
   ultimas: Compra[];
 };
 
-export function Proveedores({ ancho }: { ancho: Ancho }) {
+export function Proveedores({ ancho, abrir }: { ancho: Ancho; abrir?: number }) {
   const [ocultos, setOcultos] = useState(false);
   const { datos } = useVivo<Proveedor[]>(`/api/c/proveedores${ocultos ? "?ocultos=1" : ""}`);
   const [q, setQ] = useState("");
-  const [abierto, setAbierto] = useState<number | null>(null);
+  const [abierto, setAbierto] = useState<number | null>(abrir ?? null);
   const [editando, setEditando] = useState<Proveedor | "nuevo" | null>(null);
 
   const lista = useMemo(() => (datos ?? []).filter((p) => !q.trim() || clave(`${p.nombre} ${p.notas}`).includes(clave(q))), [datos, q]);

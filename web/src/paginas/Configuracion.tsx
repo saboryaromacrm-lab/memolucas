@@ -684,7 +684,7 @@ function SeccionCompras({
   );
 }
 
-type PersonaCompras = { id: number; nombre: string; activo: boolean; ultimoIngreso: string | null };
+type PersonaCompras = { id: number; nombre: string; activo: boolean; metricas: boolean; ultimoIngreso: string | null };
 
 /** El panel de compras de Coffit (para el colaborador): dirección, logo y quién entra. */
 function PanelCompras({
@@ -748,7 +748,7 @@ function PanelCompras({
         </div>
       </Tarjeta>
 
-      <Tarjeta titulo="Personas con acceso" texto="Cada una entra al panel de compras con su propia clave (4 a 8 números). Pueden cargar, corregir y confirmar facturas.">
+      <Tarjeta titulo="Personas con acceso" texto="Cada una entra al panel de compras con su propia clave (4 a 8 números). Pueden cargar, corregir y confirmar facturas; Métricas, solo las que la tengan prendida.">
         {personas?.length ? (
           <ul className="divide-y divide-slate-100">
             {personas.map((p) => (
@@ -767,6 +767,11 @@ function PanelCompras({
                 >
                   Clave
                 </Boton>
+                <Interruptor
+                  activo={p.metricas}
+                  etiqueta="Métricas"
+                  onChange={async (v) => (await accion(() => put(`/api/compras-usuarios/${p.id}`, { metricas: v }), v ? "Ya ve Métricas" : "Ya no ve Métricas")) && recargarPersonas()}
+                />
                 <Interruptor activo={p.activo} onChange={async (v) => (await accion(() => put(`/api/compras-usuarios/${p.id}`, { activo: v }), v ? "Activada" : "Desactivada")) && recargarPersonas()} />
                 <button
                   aria-label="Borrar"

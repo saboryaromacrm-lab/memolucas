@@ -74,7 +74,7 @@ export function lineasDePrecio(c: Pick<CompraProducto, "precios" | "unidadesPorB
   ];
 }
 
-function Variacion({ v }: { v: number | null }) {
+export function Variacion({ v }: { v: number | null }) {
   if (v === null || Math.abs(v) < 0.05) return null;
   const sube = v > 0;
   return (
@@ -88,15 +88,15 @@ function Variacion({ v }: { v: number | null }) {
 
 const precio = (n: number | null | undefined) => (n === null || n === undefined ? <span className="text-stone-300">—</span> : plata(n));
 
-export function Productos({ ancho }: { ancho: Ancho }) {
+export function Productos({ ancho, inicial }: { ancho: Ancho; inicial?: { productoId?: number; categoria?: string } }) {
   const { datos } = useVivo<{ productos: Producto[]; alertaPct: number }>("/api/c/productos");
   const [q, setQ] = useState("");
-  const [categoria, setCategoria] = useState("");
+  const [categoria, setCategoria] = useState(inicial?.categoria ?? "");
   const [clase, setClase] = useState("");
   const [proveedorId, setProveedorId] = useState(0);
   const [orden, setOrden] = useState<Orden>({ campo: "nombre", asc: true });
   const [soloSubas, setSoloSubas] = useState(false);
-  const [abierto, setAbierto] = useState<number | null>(null);
+  const [abierto, setAbierto] = useState<number | null>(inicial?.productoId ?? null);
 
   const productos = useMemo(() => datos?.productos ?? [], [datos]);
   const categorias = useMemo(() => [...new Set(productos.map((p) => p.categoria))].sort(), [productos]);

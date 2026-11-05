@@ -1,14 +1,14 @@
 import fs from "node:fs/promises";
 import { and, desc, eq, gt, inArray, isNull, lt, ne, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { adjunto, comprobante, encuesta, grupo, type FilaComprobante } from "../db/schema.js";
+import { adjunto, comprobante, encuesta, formaPago, grupo, proveedor, type FilaComprobante } from "../db/schema.js";
 import { cifrar, descifrar } from "../lib/cifrado.js";
 import { claveDe, controlar, EsquemaComprobante, type Comprobante } from "../lib/comprobantes.js";
 import { bus } from "../lib/eventos.js";
 import { registrar } from "../lib/log.js";
 import { obtenerConfig } from "./configuracion.js";
 import { exigirFormaPago, sugerirFormaPago } from "./formas-pago.js";
-import { enlazarSegunCompras, proveedorPara, sincronizarNombres } from "./proveedores.js";
+import { enlazarSegunCompras, fechaDeCompra, proveedorPara, sincronizarNombres } from "./proveedores.js";
 import { ErrorUsuario, filtroChat } from "./recordatorios.js";
 
 export type ComprobanteGuardado = { fila: FilaComprobante; datos: Comprobante };
@@ -85,12 +85,25 @@ export async function guardarComprobante(d: {
   return fila;
 }
 
+export type Nombres = { grupos: Map<string, string>; proveedores: Map<number, string>; formasPago: Map<number, string> };
+/** Nombres de grupos, proveedores y formas de pago, para mostrar cada comprobante. */
+export async function nombres(): Promise<Nombres> {
+  const [grupos, proveedores, formas] = await Promise.all([
+    db.select().from(grupo),
+    db.select({ id: proveedor.id, nombre: proveedor.nombre }).from(proveedor),
+    db.select({ id: formaPago.id, nombre: formaPago.nombre }).from(formaPago),
+  ]);
+  const porId = (filas: { id: number; nombre: string }[]) => new Map(filas.map((f) => [f.id, f.nombre]));
+  return { grupos: new Map(grupos.map((g) => [g.jid, g.nombre])), proveedores: porId(proveedores), formasPago: porId(formas) };
+}
+
 export async function obtenerComprobante(id: number): Promise<ComprobanteGuardado | null> {
   const [fila] = await db.select().from(comprobante).where(eq(comprobante.id, id));
   return fila ? { fila, datos: leerDatos(fila) } : null;
 }
 
-export async function listarComprobantes(f: { estado?: string; desde?: Date; hasta?: Date; proveedorId?: number } = {}): Promise<ComprobanteGuardado[]> {
+/** periodo: solo los de ese mes ("2026-11") o día ("2026-11-05"), por la fecha de la factura. */
+export async function listarComprobantes(f: { estado?: string; desde?: Date; hasta?: Date; proveedorId?: number; periodo?: string } = {}): Promise<ComprobanteGuardado[]> {
   const filas = await db
     .select()
     .from(comprobante)
@@ -100,6 +113,7 @@ export async function listarComprobantes(f: { estado?: string; desde?: Date; has
         f.desde ? gt(comprobante.creadoEn, f.desde) : undefined,
         f.hasta ? lt(comprobante.creadoEn, f.hasta) : undefined,
         f.proveedorId ? eq(comprobante.proveedorId, f.proveedorId) : undefined,
+        f.periodo ? sql`${fechaDeCompra} like ${`${f.periodo}%`}` : undefined,
       ),
     )
     .orderBy(desc(comprobante.id))

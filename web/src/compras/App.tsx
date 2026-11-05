@@ -1,20 +1,23 @@
 import { useEffect, useState } from "react";
-import { Loader2, LogOut, Package, Receipt, Settings } from "lucide-react";
+import { BarChart3, Loader2, LogOut, Package, Receipt, Settings } from "lucide-react";
 import { get, post } from "../lib/api";
 import { iniciarCola } from "./cola";
-import { useAncho, useRecordado } from "./comun";
+import { useAncho, useRecordado, type Destino } from "./comun";
 import { Configuracion } from "./Configuracion";
 import { Facturas } from "./Facturas";
+import { Metricas } from "./Metricas";
 import { Productos } from "./Productos";
 
 type Marca = { nombre: string; logo: string | null };
+/** metricas: si puede ver Métricas. */
+type Sesion = { nombre: string; metricas: boolean };
 
 export function AppCompras() {
-  const [sesion, setSesion] = useState<{ nombre: string } | false | null>(null);
+  const [sesion, setSesion] = useState<Sesion | false | null>(null);
   const [marca, setMarca] = useState<Marca>({ nombre: "Compras Coffit", logo: null });
   useEffect(() => {
     void get<Marca>("/api/c/marca").then(setMarca).catch(() => {});
-    get<{ nombre: string }>("/api/c/yo")
+    get<Sesion>("/api/c/yo")
       .then(setSesion)
       .catch(() => setSesion(false));
     const vencida = () => setSesion(false);
@@ -28,7 +31,7 @@ export function AppCompras() {
       </div>
     );
   if (!sesion) return <Ingreso marca={marca} onEntrar={setSesion} />;
-  return <Principal marca={marca} nombre={sesion.nombre} onSalir={() => setSesion(false)} />;
+  return <Principal marca={marca} sesion={sesion} onSalir={() => setSesion(false)} />;
 }
 
 function Logo({ marca, chico }: { marca: Marca; chico?: boolean }) {
@@ -36,7 +39,7 @@ function Logo({ marca, chico }: { marca: Marca; chico?: boolean }) {
   return <span className={`font-black tracking-tight ${chico ? "text-xl" : "text-4xl"}`}>Coffit</span>;
 }
 
-function Ingreso({ marca, onEntrar }: { marca: Marca; onEntrar: (s: { nombre: string }) => void }) {
+function Ingreso({ marca, onEntrar }: { marca: Marca; onEntrar: (s: Sesion) => void }) {
   const [clave, setClave] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [entrando, setEntrando] = useState(false);
@@ -44,7 +47,7 @@ function Ingreso({ marca, onEntrar }: { marca: Marca; onEntrar: (s: { nombre: st
     setEntrando(true);
     setError(null);
     try {
-      onEntrar(await post<{ nombre: string }>("/api/c/ingresar", { clave }));
+      onEntrar(await post<Sesion>("/api/c/ingresar", { clave }));
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se pudo entrar");
     }
@@ -83,21 +86,39 @@ const PESTANA = "compras-pestana";
 const PESTANAS = [
   ["facturas", "Facturas", Receipt],
   ["productos", "Productos", Package],
+  ["metricas", "Métricas", BarChart3],
   // Con guion opcional: en la barra angosta de la tablet se corta en dos renglones.
   ["configuracion", "Configu\u00ADración", Settings],
 ] as const;
 
 /** Celular: barra arriba con el logo y pestañas abajo, al alcance del pulgar. Compu y tablet: barra lateral. */
-function Principal({ marca, nombre, onSalir }: { marca: Marca; nombre: string; onSalir: () => void }) {
+function Principal({ marca, sesion: { nombre, metricas }, onSalir }: { marca: Marca; sesion: Sesion; onSalir: () => void }) {
   const ancho = useAncho();
-  const [pestana, elegir] = useRecordado(PESTANA, PESTANAS.map(([v]) => v));
+  const pestanas = PESTANAS.filter(([v]) => v !== "metricas" || metricas);
+  const [pestana, elegir] = useRecordado(PESTANA, pestanas.map(([v]) => v));
+  // Un toque en Métricas abre otra pestaña con un filtro o una ficha; "vez" la vuelve a montar con eso.
+  const [destino, setDestino] = useState<{ d: Destino; vez: number } | null>(null);
+  const ir = (d: Destino) => {
+    setDestino((x) => ({ d, vez: (x?.vez ?? 0) + 1 }));
+    elegir(d.pestana);
+  };
+  const abrir = (p: (typeof PESTANAS)[number][0]) => {
+    setDestino(null);
+    elegir(p);
+  };
+  const d = destino?.d;
   // Las fotos sin subir se siguen subiendo aunque se esté en otra pestaña.
   useEffect(() => iniciarCola(), []);
   const salir = async () => {
     await post("/api/c/salir").catch(() => {});
     onSalir();
   };
-  const contenido = { facturas: <Facturas ancho={ancho} />, productos: <Productos ancho={ancho} />, configuracion: <Configuracion ancho={ancho} /> }[pestana];
+  const contenido = {
+    facturas: <Facturas key={destino?.vez} ancho={ancho} inicial={d?.pestana === "facturas" ? d : undefined} />,
+    productos: <Productos key={destino?.vez} ancho={ancho} inicial={d?.pestana === "productos" ? d : undefined} />,
+    metricas: <Metricas ancho={ancho} ir={ir} />,
+    configuracion: <Configuracion key={destino?.vez} ancho={ancho} proveedorId={d?.pestana === "configuracion" ? d.proveedorId : undefined} />,
+  }[pestana];
 
   if (ancho === "movil")
     return (
@@ -112,8 +133,8 @@ function Principal({ marca, nombre, onSalir }: { marca: Marca; nombre: string; o
         </header>
         <main className="px-4 pt-4">{contenido}</main>
         <nav className="fixed inset-x-0 bottom-0 z-30 flex border-t border-stone-200 bg-white/95 pb-[env(safe-area-inset-bottom)] backdrop-blur">
-          {PESTANAS.map(([v, t, Icono]) => (
-            <button key={v} onClick={() => elegir(v)} className={`flex flex-1 flex-col items-center gap-0.5 py-2.5 text-xs font-semibold ${pestana === v ? "text-cafe" : "text-stone-400"}`}>
+          {pestanas.map(([v, t, Icono]) => (
+            <button key={v} onClick={() => abrir(v)} className={`flex flex-1 flex-col items-center gap-0.5 py-2.5 text-xs font-semibold ${pestana === v ? "text-cafe" : "text-stone-400"}`}>
               <span className={`rounded-full px-5 py-1 ${pestana === v ? "bg-marca-suave text-naranja" : ""}`}>
                 <Icono className="size-5" />
               </span>
@@ -133,10 +154,10 @@ function Principal({ marca, nombre, onSalir }: { marca: Marca; nombre: string; o
           <div className="mt-1 hidden text-xs font-semibold uppercase tracking-[0.2em] text-naranja lg:block">Compras</div>
         </div>
         <nav className="mt-8 space-y-1">
-          {PESTANAS.map(([v, t, Icono]) => (
+          {pestanas.map(([v, t, Icono]) => (
             <button
               key={v}
-              onClick={() => elegir(v)}
+              onClick={() => abrir(v)}
               title={t}
               className={`flex w-full flex-col items-center gap-1 rounded-xl px-2 py-2.5 text-[11px] font-semibold transition lg:flex-row lg:gap-3 lg:px-3 lg:text-sm ${pestana === v ? "bg-white/10 text-white shadow-[inset_3px_0_0_var(--color-naranja)]" : "text-beige/70 hover:bg-white/5 hover:text-white"}`}
             >

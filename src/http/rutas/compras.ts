@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../../db/index.js";
-import { adjunto, formaPago, grupo, proveedor } from "../../db/schema.js";
+import { adjunto, grupo } from "../../db/schema.js";
 import { normalizar } from "../../lib/textos.js";
 import { tituloComprobante } from "../../lib/comprobantes.js";
 import {
@@ -11,8 +11,10 @@ import {
   descartarComprobante,
   enviarAlErp,
   listarComprobantes,
+  nombres,
   obtenerComprobante,
   type ComprobanteGuardado,
+  type Nombres,
 } from "../../servicios/compras.js";
 import { ErrorUsuario } from "../../servicios/recordatorios.js";
 import { actualizarUsuario, borrarUsuario, crearUsuario, listarUsuarios } from "../../servicios/panel-compras.js";
@@ -48,17 +50,6 @@ export async function serializar({ fila, datos }: ComprobanteGuardado, n: Nombre
   };
 }
 
-type Nombres = { grupos: Map<string, string>; proveedores: Map<number, string>; formasPago: Map<number, string> };
-/** Nombres de grupos, proveedores y formas de pago, para mostrar cada comprobante. */
-export async function nombres(): Promise<Nombres> {
-  const [grupos, proveedores, formas] = await Promise.all([
-    db.select().from(grupo),
-    db.select({ id: proveedor.id, nombre: proveedor.nombre }).from(proveedor),
-    db.select({ id: formaPago.id, nombre: formaPago.nombre }).from(formaPago),
-  ]);
-  const porId = (filas: { id: number; nombre: string }[]) => new Map(filas.map((f) => [f.id, f.nombre]));
-  return { grupos: new Map(grupos.map((g) => [g.jid, g.nombre])), proveedores: porId(proveedores), formasPago: porId(formas) };
-}
 
 export const rutasCompras: FastifyPluginAsync = async (app) => {
   app.get("/compras", async (req) => {
@@ -116,6 +107,7 @@ export const rutasCompras: FastifyPluginAsync = async (app) => {
     id: u.id,
     nombre: u.nombre,
     activo: u.activo,
+    metricas: u.metricas,
     ultimoIngreso: u.ultimoIngreso,
     creadoEn: u.creadoEn,
   });
@@ -130,7 +122,7 @@ export const rutasCompras: FastifyPluginAsync = async (app) => {
 
   app.put("/compras-usuarios/:id", async (req) => {
     const { id } = Id.parse(req.params);
-    const c = z.object({ nombre: z.string().trim().min(1).max(60).optional(), clave: Clave.optional(), activo: z.boolean().optional() }).parse(req.body);
+    const c = z.object({ nombre: z.string().trim().min(1).max(60).optional(), clave: Clave.optional(), activo: z.boolean().optional(), metricas: z.boolean().optional() }).parse(req.body);
     return publico(await actualizarUsuario(id, c));
   });
 

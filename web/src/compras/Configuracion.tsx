@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { CreditCard, Store } from "lucide-react";
 import { useRecordado, type Ancho } from "./comun";
 import { FormasPago } from "./FormasPago";
@@ -9,8 +10,12 @@ const SECCIONES = [
 ] as const;
 
 /** Lo que se carga una vez y se usa en cada compra: proveedores y formas de pago. */
-export function Configuracion({ ancho }: { ancho: Ancho }) {
+/** proveedorId: abre Proveedores con la ficha de ese proveedor (desde Métricas). */
+export function Configuracion({ ancho, proveedorId }: { ancho: Ancho; proveedorId?: number }) {
   const [seccion, elegir] = useRecordado("compras-configuracion", SECCIONES.map(([v]) => v));
+  useEffect(() => {
+    if (proveedorId) elegir("proveedores");
+  }, [proveedorId, elegir]);
   const pc = ancho === "pc";
   return (
     <div className={pc ? "flex h-full min-h-0 flex-col gap-4" : "space-y-4"}>
@@ -25,7 +30,7 @@ export function Configuracion({ ancho }: { ancho: Ancho }) {
           </button>
         ))}
       </nav>
-      <div className={pc ? "min-h-0 flex-1" : ""}>{seccion === "proveedores" ? <Proveedores ancho={ancho} /> : <FormasPago />}</div>
+      <div className={pc ? "min-h-0 flex-1" : ""}>{seccion === "proveedores" ? <Proveedores ancho={ancho} abrir={proveedorId} /> : <FormasPago />}</div>
     </div>
   );
 }

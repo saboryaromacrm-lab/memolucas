@@ -62,9 +62,9 @@ describe("panel de compras", () => {
     expect(mal.r.statusCode).toBe(400);
     expect(mal.r.json().error).toContain("Clave incorrecta");
     const { r, cookie } = await entrar();
-    expect(r.json()).toEqual({ nombre: "Martín" });
+    expect(r.json()).toEqual({ nombre: "Martín", metricas: false });
     const yo = await app.inject({ url: "/api/c/yo", headers: { host: HOST, cookie } });
-    expect(yo.json()).toEqual({ nombre: "Martín" });
+    expect(yo.json()).toEqual({ nombre: "Martín", metricas: false });
   });
 
   it("no se pueden repetir claves", async () => {

@@ -348,6 +348,8 @@ export const usuarioCompras = pgTable("usuario_compras", {
   nombre: text("nombre").notNull(),
   claveHash: text("clave_hash").notNull(),
   activo: boolean("activo").notNull().default(true),
+  /** Si puede ver Métricas (los números del negocio). */
+  metricas: boolean("metricas").notNull().default(false),
   // Se incrementa al cambiar la clave o desactivarla: cierra sus sesiones.
   version: integer("version").notNull().default(1),
   ultimoIngreso: ts("ultimo_ingreso"),

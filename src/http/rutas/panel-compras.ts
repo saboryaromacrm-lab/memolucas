@@ -11,12 +11,14 @@ import {
   descartarComprobante,
   fijarFormaPago,
   listarComprobantes,
+  nombres,
   obtenerComprobante,
 } from "../../servicios/compras.js";
 import { obtenerConfig } from "../../servicios/configuracion.js";
 import { borrarCompraManual, EsquemaCompraManual, guardarCompraManual, obtenerCompraManual } from "../../servicios/compras-manuales.js";
 import { actualizarFormaPago, borrarFormaPago, crearFormaPago, listarFormasPago, moverFormaPago } from "../../servicios/formas-pago.js";
 import { corregirConTexto } from "../../servicios/lectura-compras.js";
+import { metricas, metricasCsv } from "../../servicios/metricas.js";
 import {
   adjuntoDeCompras,
   cerrarLectura,
@@ -51,13 +53,16 @@ import {
   reasignarRenglon,
   separarAlias,
 } from "../../servicios/productos.js";
-import { nombres, serializar } from "./compras.js";
+import { serializar } from "./compras.js";
 import type { UsuarioCompras } from "../../db/schema.js";
 
 export const COOKIE_COMPRAS = "compras_sesion";
 const DIAS_SESION = 60;
 const ADJUNTOS = "/api/c/adjuntos";
 const Id = z.object({ id: z.coerce.number().int().positive() });
+/** Un mes ("2026-11") o un día ("2026-11-05"). */
+const Periodo = z.string().regex(/^\d{4}-\d{2}(-\d{2})?$/);
+const Fecha = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const ESTADOS = ["pendiente", "revisar", "confirmado", "descartado"] as const;
 
 /** Colores de Coffit: marrón oscuro, naranja y beige. */
@@ -166,7 +171,7 @@ export const rutasPanelCompras: FastifyPluginAsync = async (app) => {
     const token = app.jwt.sign({ v: u.version, tipo: "compras", u: u.id }, { expiresIn: `${DIAS_SESION}d` });
     return reply
       .setCookie(COOKIE_COMPRAS, token, { httpOnly: true, secure: entorno.produccion, sameSite: "lax", path: "/", maxAge: DIAS_SESION * 86_400 })
-      .send({ nombre: u.nombre });
+      .send({ nombre: u.nombre, metricas: u.metricas });
   });
 
   app.post("/salir", async (_req, reply) => reply.clearCookie(COOKIE_COMPRAS, { path: "/" }).send({ ok: true }));
@@ -175,7 +180,7 @@ export const rutasPanelCompras: FastifyPluginAsync = async (app) => {
   await app.register(async (privado) => {
     privado.addHook("onRequest", autenticarCompras);
 
-    privado.get("/yo", async (req) => ({ nombre: req.usuarioCompras!.nombre }));
+    privado.get("/yo", async (req) => ({ nombre: req.usuarioCompras!.nombre, metricas: req.usuarioCompras!.metricas }));
 
     privado.get("/eventos", { config: { rateLimit: false } }, (req, reply) => {
       reply.hijack();
@@ -193,8 +198,8 @@ export const rutasPanelCompras: FastifyPluginAsync = async (app) => {
     });
 
     privado.get("/compras", async (req) => {
-      const { estado, q } = z.object({ estado: z.enum(ESTADOS).optional(), q: z.string().optional() }).parse(req.query);
-      let lista = await listarComprobantes({ estado });
+      const { estado, q, periodo } = z.object({ estado: z.enum(ESTADOS).optional(), q: z.string().optional(), periodo: Periodo.optional() }).parse(req.query);
+      let lista = await listarComprobantes({ estado, periodo });
       if (q?.trim()) {
         const buscado = q.trim().toLowerCase();
         lista = lista.filter((c) => `${c.datos.encabezado.razonSocialEmisor} ${c.datos.encabezado.numero} ${c.datos.encabezado.cuitEmisor}`.toLowerCase().includes(buscado));
@@ -401,6 +406,30 @@ export const rutasPanelCompras: FastifyPluginAsync = async (app) => {
       const { formaPagoId } = z.object({ formaPagoId: FormaPagoId }).parse(req.body);
       await fijarFormaPago(Id.parse(req.params).id, formaPagoId);
       return { ok: true };
+    });
+
+    // ───── Métricas: solo para quien la tiene permitida ─────
+    const conMetricas = {
+      preHandler: async (req: FastifyRequest, reply: FastifyReply) => {
+        if (!req.usuarioCompras!.metricas) return reply.code(403).send({ error: "No tenés acceso a Métricas" });
+      },
+    };
+    const leerMetricas = (req: FastifyRequest) => {
+      const { desde, hasta, confirmadas } = z
+        .object({ desde: Fecha, hasta: Fecha, confirmadas: z.string().optional() })
+        .refine((p) => p.desde <= p.hasta, "El período termina antes de empezar")
+        .parse(req.query);
+      return metricas({ desde, hasta }, !!confirmadas);
+    };
+
+    privado.get("/metricas", conMetricas, leerMetricas);
+
+    privado.get("/metricas.csv", conMetricas, async (req, reply) => {
+      const m = await leerMetricas(req);
+      return reply
+        .header("Content-Type", "text/csv; charset=utf-8")
+        .header("Content-Disposition", `attachment; filename="metricas-coffit-${m.periodo.desde}-a-${m.periodo.hasta}.csv"`)
+        .send(metricasCsv(m));
     });
 
     // ───── Productos (precios por bulto, unidad y kg o litro de lo que se compró) ─────
