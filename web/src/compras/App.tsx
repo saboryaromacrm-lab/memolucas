@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
   Camera,
@@ -11,8 +11,10 @@ import {
   Images,
   Loader2,
   LogOut,
+  Package,
   Pencil,
   Plus,
+  Receipt,
   RotateCcw,
   Sparkles,
   Trash2,
@@ -24,15 +26,13 @@ import { get, post, put } from "../lib/api";
 import { haceCuanto } from "../lib/fechas";
 import type { Compra, ComprobanteDatos } from "../lib/tipos";
 import { encolar, escuchar, iniciarCola, quitar, subirTodo, type Pendiente } from "./cola";
+import { fechaCorta, plata, useVivo } from "./comun";
 import { comprimir } from "./imagen";
+import { Productos } from "./Productos";
 
 type Marca = { nombre: string; logo: string | null };
 type Lectura = { id: number; estado: "leyendo" | "lista" | "error" | "repetido" | "vacia"; autor: string | null; mensaje: string | null; hojas: number; creadoEn: string };
 type Detalle = Compra & { datos: ComprobanteDatos };
-
-const plata = (n: number | string | null, moneda = "PES") =>
-  n === null ? "—" : `${moneda === "DOL" ? "US$" : "$"} ${Number(n).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-const fechaCorta = (iso: string | null | undefined) => (iso && /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso.split("-").reverse().join("/") : iso || "—");
 
 const ESTADOS: Record<Compra["estado"], [string, string]> = {
   pendiente: ["A confirmar", "bg-sky-50 text-sky-700"],
@@ -40,38 +40,6 @@ const ESTADOS: Record<Compra["estado"], [string, string]> = {
   confirmado: ["Confirmada", "bg-emerald-50 text-emerald-700"],
   descartado: ["Descartada", "bg-stone-100 text-stone-500"],
 };
-
-/** Datos en vivo: se recargan solos cuando cambia algo (SSE) y al volver a la app. */
-function useVivo<T>(ruta: string | null) {
-  const [datos, setDatos] = useState<T | null>(null);
-  const recargar = useCallback(async () => {
-    if (!ruta) return;
-    try {
-      setDatos(await get<T>(ruta));
-    } catch {
-      // Sin señal: queda lo último que se vio.
-    }
-  }, [ruta]);
-  useEffect(() => {
-    void recargar();
-    if (!ruta) return;
-    const fuente = new EventSource("/api/c/eventos");
-    let t: ReturnType<typeof setTimeout> | undefined;
-    fuente.addEventListener("cambio", () => {
-      clearTimeout(t);
-      t = setTimeout(() => void recargar(), 300);
-    });
-    fuente.onopen = () => void recargar();
-    const visible = () => document.visibilityState === "visible" && void recargar();
-    document.addEventListener("visibilitychange", visible);
-    return () => {
-      fuente.close();
-      clearTimeout(t);
-      document.removeEventListener("visibilitychange", visible);
-    };
-  }, [ruta, recargar]);
-  return { datos, recargar };
-}
 
 export function AppCompras() {
   const [sesion, setSesion] = useState<{ nombre: string } | false | null>(null);
@@ -143,12 +111,73 @@ function Ingreso({ marca, onEntrar }: { marca: Marca; onEntrar: (s: { nombre: st
   );
 }
 
+type Pestana = "facturas" | "productos";
+const PESTANA = "compras-pestana";
+
 function Principal({ marca, nombre, onSalir }: { marca: Marca; nombre: string; onSalir: () => void }) {
+  const [pestana, setPestana] = useState<Pestana>(() => {
+    try {
+      return localStorage.getItem(PESTANA) === "productos" ? "productos" : "facturas";
+    } catch {
+      return "facturas";
+    }
+  });
+  // Las fotos sin subir se siguen subiendo aunque se esté en otra pestaña.
+  useEffect(() => iniciarCola(), []);
+  const elegir = (p: Pestana) => {
+    setPestana(p);
+    try {
+      localStorage.setItem(PESTANA, p);
+    } catch {
+      // Sin almacenamiento: se recuerda solo mientras está abierta.
+    }
+  };
+
+  return (
+    <div className="mx-auto min-h-dvh max-w-xl pb-10">
+      <header className="sticky top-0 z-20 bg-cafe px-4 pt-[max(0.75rem,env(safe-area-inset-top))] text-beige shadow-md">
+        <div className="flex items-center gap-3 pb-2">
+          <Logo marca={marca} chico />
+          <span className="text-xs font-semibold uppercase tracking-[0.2em] text-naranja">Compras</span>
+          <span className="ml-auto truncate text-sm text-beige/80">{nombre}</span>
+          <button
+            aria-label="Salir"
+            className="rounded-lg p-1.5 text-beige/70 hover:bg-white/10"
+            onClick={async () => {
+              await post("/api/c/salir").catch(() => {});
+              onSalir();
+            }}
+          >
+            <LogOut className="size-5" />
+          </button>
+        </div>
+        <nav className="flex">
+          {(
+            [
+              ["facturas", "Facturas", Receipt],
+              ["productos", "Productos", Package],
+            ] as const
+          ).map(([v, t, Icono]) => (
+            <button
+              key={v}
+              onClick={() => elegir(v)}
+              className={`flex flex-1 items-center justify-center gap-1.5 border-b-[3px] py-2 text-sm font-semibold ${pestana === v ? "border-naranja text-white" : "border-transparent text-beige/60"}`}
+            >
+              <Icono className="size-4" /> {t}
+            </button>
+          ))}
+        </nav>
+      </header>
+      <div className="px-4 pt-4">{pestana === "facturas" ? <Facturas /> : <Productos />}</div>
+    </div>
+  );
+}
+
+function Facturas() {
   const { datos, recargar } = useVivo<{ lecturas: Lectura[]; compras: Compra[] }>("/api/c/compras");
   const [filtro, setFiltro] = useState<"abiertas" | "confirmado" | "todas">("abiertas");
   const [abierta, setAbierta] = useState<number | null>(null);
   const accion = useAccion();
-  useEffect(() => iniciarCola(), []);
 
   const compras = useMemo(
     () =>
@@ -160,24 +189,8 @@ function Principal({ marca, nombre, onSalir }: { marca: Marca; nombre: string; o
   const abiertas = (datos?.compras ?? []).filter((c) => c.estado === "pendiente" || c.estado === "revisar").length;
 
   return (
-    <div className="mx-auto min-h-dvh max-w-xl pb-10">
-      <header className="sticky top-0 z-20 flex items-center gap-3 bg-cafe px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] text-beige shadow-md">
-        <Logo marca={marca} chico />
-        <span className="text-xs font-semibold uppercase tracking-[0.2em] text-naranja">Compras</span>
-        <span className="ml-auto truncate text-sm text-beige/80">{nombre}</span>
-        <button
-          aria-label="Salir"
-          className="rounded-lg p-1.5 text-beige/70 hover:bg-white/10"
-          onClick={async () => {
-            await post("/api/c/salir").catch(() => {});
-            onSalir();
-          }}
-        >
-          <LogOut className="size-5" />
-        </button>
-      </header>
-
-      <div className="space-y-4 px-4 pt-4">
+    <>
+      <div className="space-y-4">
         <Cargador />
         <EstadoCola />
         {datos?.lecturas.map((l) => (
@@ -236,7 +249,7 @@ function Principal({ marca, nombre, onSalir }: { marca: Marca; nombre: string; o
       </div>
 
       {abierta && <VistaComprobante id={abierta} onCerrar={() => (setAbierta(null), void recargar())} />}
-    </div>
+    </>
   );
 }
 

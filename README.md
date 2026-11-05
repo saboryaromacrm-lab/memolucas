@@ -35,6 +35,11 @@ Le escribís al bot como a una persona (*"recordame mañana a las 10 pagar la lu
   - para corregir: escribir qué está mal (lo aplica la IA) o editar los datos en un formulario; después confirmar (se manda al ERP) o descartar;
   - colores de Coffit (marrón, naranja y beige); el logo se sube desde Memolucas y también arma el ícono de la app;
   - las facturas del panel y las del grupo de WhatsApp son una sola lista.
+- **Productos** (pestaña del panel de compras): con cada factura confirmada (también las viejas) se arma la lista de productos con su precio **final** (con IVA e impuestos internos, sin percepciones, con descuentos y bonificación) por bulto, por unidad y por kg o litro.
+  - La IA (Haiku) reconoce la presentación ("500\*15" = caja de 15 de 500 ml) solo la primera vez que aparece un renglón; después se reconoce sola.
+  - El mismo producto de distintos proveedores queda junto, con el más barato marcado; se puede juntar o separar a mano.
+  - Historial con la variación contra la compra anterior, gráfico y aviso cuando sube más del % configurado (Configuración → Compras → Productos).
+  - Se corrige a mano el nombre, la categoría, el contenido o cómo vino una compra, y se recalculan los precios. Buscador, filtros, orden y descarga en Excel.
 - **Notas cifradas**: *"anotá que la clave del wifi es…"*, *"anotá comprar leche y pan"*, *"¿cuál era la clave del wifi?"*.
 - **Editar, borrar, pausar y reanudar**: *"cambiá lo del dentista a las 11"*, *"borrá lo de la basura"*.
 - **Comandos rápidos sin IA**: `hoy`, `mañana`, `semana`, `lista`, `listo`, `ayuda`, `silencio 2h` / `silencio off`.
