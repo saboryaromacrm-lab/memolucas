@@ -25,6 +25,15 @@ import {
   reintentarLectura,
 } from "../../servicios/panel-compras.js";
 import { ErrorUsuario } from "../../servicios/recordatorios.js";
+import {
+  actualizarCompra,
+  actualizarProducto,
+  juntarProductos,
+  listarProductos,
+  obtenerProducto,
+  productosCsv,
+  separarAlias,
+} from "../../servicios/productos.js";
 import { nombresGrupos, serializar } from "./compras.js";
 import type { UsuarioCompras } from "../../db/schema.js";
 
@@ -238,6 +247,50 @@ export const rutasPanelCompras: FastifyPluginAsync = async (app) => {
       const { datos } = z.object({ datos: z.unknown() }).parse(req.body);
       const r = await actualizarDatos(id, datos);
       return { ...(await serializar(r, await nombresGrupos(), ADJUNTOS)), datos: r.datos };
+    });
+
+    // ───── Productos (precios por bulto, unidad y kg o litro de lo que se compró) ─────
+    privado.get("/productos", async () => ({ productos: await listarProductos(), alertaPct: (await obtenerConfig()).productosAlertaPct }));
+
+    privado.get("/productos.csv", async (_req, reply) =>
+      reply
+        .header("Content-Type", "text/csv; charset=utf-8")
+        .header("Content-Disposition", `attachment; filename="productos-coffit-${new Date().toISOString().slice(0, 10)}.csv"`)
+        .send(await productosCsv()),
+    );
+
+    privado.get("/productos/:id", async (req) => obtenerProducto(Id.parse(req.params).id));
+
+    privado.put("/productos/:id", async (req) => {
+      const c = z
+        .object({
+          nombre: z.string().trim().min(2).max(120),
+          categoria: z.string().trim().min(1).max(40),
+          clase: z.enum(["mercaderia", "gasto"]),
+          contenido: z.number().positive().max(100_000).nullable(),
+          medida: z.enum(["kg", "l"]).nullable(),
+        })
+        .partial()
+        .parse(req.body);
+      await actualizarProducto(Id.parse(req.params).id, c);
+      return { ok: true };
+    });
+
+    privado.post("/productos/:id/juntar", async (req) => {
+      const { conId } = z.object({ conId: z.number().int().positive() }).parse(req.body);
+      await juntarProductos(Id.parse(req.params).id, conId);
+      return { ok: true };
+    });
+
+    privado.post("/productos/:id/separar", async (req) => {
+      const { alias } = z.object({ alias: z.string().min(1) }).parse(req.body);
+      return { id: await separarAlias(Id.parse(req.params).id, alias) };
+    });
+
+    privado.put("/productos/compras/:id", async (req) => {
+      const c = z.object({ unidadCompra: z.enum(["bulto", "unidad", "kg", "litro"]), unidadesPorBulto: z.number().min(0).max(10_000) }).partial().parse(req.body);
+      await actualizarCompra(Id.parse(req.params).id, c);
+      return { ok: true };
     });
 
     privado.get("/adjuntos/:id", async (req, reply) => {

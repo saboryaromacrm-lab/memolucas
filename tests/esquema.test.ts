@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { EsquemaEnlace, EsquemaFoto, EsquemaInterpretacion, EsquemaRespuestaNotas, normalizarInterpretacion } from "../src/bot/ia.js";
 import { EsquemaComprobantes } from "../src/lib/comprobantes.js";
+import { EsquemaProductos } from "../src/bot/ia-productos.js";
 
 // Structured outputs exige objetos cerrados y todos los campos requeridos.
 function revisar(nodo: unknown, ruta = "$"): string[] {
@@ -31,7 +32,7 @@ function uniones(nodo: unknown): number {
 }
 
 describe("esquemas para Claude", () => {
-  for (const [nombre, e] of Object.entries({ EsquemaInterpretacion, EsquemaFoto, EsquemaEnlace, EsquemaRespuestaNotas, EsquemaComprobantes })) {
+  for (const [nombre, e] of Object.entries({ EsquemaInterpretacion, EsquemaFoto, EsquemaEnlace, EsquemaRespuestaNotas, EsquemaComprobantes, EsquemaProductos })) {
     it(`${nombre} es válido y no supera los límites de la API`, () => {
       const f = zodOutputFormat(e as never) as unknown as { type: string; schema: unknown };
       expect(f.type).toBe("json_schema");

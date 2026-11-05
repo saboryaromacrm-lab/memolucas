@@ -50,6 +50,13 @@
       "when": 1793480275451,
       "tag": "0006_panel_compras",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1793841614534,
+      "tag": "0007_productos",
+      "breakpoints": true
     }
   ]
 }

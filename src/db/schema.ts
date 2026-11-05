@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   boolean,
+  doublePrecision,
   index,
   integer,
   jsonb,
@@ -105,6 +106,9 @@ export const configuracion = pgTable("configuracion", {
   comprasLogoAdjuntoId: integer("compras_logo_adjunto_id"),
   comprasIntentosFallidos: integer("compras_intentos_fallidos").notNull().default(0),
   comprasBloqueadoHasta: ts("compras_bloqueado_hasta"),
+  /** Productos: modelo que reconoce la presentación y aviso de suba de precio (%). */
+  productosModelo: text("productos_modelo").notNull().default("claude-haiku-5-5"),
+  productosAlertaPct: integer("productos_alerta_pct").notNull().default(10),
 
   actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
 });
@@ -289,6 +293,9 @@ export type Grupo = typeof grupo.$inferSelect;
 export type FilaComprobante = typeof comprobante.$inferSelect;
 export type UsuarioCompras = typeof usuarioCompras.$inferSelect;
 export type LecturaCompras = typeof lecturaCompras.$inferSelect;
+export type Producto = typeof producto.$inferSelect;
+export type PrecioProducto = typeof precioProducto.$inferSelect;
+export type UnidadCompra = "bulto" | "unidad" | "kg" | "litro";
 
 /** Comprobantes de compra leídos con IA. Los datos (el JSON del instructivo) van cifrados. */
 export const comprobante = pgTable(
@@ -316,6 +323,9 @@ export const comprobante = pgTable(
     confirmadoEn: ts("confirmado_en"),
     enviadoEn: ts("enviado_en"),
     envioError: text("envio_error"),
+    /** Cuándo se pasaron sus renglones a Productos (null = falta) y cuántas veces falló. */
+    productosEn: ts("productos_en"),
+    productosIntentos: integer("productos_intentos").notNull().default(0),
     creadoEn: creadoEn(),
     actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
   },
@@ -354,4 +364,55 @@ export const lecturaCompras = pgTable(
     actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
   },
   (t) => [uniqueIndex("lectura_cliente_idx").on(t.clienteId)],
+);
+
+/** Productos comprados (de las facturas confirmadas). El mismo producto de distintos proveedores es uno solo. */
+export const producto = pgTable("producto", {
+  id: serial("id").primaryKey(),
+  nombre: text("nombre").notNull(),
+  /** Nombre normalizado: no puede haber dos productos con el mismo. */
+  clave: text("clave").notNull().unique(),
+  categoria: text("categoria").notNull().default("Otros"),
+  clase: text("clase").$type<"mercaderia" | "gasto">().notNull().default("mercaderia"),
+  /** Contenido de cada unidad, en kg o litros (ej. 0,5 l), para el precio por kg o litro. */
+  contenido: doublePrecision("contenido"),
+  medida: text("medida").$type<"kg" | "l">(),
+  creadoEn: creadoEn(),
+  actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
+});
+
+/** Cómo figura el producto en las facturas de cada proveedor (código o descripción): así no se vuelve a preguntar a la IA. */
+export const productoAlias = pgTable("producto_alias", {
+  clave: text("clave").primaryKey(),
+  productoId: integer("producto_id")
+    .notNull()
+    .references(() => producto.id, { onDelete: "cascade" }),
+  proveedor: text("proveedor").notNull(),
+  creadoEn: creadoEn(),
+});
+
+/** Cada compra de un producto: de acá salen los precios por bulto, unidad y kg o litro. */
+export const precioProducto = pgTable(
+  "precio_producto",
+  {
+    id: serial("id").primaryKey(),
+    productoId: integer("producto_id")
+      .notNull()
+      .references(() => producto.id, { onDelete: "cascade" }),
+    comprobanteId: integer("comprobante_id")
+      .notNull()
+      .references(() => comprobante.id, { onDelete: "cascade" }),
+    renglon: integer("renglon").notNull(),
+    aliasClave: text("alias_clave").notNull(),
+    proveedor: text("proveedor").notNull(),
+    fecha: text("fecha").notNull(),
+    descripcion: text("descripcion").notNull(),
+    cantidad: doublePrecision("cantidad").notNull(),
+    unidadCompra: text("unidad_compra").$type<UnidadCompra>().notNull(),
+    unidadesPorBulto: doublePrecision("unidades_por_bulto").notNull().default(0),
+    /** Lo que costó el renglón: con IVA e impuestos internos, sin percepciones, con descuentos y bonificación. */
+    costoFinal: doublePrecision("costo_final").notNull(),
+    creadoEn: creadoEn(),
+  },
+  (t) => [index("precio_producto_idx").on(t.productoId), index("precio_comprobante_idx").on(t.comprobanteId)],
 );

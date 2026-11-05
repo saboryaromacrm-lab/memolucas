@@ -63,6 +63,8 @@ const EDITABLES = [
   "erpUrl",
   "erpEnvioAuto",
   "comprasDominio",
+  "productosModelo",
+  "productosAlertaPct",
 ] as const;
 type Editable = Pick<Cfg, (typeof EDITABLES)[number]>;
 
@@ -586,7 +588,7 @@ function SeccionCompras({
 }) {
   const accion = useAccion();
   const [token, setToken] = useState("");
-  const modelo = (k: "comprasModelo" | "comprasModeloReintento", vacio?: string) => (
+  const modelo = (k: "comprasModelo" | "comprasModeloReintento" | "productosModelo", vacio?: string) => (
     <select className="campo" value={form[k]} onChange={(e) => set(k, e.target.value)}>
       {vacio !== undefined && <option value="">{vacio}</option>}
       {datos.modelos.map((m) => (
@@ -615,6 +617,19 @@ function SeccionCompras({
           </Campo>
           <Campo etiqueta="Días que se guardan las fotos y PDF" ayuda="Después se borran; los datos quedan siempre.">
             <Numero valor={form.comprasDiasArchivo} min={1} onChange={(v) => set("comprasDiasArchivo", v)} />
+          </Campo>
+        </div>
+      </Tarjeta>
+      <Tarjeta
+        titulo="Productos"
+        texto="Con cada factura confirmada se arma la lista de productos con su precio por bulto, por unidad y por kg o litro (final, con IVA e impuestos internos). Se ve en el panel de compras."
+      >
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Campo etiqueta="Modelo para reconocer productos" ayuda="Haiku alcanza y es el más barato.">
+            {modelo("productosModelo")}
+          </Campo>
+          <Campo etiqueta="Avisar si un producto sube más de (%)" ayuda="Se marca en la pestaña Productos.">
+            <Numero valor={form.productosAlertaPct} min={1} onChange={(v) => set("productosAlertaPct", v)} />
           </Campo>
         </div>
       </Tarjeta>

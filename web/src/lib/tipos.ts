@@ -123,6 +123,8 @@ export type Configuracion = {
   instructivoComprasDefecto: string;
   comprasDominio: string;
   comprasLogoAdjuntoId: number | null;
+  productosModelo: string;
+  productosAlertaPct: number;
   groqKeyPropia: boolean;
   groqKeyEntorno: boolean;
   apiKeyPropia: boolean;
