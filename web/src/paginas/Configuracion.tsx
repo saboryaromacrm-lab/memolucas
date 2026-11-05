@@ -744,7 +744,10 @@ function PanelCompras({
               </Boton>
             )}
           </div>
-          <p className="mt-1 text-xs text-slate-500">Mejor en PNG con fondo transparente. También se usa para el ícono de la app en el celular.</p>
+          <p className="mt-1 text-xs text-slate-500">
+            Mejor en PNG con fondo transparente. Es también el ícono de la pestaña del navegador y de la app instalada (se actualiza sola; en iPhone, para ver el
+            nuevo, borrá la app de la pantalla de inicio y volvé a agregarla).
+          </p>
         </div>
       </Tarjeta>
 
