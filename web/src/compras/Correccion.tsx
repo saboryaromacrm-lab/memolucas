@@ -3,7 +3,7 @@ import { Loader2, Plus, Trash2 } from "lucide-react";
 import { useAccion } from "../componentes/ui";
 import { post, put } from "../lib/api";
 import type { Compra, ComprobanteDatos } from "../lib/tipos";
-import { Ventana, type Ancho } from "./comun";
+import { aNumero, Ventana, type Ancho } from "./comun";
 
 type Datos = ComprobanteDatos;
 type Renglon = Datos["renglones"][number];
@@ -84,14 +84,6 @@ export function Correccion({ c, ancho, onCerrar, onListo }: { c: Compra & { dato
       </div>
     </Ventana>
   );
-}
-
-/** "1.234,56", "1234.56" o "1234,56" → 1234.56. */
-function aNumero(s: string): number {
-  const t = s.replace(/[\s$]/g, "");
-  if (!t) return 0;
-  const n = t.includes(",") ? Number(t.replace(/\./g, "").replace(",", ".")) : Number(t);
-  return Number.isFinite(n) ? n : 0;
 }
 
 /** Número que se escribe como en Argentina (coma decimal) y se guarda al salir del campo. */

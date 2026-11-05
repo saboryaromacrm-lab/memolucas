@@ -136,6 +136,7 @@ export function Compras() {
                     {c.titulo} · {fechaCorta(c.fecha)} · {c.renglones} renglón{c.renglones === 1 ? "" : "es"}
                     {c.autor && ` · ${c.autor}`}
                     {c.origen === "panel" && " · Panel de compras"}
+                    {c.origen === "manual" && " · Cargada a mano"}
                   </span>
                 </span>
                 <span className="shrink-0 text-right">
@@ -201,7 +202,7 @@ function Detalle({ id, onCerrar }: { id: number; onCerrar: () => void }) {
             <Boton icono={<Download className="size-4" />} onClick={() => descargar(`compra-${id}.json`, { comprobantes: [c.datos] })}>
               Descargar
             </Boton>
-            {c.estado === "confirmado" && cfg?.erpUrl && (
+            {c.estado === "confirmado" && c.origen !== "manual" && cfg?.erpUrl && (
               <Boton icono={<Send className="size-4" />} cargando={ocupado === "env"} onClick={() => hacer("env", () => post(`/api/compras/${id}/enviar`), c.enviadoEn ? "Reenviado" : "Enviado al ERP")}>
                 {c.enviadoEn ? "Reenviar al ERP" : "Enviar al ERP"}
               </Boton>
@@ -238,7 +239,7 @@ function Detalle({ id, onCerrar }: { id: number; onCerrar: () => void }) {
               </p>
             )}
             <dl className="space-y-1 text-xs text-slate-500">
-              <div>Cargado {fechaHora(c.creadoEn)}{c.autor ? ` por ${c.autor}` : ""}{c.grupoNombre ? ` en ${c.grupoNombre}` : ""}{c.origen === "panel" ? " desde el panel de compras" : ""}</div>
+              <div>Cargado {fechaHora(c.creadoEn)}{c.autor ? ` por ${c.autor}` : ""}{c.grupoNombre ? ` en ${c.grupoNombre}` : ""}{c.origen === "panel" ? " desde el panel de compras" : c.origen === "manual" ? " a mano, sin factura (no va al ERP)" : ""}</div>
               {c.modelo && <div>Leído con {c.modelo}</div>}
               {c.enviadoEn && <div className="text-marca-profundo">Enviado al ERP {fechaHora(c.enviadoEn)}</div>}
               {c.envioError && <div className="text-red-600">Último error al enviar: {c.envioError}</div>}

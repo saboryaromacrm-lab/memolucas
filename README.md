@@ -40,6 +40,7 @@ Le escribís al bot como a una persona (*"recordame mañana a las 10 pagar la lu
   - El mismo producto de distintos proveedores queda junto, con el más barato marcado; se puede juntar o separar a mano.
   - Historial con la variación contra la compra anterior, gráfico y aviso cuando sube más del % configurado (Configuración → Compras → Productos).
   - Se corrige a mano el nombre, la categoría, el contenido o cómo vino una compra, y se recalculan los precios. Buscador, filtros, orden y descarga en Excel.
+- **Compras sin factura** (panel de compras → "Sin factura"): para lo que se compra sin comprobante (ej. 2 bidones de agua de 20 l por $ 14.000). Se carga el lugar, la fecha, una foto opcional y cada producto con su cantidad, cómo vino (unidades, cajas, kilos o litros), lo que trae cada unidad y el precio (total o por unidad). Calcula el precio por unidad, por caja y por kg o litro, la suma a Productos sin IA y queda confirmada. Se puede editar o borrar, y nunca se manda al ERP.
 - **Notas cifradas**: *"anotá que la clave del wifi es…"*, *"anotá comprar leche y pan"*, *"¿cuál era la clave del wifi?"*.
 - **Editar, borrar, pausar y reanudar**: *"cambiá lo del dentista a las 11"*, *"borrá lo de la basura"*.
 - **Comandos rápidos sin IA**: `hoy`, `mañana`, `semana`, `lista`, `listo`, `ayuda`, `silencio 2h` / `silencio off`.

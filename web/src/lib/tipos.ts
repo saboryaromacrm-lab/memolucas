@@ -186,7 +186,7 @@ export type Compra = {
   modelo: string | null;
   archivos: { url: string; mime: string }[];
   archivosBorrados: boolean;
-  origen: "whatsapp" | "panel";
+  origen: "whatsapp" | "panel" | "manual";
   confirmadoEn: string | null;
   enviadoEn: string | null;
   envioError: string | null;
