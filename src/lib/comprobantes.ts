@@ -177,10 +177,16 @@ const TIPOS: Record<Comprobante["encabezado"]["tipo"], string> = {
 const CLASES: Record<Comprobante["clase"], string> = { mercaderia: "Mercadería", gasto: "Gasto", mixta: "Mixta", dudoso: "Clase dudosa" };
 
 /** "Factura A 0012-00004567". */
+/** "Factura A", "Nota de crédito B", "Remito". */
+export function tipoComprobante(c: Comprobante): string {
+  const e = c.encabezado;
+  return [TIPOS[e.tipo], e.letra && e.letra !== "X" ? e.letra : ""].filter(Boolean).join(" ");
+}
+
 export function tituloComprobante(c: Comprobante): string {
   const e = c.encabezado;
   const numero = [e.puntoVenta, e.numero].filter(Boolean).join("-");
-  return [TIPOS[e.tipo], e.letra && e.letra !== "X" ? e.letra : "", numero].filter(Boolean).join(" ");
+  return [tipoComprobante(c), numero].filter(Boolean).join(" ");
 }
 
 const fechaCorta = (iso: string) => (/^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso.split("-").reverse().join("/") : iso);

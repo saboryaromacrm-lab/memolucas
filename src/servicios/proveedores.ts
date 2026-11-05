@@ -73,8 +73,9 @@ export async function sincronizarNombres() {
 
 export type ResumenProveedor = Proveedor & { compras: number; esteMes: number; mesAnterior: number; ultimaCompra: string | null };
 
-/** El mes de cada compra ("2026-11"): el de la factura o, si no tiene fecha, el de la carga. */
-const mesDeCompra = sql`left(coalesce(${comprobante.fecha}, to_char(${comprobante.creadoEn}, 'YYYY-MM-DD')), 7)`;
+/** La fecha de cada compra ("2026-11-05"): la de la factura o, si no tiene, la de la carga. */
+export const fechaDeCompra = sql`coalesce(${comprobante.fecha}, to_char(${comprobante.creadoEn}, 'YYYY-MM-DD'))`;
+const mesDeCompra = sql`left(${fechaDeCompra}, 7)`;
 const comprada = ne(comprobante.estado, "descartado");
 
 /** Proveedores con lo que se les compró (sin contar lo descartado). */

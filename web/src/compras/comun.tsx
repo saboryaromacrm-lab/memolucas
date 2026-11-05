@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { DateTime } from "luxon";
 import { ChevronLeft, X } from "lucide-react";
 import { get } from "../lib/api";
 
@@ -16,6 +17,14 @@ export function aNumero(s: string): number {
   return Number.isFinite(n) ? n : 0;
 }
 export const fechaCorta = (iso: string | null | undefined) => (iso && /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso.split("-").reverse().join("/") : iso || "—");
+/** "octubre 2026" para un mes ("2026-10"); "28/10/2026" para un día. */
+export const nombrePeriodo = (p: string) => (p.length === 7 ? DateTime.fromISO(p).setLocale("es").toFormat("LLLL yyyy") : fechaCorta(p));
+
+/** Desde Métricas: abrir otra pestaña con un filtro o una ficha. */
+export type Destino =
+  | { pestana: "facturas"; formaPagoId?: number; periodo?: string }
+  | { pestana: "productos"; productoId?: number; categoria?: string }
+  | { pestana: "configuracion"; proveedorId: number };
 
 // ───────────── Datos en vivo ─────────────
 

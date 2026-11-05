@@ -1,0 +1,1 @@
+ALTER TABLE "usuario_compras" ADD COLUMN "metricas" boolean DEFAULT false NOT NULL;
