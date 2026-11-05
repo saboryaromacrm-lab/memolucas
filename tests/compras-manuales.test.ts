@@ -16,6 +16,7 @@ import { baseLimpia } from "./ayuda.js";
 
 const bidones = (cambios: Partial<CompraManual["renglones"][number]> = {}): CompraManual => ({
   proveedorId: null,
+  formaPagoId: null,
   fecha: "2026-11-05",
   renglones: [
     { nombre: "Bidón de agua 20 l", categoria: "Bebidas", clase: "gasto", cantidad: 2, unidadCompra: "unidad", unidadesPorBulto: 0, contenido: 20, medida: "l", total: 14000, ...cambios },

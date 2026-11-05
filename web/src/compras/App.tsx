@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
-import { Loader2, LogOut, Package, Receipt, Store } from "lucide-react";
+import { Loader2, LogOut, Package, Receipt, Settings } from "lucide-react";
 import { get, post } from "../lib/api";
 import { iniciarCola } from "./cola";
-import { useAncho } from "./comun";
+import { useAncho, useRecordado } from "./comun";
+import { Configuracion } from "./Configuracion";
 import { Facturas } from "./Facturas";
 import { Productos } from "./Productos";
-import { Proveedores } from "./Proveedores";
 
 type Marca = { nombre: string; logo: string | null };
 
@@ -83,36 +83,21 @@ const PESTANA = "compras-pestana";
 const PESTANAS = [
   ["facturas", "Facturas", Receipt],
   ["productos", "Productos", Package],
-  ["proveedores", "Proveedores", Store],
+  // Con guion opcional: en la barra angosta de la tablet se corta en dos renglones.
+  ["configuracion", "Configu\u00ADración", Settings],
 ] as const;
-type Pestana = (typeof PESTANAS)[number][0];
 
 /** Celular: barra arriba con el logo y pestañas abajo, al alcance del pulgar. Compu y tablet: barra lateral. */
 function Principal({ marca, nombre, onSalir }: { marca: Marca; nombre: string; onSalir: () => void }) {
   const ancho = useAncho();
-  const [pestana, setPestana] = useState<Pestana>(() => {
-    try {
-      const guardada = localStorage.getItem(PESTANA);
-      return PESTANAS.find(([v]) => v === guardada)?.[0] ?? "facturas";
-    } catch {
-      return "facturas";
-    }
-  });
+  const [pestana, elegir] = useRecordado(PESTANA, PESTANAS.map(([v]) => v));
   // Las fotos sin subir se siguen subiendo aunque se esté en otra pestaña.
   useEffect(() => iniciarCola(), []);
-  const elegir = (p: Pestana) => {
-    setPestana(p);
-    try {
-      localStorage.setItem(PESTANA, p);
-    } catch {
-      // Sin almacenamiento: se recuerda solo mientras está abierta.
-    }
-  };
   const salir = async () => {
     await post("/api/c/salir").catch(() => {});
     onSalir();
   };
-  const contenido = { facturas: <Facturas ancho={ancho} />, productos: <Productos ancho={ancho} />, proveedores: <Proveedores ancho={ancho} /> }[pestana];
+  const contenido = { facturas: <Facturas ancho={ancho} />, productos: <Productos ancho={ancho} />, configuracion: <Configuracion ancho={ancho} /> }[pestana];
 
   if (ancho === "movil")
     return (

@@ -167,6 +167,9 @@ export type Grupo = { jid: string; nombre: string; compras: boolean };
 
 export type EstadoCompra = "pendiente" | "revisar" | "confirmado" | "descartado";
 
+/** Forma de pago de las compras; compras = en cuántas se usó. */
+export type FormaPago = { id: number; nombre: string; orden: number; oculta: boolean; compras: number };
+
 /** Comprobante de compra en la lista (el JSON completo viene en "datos" al abrirlo). */
 export type Compra = {
   id: number;
@@ -174,6 +177,9 @@ export type Compra = {
   titulo: string;
   proveedorId: number | null;
   proveedor: string;
+  formaPagoId: number | null;
+  /** Nombre de la forma de pago (null = sin especificar). */
+  formaPago: string | null;
   fecha: string | null;
   total: string | null;
   moneda: "PES" | "DOL" | "";

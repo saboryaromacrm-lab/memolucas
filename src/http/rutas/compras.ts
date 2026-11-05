@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../../db/index.js";
-import { adjunto, grupo, proveedor } from "../../db/schema.js";
+import { adjunto, formaPago, grupo, proveedor } from "../../db/schema.js";
 import { normalizar } from "../../lib/textos.js";
 import { tituloComprobante } from "../../lib/comprobantes.js";
 import {
@@ -37,6 +37,7 @@ export async function serializar({ fila, datos }: ComprobanteGuardado, n: Nombre
     titulo: fila.origen === "manual" ? "Sin factura" : tituloComprobante(datos),
     // El nombre de Proveedores (si se lo cambió, se ve el nuevo); si no tiene, el de la factura.
     proveedor: (fila.proveedorId && n.proveedores.get(fila.proveedorId)) || datos.encabezado.razonSocialEmisor,
+    formaPago: (fila.formaPagoId && n.formasPago.get(fila.formaPagoId)) || null,
     moneda: datos.encabezado.moneda,
     renglones: datos.renglones.length,
     clase: datos.clase,
@@ -47,11 +48,16 @@ export async function serializar({ fila, datos }: ComprobanteGuardado, n: Nombre
   };
 }
 
-type Nombres = { grupos: Map<string, string>; proveedores: Map<number, string> };
-/** Nombres de grupos y proveedores, para mostrar cada comprobante. */
+type Nombres = { grupos: Map<string, string>; proveedores: Map<number, string>; formasPago: Map<number, string> };
+/** Nombres de grupos, proveedores y formas de pago, para mostrar cada comprobante. */
 export async function nombres(): Promise<Nombres> {
-  const [grupos, proveedores] = await Promise.all([db.select().from(grupo), db.select({ id: proveedor.id, nombre: proveedor.nombre }).from(proveedor)]);
-  return { grupos: new Map(grupos.map((g) => [g.jid, g.nombre])), proveedores: new Map(proveedores.map((p) => [p.id, p.nombre])) };
+  const [grupos, proveedores, formas] = await Promise.all([
+    db.select().from(grupo),
+    db.select({ id: proveedor.id, nombre: proveedor.nombre }).from(proveedor),
+    db.select({ id: formaPago.id, nombre: formaPago.nombre }).from(formaPago),
+  ]);
+  const porId = (filas: { id: number; nombre: string }[]) => new Map(filas.map((f) => [f.id, f.nombre]));
+  return { grupos: new Map(grupos.map((g) => [g.jid, g.nombre])), proveedores: porId(proveedores), formasPago: porId(formas) };
 }
 
 export const rutasCompras: FastifyPluginAsync = async (app) => {

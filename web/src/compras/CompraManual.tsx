@@ -5,6 +5,7 @@ import { api, del, get } from "../lib/api";
 import { ahora } from "../lib/fechas";
 import { aNumero, plata, Ventana } from "./comun";
 import { comprimir } from "./imagen";
+import { SelectorFormaPago } from "./SelectorFormaPago";
 import { SelectorProveedor } from "./SelectorProveedor";
 
 type UnidadCompra = "bulto" | "unidad" | "kg" | "litro";
@@ -12,6 +13,7 @@ type Clase = "mercaderia" | "gasto";
 /** Como lo devuelve el servidor (y como se manda al guardar). */
 type CompraManual = {
   proveedorId: number | null;
+  formaPagoId: number | null;
   fecha: string;
   fotoId?: number | null;
   renglones: {
@@ -71,6 +73,7 @@ function preciosDe(f: Fila): [string, number][] {
 /** Cargar (o editar) una compra sin factura: ej. 2 bidones de agua de 20 l por $ 14.000. */
 export function CompraManualForm({ id, onCerrar, onGuardada }: { id: number | null; onCerrar: () => void; onGuardada: (id: number | null) => void }) {
   const [proveedorId, setProveedorId] = useState<number | null>(null);
+  const [formaPagoId, setFormaPagoId] = useState<number | null>(null);
   const [fecha, setFecha] = useState(() => ahora().toISODate()!);
   const [filas, setFilas] = useState<Fila[]>([{ ...FILA_NUEVA }]);
   const [foto, setFoto] = useState<{ archivo: File; url: string } | null>(null);
@@ -87,6 +90,7 @@ export function CompraManualForm({ id, onCerrar, onGuardada }: { id: number | nu
     void get<CompraManual>(`/api/c/manuales/${id}`)
       .then((c) => {
         setProveedorId(c.proveedorId);
+        setFormaPagoId(c.formaPagoId);
         setFecha(c.fecha);
         setFotoActual(c.fotoId ?? null);
         setFilas(
@@ -129,6 +133,7 @@ export function CompraManualForm({ id, onCerrar, onGuardada }: { id: number | nu
   const guardar = async () => {
     const datos: CompraManual = {
       proveedorId,
+      formaPagoId,
       fecha,
       renglones: filas.map((f) => {
         const contenido = f.unidadCompra === "unidad" || f.unidadCompra === "bulto" ? aNumero(f.contenido) : 0;
@@ -191,16 +196,27 @@ export function CompraManualForm({ id, onCerrar, onGuardada }: { id: number | nu
         </div>
       ) : (
         <div className="space-y-4 px-4 py-4 md:px-6">
-          <section className="tarjeta grid gap-3 p-4 @lg:grid-cols-[minmax(0,1fr)_11rem]">
-            <div className="min-w-0">
+          <section className="tarjeta grid gap-3 p-4 @lg:grid-cols-2 @2xl:grid-cols-[minmax(0,1fr)_13rem_11rem]">
+            <div className="min-w-0 @lg:col-span-2 @2xl:col-span-1">
               <span className="etiqueta">Proveedor (opcional)</span>
-              <SelectorProveedor valor={proveedorId} onChange={setProveedorId} />
+              <SelectorProveedor
+                valor={proveedorId}
+                onChange={(id, habitual) => {
+                  setProveedorId(id);
+                  // Su forma de pago habitual se pone sola si todavía no se eligió una.
+                  if (habitual) setFormaPagoId((f) => f ?? habitual);
+                }}
+              />
             </div>
+            <label className="block">
+              <span className="etiqueta">Forma de pago (opcional)</span>
+              <SelectorFormaPago valor={formaPagoId} onChange={setFormaPagoId} />
+            </label>
             <label className="block">
               <span className="etiqueta">Fecha</span>
               <input className="campo" type="date" value={fecha} max={ahora().toISODate()!} onChange={(e) => setFecha(e.target.value)} />
             </label>
-            <div className="@lg:col-span-2">
+            <div className="col-span-full">
               <span className="etiqueta">Foto del ticket o remito (opcional)</span>
               <input
                 ref={elegirFoto}

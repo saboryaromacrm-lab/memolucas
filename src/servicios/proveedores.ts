@@ -1,9 +1,10 @@
 import { and, asc, eq, isNotNull, ne, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { comprobante, productoAlias, proveedor, type Proveedor } from "../db/schema.js";
+import { comprobante, formaPago, productoAlias, proveedor, type Proveedor } from "../db/schema.js";
 import { bus } from "../lib/eventos.js";
 import { ahora } from "../lib/fechas.js";
 import { normalizar } from "../lib/textos.js";
+import { exigirFormaPago } from "./formas-pago.js";
 import { ErrorUsuario } from "./recordatorios.js";
 
 const claveProveedor = (nombre: string) => normalizar(nombre);
@@ -44,20 +45,23 @@ export async function sincronizarNombres() {
 
 export type ResumenProveedor = Proveedor & { compras: number; esteMes: number; mesAnterior: number; ultimaCompra: string | null };
 
+/** El mes de cada compra ("2026-11"): el de la factura o, si no tiene fecha, el de la carga. */
+const mesDeCompra = sql`left(coalesce(${comprobante.fecha}, to_char(${comprobante.creadoEn}, 'YYYY-MM-DD')), 7)`;
+const comprada = ne(comprobante.estado, "descartado");
+
 /** Proveedores con lo que se les compró (sin contar lo descartado). */
 export async function listarProveedores(incluirOcultos = false, id?: number): Promise<ResumenProveedor[]> {
   const hoy = ahora();
-  const mes = sql`left(coalesce(${comprobante.fecha}, to_char(${comprobante.creadoEn}, 'YYYY-MM-DD')), 7)`;
   const totales = db
     .select({
       proveedorId: comprobante.proveedorId,
       compras: sql<number>`count(*)::int`.as("compras"),
-      esteMes: sql<string>`coalesce(sum(${comprobante.total}) filter (where ${mes} = ${hoy.toFormat("yyyy-MM")}), 0)`.as("este_mes"),
-      mesAnterior: sql<string>`coalesce(sum(${comprobante.total}) filter (where ${mes} = ${hoy.minus({ months: 1 }).toFormat("yyyy-MM")}), 0)`.as("mes_anterior"),
+      esteMes: sql<string>`coalesce(sum(${comprobante.total}) filter (where ${mesDeCompra} = ${hoy.toFormat("yyyy-MM")}), 0)`.as("este_mes"),
+      mesAnterior: sql<string>`coalesce(sum(${comprobante.total}) filter (where ${mesDeCompra} = ${hoy.minus({ months: 1 }).toFormat("yyyy-MM")}), 0)`.as("mes_anterior"),
       ultimaCompra: sql<string | null>`max(coalesce(${comprobante.fecha}, to_char(${comprobante.creadoEn}, 'YYYY-MM-DD')))`.as("ultima_compra"),
     })
     .from(comprobante)
-    .where(and(isNotNull(comprobante.proveedorId), ne(comprobante.estado, "descartado")))
+    .where(and(isNotNull(comprobante.proveedorId), comprada))
     .groupBy(comprobante.proveedorId)
     .as("totales");
   const filas = await db
@@ -81,24 +85,40 @@ export async function obtenerProveedor(id: number): Promise<ResumenProveedor> {
   return p;
 }
 
+/** Lo que se le pagó este mes en cada forma de pago, en el orden de las formas (forma null = sin especificar, al final). */
+export async function pagosDelMes(id: number): Promise<{ forma: string | null; total: number }[]> {
+  const filas = await db
+    .select({ forma: formaPago.nombre, total: sql<string>`sum(${comprobante.total})` })
+    .from(comprobante)
+    .leftJoin(formaPago, eq(formaPago.id, comprobante.formaPagoId))
+    .where(and(eq(comprobante.proveedorId, id), comprada, sql`${mesDeCompra} = ${ahora().toFormat("yyyy-MM")}`))
+    .groupBy(formaPago.id)
+    .orderBy(sql`${formaPago.orden} nulls last`);
+  return filas.map((f) => ({ forma: f.forma, total: Number(f.total ?? 0) }));
+}
+
 async function exigirNombreLibre(nombre: string, salvoId?: number) {
   const [otro] = await db.select({ id: proveedor.id }).from(proveedor).where(eq(proveedor.clave, claveProveedor(nombre)));
   if (otro && otro.id !== salvoId) throw new ErrorUsuario("Ya hay un proveedor con ese nombre.");
 }
 
-export async function crearProveedor(nombre: string, notas = ""): Promise<Proveedor> {
-  await exigirNombreLibre(nombre);
-  const [p] = await db.insert(proveedor).values({ nombre: nombre.trim(), clave: claveProveedor(nombre), notas: notas.trim() }).returning();
+export async function crearProveedor(nombre: string, notas = "", formaPagoId: number | null = null): Promise<Proveedor> {
+  await Promise.all([exigirNombreLibre(nombre), exigirFormaPago(formaPagoId)]);
+  const [p] = await db.insert(proveedor).values({ nombre: nombre.trim(), clave: claveProveedor(nombre), notas: notas.trim(), formaPagoId }).returning();
   bus.avisar("compras");
   return p;
 }
 
 /** Cambiar el nombre lo cambia también en todas sus compras y en Productos. */
-export async function actualizarProveedor(id: number, c: { nombre?: string; notas?: string; oculto?: boolean }) {
+export async function actualizarProveedor(id: number, c: { nombre?: string; notas?: string; oculto?: boolean; formaPagoId?: number | null }) {
   const actual = await obtenerProveedor(id);
   const cambios: Partial<typeof proveedor.$inferInsert> = { actualizadoEn: new Date() };
   if (c.notas !== undefined) cambios.notas = c.notas.trim();
   if (c.oculto !== undefined) cambios.oculto = c.oculto;
+  if (c.formaPagoId !== undefined) {
+    await exigirFormaPago(c.formaPagoId);
+    cambios.formaPagoId = c.formaPagoId;
+  }
   const nombre = c.nombre?.trim();
   if (nombre && nombre !== actual.nombre) {
     await exigirNombreLibre(nombre, id);
@@ -120,7 +140,7 @@ export async function borrarProveedor(id: number) {
   bus.avisar("compras");
 }
 
-/** Junta dos proveedores que son el mismo: las compras pasan al otro (y se queda con el CUIT si no tenía). */
+/** Junta dos proveedores que son el mismo: las compras pasan al otro (y se queda con el CUIT y la forma de pago si no tenía). */
 export async function juntarProveedores(id: number, conId: number) {
   if (id === conId) throw new ErrorUsuario("Elegí otro proveedor.");
   const [origen, destino] = await Promise.all([obtenerProveedor(id), obtenerProveedor(conId)]);
@@ -129,7 +149,9 @@ export async function juntarProveedores(id: number, conId: number) {
     await tx.update(productoAlias).set({ proveedor: destino.nombre }).where(eq(productoAlias.proveedor, origen.nombre));
     await tx.delete(proveedor).where(eq(proveedor.id, id));
     const notas = [destino.notas, origen.notas].filter(Boolean).join("\n");
-    await tx.update(proveedor).set({ notas, ...(destino.cuit ? {} : { cuit: origen.cuit }), actualizadoEn: new Date() }).where(eq(proveedor.id, conId));
+    await tx
+      .update(proveedor)
+      .set({ notas, cuit: destino.cuit ?? origen.cuit, formaPagoId: destino.formaPagoId ?? origen.formaPagoId, actualizadoEn: new Date() }).where(eq(proveedor.id, conId));
   });
   await sincronizarNombres();
   bus.avisar("compras");

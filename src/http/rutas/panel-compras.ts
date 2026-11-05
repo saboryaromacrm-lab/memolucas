@@ -9,11 +9,13 @@ import {
   actualizarDatos,
   confirmarComprobante,
   descartarComprobante,
+  fijarFormaPago,
   listarComprobantes,
   obtenerComprobante,
 } from "../../servicios/compras.js";
 import { obtenerConfig } from "../../servicios/configuracion.js";
 import { borrarCompraManual, EsquemaCompraManual, guardarCompraManual, obtenerCompraManual } from "../../servicios/compras-manuales.js";
+import { actualizarFormaPago, borrarFormaPago, crearFormaPago, listarFormasPago, moverFormaPago } from "../../servicios/formas-pago.js";
 import { corregirConTexto } from "../../servicios/lectura-compras.js";
 import {
   adjuntoDeCompras,
@@ -26,7 +28,15 @@ import {
   reintentarLectura,
 } from "../../servicios/panel-compras.js";
 import { ErrorUsuario } from "../../servicios/recordatorios.js";
-import { actualizarProveedor, borrarProveedor, crearProveedor, juntarProveedores, listarProveedores, obtenerProveedor } from "../../servicios/proveedores.js";
+import {
+  actualizarProveedor,
+  borrarProveedor,
+  crearProveedor,
+  juntarProveedores,
+  listarProveedores,
+  obtenerProveedor,
+  pagosDelMes,
+} from "../../servicios/proveedores.js";
 import {
   actualizarCompra,
   actualizarProducto,
@@ -224,18 +234,25 @@ export const rutasPanelCompras: FastifyPluginAsync = async (app) => {
       return listarProveedores(!!ocultos);
     });
 
-    /** Ficha: el proveedor, sus últimas compras y lo que se le compra (con el último precio). */
+    /** Ficha: el proveedor, sus últimas compras, lo pagado este mes en cada forma y lo que se le compra (con el último precio). */
     privado.get("/proveedores/:id", async (req) => {
       const { id } = Id.parse(req.params);
-      const [p, productos, compras, n] = await Promise.all([obtenerProveedor(id), productosDeProveedor(id), listarComprobantes({ proveedorId: id }), nombres()]);
-      return { ...p, productos, ultimas: await Promise.all(compras.slice(0, 50).map((c) => serializar(c, n, ADJUNTOS))) };
+      const [p, productos, compras, pagos, n] = await Promise.all([
+        obtenerProveedor(id),
+        productosDeProveedor(id),
+        listarComprobantes({ proveedorId: id }),
+        pagosDelMes(id),
+        nombres(),
+      ]);
+      return { ...p, productos, pagos, ultimas: await Promise.all(compras.slice(0, 50).map((c) => serializar(c, n, ADJUNTOS))) };
     });
 
-    const DatosProveedor = z.object({ nombre: z.string().trim().min(2).max(120), notas: z.string().max(2000), oculto: z.boolean() });
+    const FormaPagoId = z.number().int().positive().nullable();
+    const DatosProveedor = z.object({ nombre: z.string().trim().min(2).max(120), notas: z.string().max(2000), oculto: z.boolean(), formaPagoId: FormaPagoId });
 
     privado.post("/proveedores", async (req) => {
-      const { nombre, notas } = DatosProveedor.pick({ nombre: true, notas: true }).partial({ notas: true }).parse(req.body);
-      return crearProveedor(nombre, notas);
+      const { nombre, notas, formaPagoId } = DatosProveedor.pick({ nombre: true, notas: true, formaPagoId: true }).partial({ notas: true, formaPagoId: true }).parse(req.body);
+      return crearProveedor(nombre, notas, formaPagoId);
     });
 
     privado.put("/proveedores/:id", async (req) => {
@@ -251,6 +268,32 @@ export const rutasPanelCompras: FastifyPluginAsync = async (app) => {
     privado.post("/proveedores/:id/juntar", async (req) => {
       const { conId } = z.object({ conId: z.number().int().positive() }).parse(req.body);
       await juntarProveedores(Id.parse(req.params).id, conId);
+      return { ok: true };
+    });
+
+    // ───── Formas de pago ─────
+    privado.get("/formas-pago", async (req) => {
+      const { ocultas } = z.object({ ocultas: z.string().optional() }).parse(req.query);
+      return listarFormasPago(!!ocultas);
+    });
+
+    const DatosFormaPago = z.object({ nombre: z.string().trim().min(2).max(60), oculta: z.boolean() });
+
+    privado.post("/formas-pago", async (req) => crearFormaPago(DatosFormaPago.pick({ nombre: true }).parse(req.body).nombre));
+
+    privado.put("/formas-pago/:id", async (req) => {
+      await actualizarFormaPago(Id.parse(req.params).id, DatosFormaPago.partial().parse(req.body));
+      return { ok: true };
+    });
+
+    privado.post("/formas-pago/:id/mover", async (req) => {
+      const { paso } = z.object({ paso: z.union([z.literal(-1), z.literal(1)]) }).parse(req.body);
+      await moverFormaPago(Id.parse(req.params).id, paso);
+      return { ok: true };
+    });
+
+    privado.delete("/formas-pago/:id", async (req) => {
+      await borrarFormaPago(Id.parse(req.params).id);
       return { ok: true };
     });
 
@@ -325,6 +368,13 @@ export const rutasPanelCompras: FastifyPluginAsync = async (app) => {
       const { datos } = z.object({ datos: z.unknown() }).parse(req.body);
       const r = await actualizarDatos(id, datos);
       return { ...(await serializar(r, await nombres(), ADJUNTOS)), datos: r.datos };
+    });
+
+    /** Cómo se pagó: se puede cambiar siempre, aunque ya esté confirmada. */
+    privado.put("/compras/:id/forma-pago", async (req) => {
+      const { formaPagoId } = z.object({ formaPagoId: FormaPagoId }).parse(req.body);
+      await fijarFormaPago(Id.parse(req.params).id, formaPagoId);
+      return { ok: true };
     });
 
     // ───── Productos (precios por bulto, unidad y kg o litro de lo que se compró) ─────

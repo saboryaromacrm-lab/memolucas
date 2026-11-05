@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Check, CheckCircle2, FileText, Loader2, Pencil, Search, Trash2 } from "lucide-react";
 import { useAccion, useAviso } from "../componentes/ui";
-import { post } from "../lib/api";
+import { post, put } from "../lib/api";
 import type { Compra, ComprobanteDatos } from "../lib/tipos";
 import { Cargador, EstadoCola, TarjetaLectura, type Lectura } from "./Cargador";
 import { atajosBloqueados, fechaCorta, Hoja, plata, useVivo, type Ancho } from "./comun";
 import { CompraManualForm } from "./CompraManual";
 import { Correccion } from "./Correccion";
+import { SelectorFormaPago } from "./SelectorFormaPago";
 import { Visor } from "./Visor";
 
 type Detalle = Compra & { datos: ComprobanteDatos };
@@ -26,6 +27,40 @@ const confirmableEnLote = (c: Compra) => c.estado === "pendiente" && c.cierra;
 export function Estado({ c }: { c: Pick<Compra, "estado"> }) {
   return <span className={`inline-block whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-medium ${ESTADOS[c.estado][1]}`}>{ESTADOS[c.estado][0]}</span>;
 }
+/** Cómo se pagó, debajo del total. */
+function Pago({ c }: { c: Compra }) {
+  return c.formaPago && <span className="block text-right text-xs text-stone-500">{c.formaPago}</span>;
+}
+
+type Opcion = [number, string];
+/** Lo que aparece en la lista (id y nombre), para filtrar por uno. */
+function opcionesDe(compras: Compra[], de: (c: Compra) => [number | null, string | null]): Opcion[] {
+  const unicas = new Map<number, string>();
+  for (const c of compras) {
+    const [id, nombre] = de(c);
+    if (id && nombre) unicas.set(id, nombre);
+  }
+  return [...unicas].sort((a, b) => a[1].localeCompare(b[1], "es"));
+}
+
+function FiltroPor({ titulo, todos, opciones, valor, onChange }: { titulo: string; todos: string; opciones: Opcion[]; valor: number | null; onChange: (id: number | null) => void }) {
+  return (
+    <select
+      aria-label={titulo}
+      className={`campo py-2 text-sm ${valor ? "border-naranja text-stone-800" : "text-stone-500"}`}
+      value={valor ?? ""}
+      onChange={(e) => onChange(Number(e.target.value) || null)}
+    >
+      <option value="">{todos}</option>
+      {opciones.map(([id, nombre]) => (
+        <option key={id} value={id}>
+          {nombre}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 function Cierra({ c }: { c: Compra }) {
   if (c.origen === "manual") return <span className="block text-right text-xs text-stone-500">Sin factura</span>;
   return (
@@ -41,6 +76,7 @@ export function Facturas({ ancho }: { ancho: Ancho }) {
   const [filtro, setFiltro] = useState<Filtro>("abiertas");
   const [q, setQ] = useState("");
   const [proveedorId, setProveedorId] = useState<number | null>(null);
+  const [formaPagoId, setFormaPagoId] = useState<number | null>(null);
   const [abierta, setAbierta] = useState<number | null>(null);
   const [elegidas, setElegidas] = useState<Set<number>>(new Set());
   const [confirmando, setConfirmando] = useState(false);
@@ -56,13 +92,13 @@ export function Facturas({ ancho }: { ancho: Ancho }) {
       (c) =>
         (filtro === "abiertas" ? abiertaSegunEstado(c) : filtro === "confirmado" ? c.estado === "confirmado" : true) &&
         (!proveedorId || c.proveedorId === proveedorId) &&
+        (!formaPagoId || c.formaPagoId === formaPagoId) &&
         (!buscado || `${c.proveedor} ${c.titulo} ${c.autor ?? ""}`.toLowerCase().includes(buscado)),
     );
-  }, [datos, filtro, q, proveedorId]);
-  // Los proveedores que tienen facturas en la lista, para filtrar por uno.
-  const proveedores = useMemo(() => {
-    const unicos = new Map((datos?.compras ?? []).flatMap((c) => (c.proveedorId ? [[c.proveedorId, c.proveedor] as const] : [])));
-    return [...unicos].sort((a, b) => a[1].localeCompare(b[1], "es"));
+  }, [datos, filtro, q, proveedorId, formaPagoId]);
+  const opciones = useMemo(() => {
+    const compras = datos?.compras ?? [];
+    return { proveedores: opcionesDe(compras, (c) => [c.proveedorId, c.proveedor]), formas: opcionesDe(compras, (c) => [c.formaPagoId, c.formaPago]) };
   }, [datos]);
   const cantidadAbiertas = (datos?.compras ?? []).filter(abiertaSegunEstado).length;
   const loteVisible = lista.filter(confirmableEnLote);
@@ -154,24 +190,17 @@ export function Facturas({ ancho }: { ancho: Ancho }) {
       ))}
     </div>
   );
-  const filtroProveedor = proveedores.length > 0 && (
-    <select
-      aria-label="Filtrar por proveedor"
-      className={`campo py-2 text-sm ${proveedorId ? "border-naranja text-stone-800" : "text-stone-500"}`}
-      value={proveedorId ?? ""}
-      onChange={(e) => setProveedorId(Number(e.target.value) || null)}
-    >
-      <option value="">Todos los proveedores</option>
-      {proveedores.map(([id, nombre]) => (
-        <option key={id} value={id}>
-          {nombre}
-        </option>
-      ))}
-    </select>
+  const filtrosPor = (opciones.proveedores.length > 0 || opciones.formas.length > 0) && (
+    <div className="flex w-full gap-2 *:min-w-0 *:flex-1 md:max-w-xl">
+      {opciones.proveedores.length > 0 && (
+        <FiltroPor titulo="Filtrar por proveedor" todos="Proveedor: todos" opciones={opciones.proveedores} valor={proveedorId} onChange={setProveedorId} />
+      )}
+      {opciones.formas.length > 0 && <FiltroPor titulo="Filtrar por forma de pago" todos="Pago: todas" opciones={opciones.formas} valor={formaPagoId} onChange={setFormaPagoId} />}
+    </div>
   );
   const vacio = (
     <p className="px-4 py-10 text-center text-sm text-stone-500">
-      {q || proveedorId ? "No hay facturas con esa búsqueda." : filtro === "abiertas" ? "No hay facturas para revisar 🙌" : "Todavía no hay facturas acá."}
+      {q || proveedorId || formaPagoId ? "No hay facturas con esa búsqueda." : filtro === "abiertas" ? "No hay facturas para revisar 🙌" : "Todavía no hay facturas acá."}
     </p>
   );
   const cargando = (
@@ -224,7 +253,7 @@ export function Facturas({ ancho }: { ancho: Ancho }) {
       <div className="space-y-4">
         {arriba}
         {filtros}
-        {filtroProveedor}
+        {filtrosPor}
         {!datos ? (
           cargando
         ) : !lista.length ? (
@@ -246,6 +275,7 @@ export function Facturas({ ancho }: { ancho: Ancho }) {
                 <span className="shrink-0 text-right">
                   <span className="block font-semibold tabular-nums text-stone-800">{plata(c.total, c.moneda)}</span>
                   <Cierra c={c} />
+                  <Pago c={c} />
                 </span>
               </button>
             ))}
@@ -260,11 +290,11 @@ export function Facturas({ ancho }: { ancho: Ancho }) {
     <section className="tarjeta flex min-h-0 flex-col overflow-hidden">
       <div className="flex flex-wrap items-center gap-3 border-b border-stone-100 px-4 py-3">
         {filtros}
-        {filtroProveedor && <div className="ml-auto w-full max-w-56">{filtroProveedor}</div>}
-        <div className={`relative w-full max-w-64 ${filtroProveedor ? "" : "ml-auto"}`}>
+        <div className="relative ml-auto w-full max-w-64">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-stone-400" />
           <input className="campo py-2 pl-9 text-sm" placeholder="Buscar proveedor o número…" value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
+        {filtrosPor}
       </div>
       {seleccion.length > 0 && (
         <div className="flex flex-wrap items-center gap-3 border-b border-orange-100 bg-orange-50 px-4 py-2 text-sm">
@@ -352,6 +382,7 @@ export function Facturas({ ancho }: { ancho: Ancho }) {
                   <td className="py-3 pl-3 pr-4 text-right">
                     <div className="whitespace-nowrap font-semibold tabular-nums text-stone-800">{plata(c.total, c.moneda)}</div>
                     <Cierra c={c} />
+                    <Pago c={c} />
                   </td>
                 </tr>
               ))}
@@ -518,7 +549,7 @@ function DetalleFactura({
                 </ul>
               </div>
             )}
-            <Resumen c={c} />
+            <Resumen c={c} onCambio={recargar} />
             {c.origen === "manual" ? (
               <p className="text-center text-sm text-stone-500">Compra sin factura, cargada a mano. No va al ERP.</p>
             ) : (
@@ -550,9 +581,14 @@ function DetalleFactura({
   );
 }
 
-function Resumen({ c }: { c: Detalle }) {
+function Resumen({ c, onCambio }: { c: Detalle; onCambio: () => Promise<void> }) {
+  const accion = useAccion();
   const d = c.datos;
   const m = String(d.encabezado.moneda || "PES");
+  // Se puede cambiar siempre, aunque ya esté confirmada.
+  const elegirFormaPago = async (formaPagoId: number | null) => {
+    if (await accion(() => put(`/api/c/compras/${c.id}/forma-pago`, { formaPagoId }), "Forma de pago guardada")) await onCambio();
+  };
   return (
     <>
       <section className="tarjeta grid grid-cols-2 gap-3 px-4 py-3 text-sm @lg:grid-cols-4">
@@ -560,6 +596,10 @@ function Resumen({ c }: { c: Detalle }) {
         <Dato t="Fecha" v={fechaCorta(String(d.encabezado.fecha))} />
         <Dato t="Proveedor" v={c.proveedor || "—"} />
         {c.origen !== "manual" && <Dato t="CUIT" v={String(d.encabezado.cuitEmisor || "—")} />}
+        <label className="col-span-2 block">
+          <span className="etiqueta">Forma de pago</span>
+          <SelectorFormaPago className="py-2" valor={c.formaPagoId} onChange={(id) => void elegirFormaPago(id)} />
+        </label>
       </section>
       <section className="tarjeta divide-y divide-stone-100">
         {d.renglones.map((r, i) => (

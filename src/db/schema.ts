@@ -295,6 +295,7 @@ export type UsuarioCompras = typeof usuarioCompras.$inferSelect;
 export type LecturaCompras = typeof lecturaCompras.$inferSelect;
 export type Producto = typeof producto.$inferSelect;
 export type Proveedor = typeof proveedor.$inferSelect;
+export type FormaPago = typeof formaPago.$inferSelect;
 export type PrecioProducto = typeof precioProducto.$inferSelect;
 export type UnidadCompra = "bulto" | "unidad" | "kg" | "litro";
 
@@ -308,6 +309,7 @@ export const comprobante = pgTable(
     /** Por dónde llegó: el bot de WhatsApp, el panel de compras o cargada a mano (sin factura). */
     origen: text("origen").$type<"whatsapp" | "panel" | "manual">().notNull().default("whatsapp"),
     proveedorId: integer("proveedor_id").references(() => proveedor.id, { onDelete: "set null" }),
+    formaPagoId: integer("forma_pago_id").references(() => formaPago.id, { onDelete: "set null" }),
     estado: text("estado").$type<"pendiente" | "revisar" | "confirmado" | "descartado">().notNull(),
     datosCifrados: text("datos_cifrados").notNull(),
     /** Hash para detectar el mismo comprobante cargado dos veces. */
@@ -331,7 +333,12 @@ export const comprobante = pgTable(
     creadoEn: creadoEn(),
     actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
   },
-  (t) => [index("comprobante_clave_idx").on(t.clave), index("comprobante_creado_idx").on(t.creadoEn), index("comprobante_proveedor_idx").on(t.proveedorId)],
+  (t) => [
+    index("comprobante_clave_idx").on(t.clave),
+    index("comprobante_creado_idx").on(t.creadoEn),
+    index("comprobante_proveedor_idx").on(t.proveedorId),
+    index("comprobante_forma_pago_idx").on(t.formaPagoId),
+  ],
 );
 
 /** Personas que entran al panel de compras, cada una con su clave. */
@@ -430,6 +437,22 @@ export const proveedor = pgTable("proveedor", {
   notas: text("notas").notNull().default(""),
   /** Oculto: no aparece para elegir, pero conserva sus compras. */
   oculto: boolean("oculto").notNull().default(false),
+  /** La forma de pago habitual: se pone sola al elegirlo en una compra. */
+  formaPagoId: integer("forma_pago_id").references(() => formaPago.id, { onDelete: "set null" }),
   creadoEn: creadoEn(),
   actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
+});
+
+/** Formas de pago de las compras (efectivo, transferencia…), en el orden en que se ofrecen. */
+export const formaPago = pgTable("forma_pago", {
+  id: serial("id").primaryKey(),
+  nombre: text("nombre").notNull(),
+  /** Nombre normalizado: no puede haber dos con el mismo. */
+  clave: text("clave").notNull().unique(),
+  /** Cómo la anota el lector de facturas (pagoQueFigura.medio), para preelegirla. */
+  medio: text("medio").unique(),
+  orden: integer("orden").notNull().default(0),
+  /** Oculta: no aparece para elegir, pero conserva sus compras. */
+  oculta: boolean("oculta").notNull().default(false),
+  creadoEn: creadoEn(),
 });
