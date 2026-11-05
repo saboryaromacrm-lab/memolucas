@@ -7,6 +7,7 @@ import { bus } from "../lib/eventos.js";
 import { normalizar } from "../lib/textos.js";
 import { borrarAdjunto } from "./adjuntos.js";
 import { columnas, leerDatos } from "./compras.js";
+import { exigirFormaPago } from "./formas-pago.js";
 import { claveProducto } from "./productos.js";
 import { nombreDeProveedor } from "./proveedores.js";
 import { ErrorUsuario } from "./recordatorios.js";
@@ -31,6 +32,8 @@ const Renglon = z.object({
 export const EsquemaCompraManual = z.object({
   /** Proveedor elegido o creado en el momento (opcional). */
   proveedorId: z.number().int().positive().nullable(),
+  /** Cómo se pagó (opcional). */
+  formaPagoId: z.number().int().positive().nullable().default(null),
   fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Fecha inválida"),
   renglones: z.array(Renglon).min(1).max(50),
 });
@@ -155,6 +158,7 @@ async function manual(id: number): Promise<FilaComprobante> {
 export async function guardarCompraManual(d: CompraManual, autor: string | null, foto: number | null | undefined, id?: number): Promise<number> {
   const anterior = id ? await manual(id) : null;
   const nombreProveedor = d.proveedorId ? await nombreDeProveedor(d.proveedorId) : "";
+  await exigirFormaPago(d.formaPagoId);
   const adjuntoIds = foto === undefined ? (anterior?.adjuntoIds ?? []) : foto === null ? [] : [foto];
   const nuevoId = await db.transaction(async (tx) => {
     const productosAntes = anterior ? (await tx.select({ id: precioProducto.productoId }).from(precioProducto).where(eq(precioProducto.comprobanteId, anterior.id))).map((p) => p.id) : [];
@@ -165,6 +169,7 @@ export async function guardarCompraManual(d: CompraManual, autor: string | null,
       ...columnas(comprobanteDe(d, nombreProveedor, productos.map((p) => p.clase)), true),
       clave: null,
       proveedorId: d.proveedorId,
+      formaPagoId: d.formaPagoId,
       adjuntoIds,
       actualizadoEn: new Date(),
     };
@@ -193,6 +198,7 @@ export async function obtenerCompraManual(id: number): Promise<CompraManual & { 
     .orderBy(precioProducto.renglon);
   return {
     proveedorId: fila.proveedorId,
+    formaPagoId: fila.formaPagoId,
     fecha: datos.encabezado.fecha,
     fotoId: fila.adjuntoIds[0] ?? null,
     renglones: filas.map(({ precio: r, producto: p }) => ({

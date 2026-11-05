@@ -7,6 +7,7 @@ import { claveDe, controlar, EsquemaComprobante, type Comprobante } from "../lib
 import { bus } from "../lib/eventos.js";
 import { registrar } from "../lib/log.js";
 import { obtenerConfig } from "./configuracion.js";
+import { exigirFormaPago, sugerirFormaPago } from "./formas-pago.js";
 import { proveedorPara, sincronizarNombres } from "./proveedores.js";
 import { ErrorUsuario, filtroChat } from "./recordatorios.js";
 
@@ -28,6 +29,13 @@ export function leerDatos(fila: FilaComprobante): Comprobante {
 
 /** El proveedor de la factura (se crea solo si es nuevo). */
 const proveedorDe = (datos: Comprobante) => proveedorPara(datos.encabezado.razonSocialEmisor, datos.encabezado.cuitEmisor);
+
+/** El proveedor y la forma de pago preelegida (la que figura en la factura o la habitual del proveedor). */
+async function vinculosDe(datos: Comprobante) {
+  const proveedorId = await proveedorDe(datos);
+  const { figura, medio } = datos.pagoQueFigura;
+  return { proveedorId, formaPagoSugerida: await sugerirFormaPago(figura ? medio : "", proveedorId) };
+}
 
 export const columnas = (datos: Comprobante, cierra: boolean) => ({
   datosCifrados: cifrar(JSON.stringify(datos)),
@@ -58,6 +66,7 @@ export async function guardarComprobante(d: {
   modelo: string | null;
   adjuntoIds: number[];
 }): Promise<FilaComprobante> {
+  const { proveedorId, formaPagoSugerida } = await vinculosDe(d.datos);
   const [fila] = await db
     .insert(comprobante)
     .values({
@@ -67,7 +76,8 @@ export async function guardarComprobante(d: {
       estado: d.cierra ? "pendiente" : "revisar",
       modelo: d.modelo,
       adjuntoIds: d.adjuntoIds,
-      proveedorId: await proveedorDe(d.datos),
+      proveedorId,
+      formaPagoId: formaPagoSugerida,
       ...columnas(d.datos, d.cierra),
     })
     .returning();
@@ -103,13 +113,27 @@ export async function actualizarDatos(id: number, nuevos: unknown): Promise<Comp
   if (!actual) throw new ErrorUsuario("No existe ese comprobante");
   if (actual.fila.estado === "confirmado") throw new ErrorUsuario("Ya está confirmado: no se puede cambiar.");
   const { comprobante: datos, cierra } = controlar(EsquemaComprobante.parse(nuevos));
+  const { proveedorId, formaPagoSugerida } = await vinculosDe(datos);
   const [fila] = await db
     .update(comprobante)
-    .set({ ...columnas(datos, cierra), proveedorId: await proveedorDe(datos), estado: cierra ? "pendiente" : "revisar", corrigiendoHasta: null, actualizadoEn: sql`now()` })
+    .set({
+      ...columnas(datos, cierra),
+      proveedorId,
+      // La forma elegida a mano se respeta; si no tenía, se preelige.
+      formaPagoId: sql`coalesce(${comprobante.formaPagoId}, ${formaPagoSugerida}::int)`,
+      estado: cierra ? "pendiente" : "revisar", corrigiendoHasta: null, actualizadoEn: sql`now()` })
     .where(eq(comprobante.id, id))
     .returning();
   bus.avisar("compras");
   return { fila, datos };
+}
+
+/** Cómo se pagó la compra (null = sin especificar). Se puede cambiar siempre, aunque ya esté confirmada. */
+export async function fijarFormaPago(id: number, formaPagoId: number | null) {
+  await exigirFormaPago(formaPagoId);
+  const [fila] = await db.update(comprobante).set({ formaPagoId, actualizadoEn: sql`now()` }).where(eq(comprobante.id, id)).returning({ id: comprobante.id });
+  if (!fila) throw new ErrorUsuario("No existe ese comprobante");
+  bus.avisar("compras");
 }
 
 /** Al arrancar: las facturas que todavía no tienen proveedor (las de antes de Proveedores) se vinculan solas. */

@@ -4,11 +4,11 @@ import { useAccion } from "../componentes/ui";
 import { post } from "../lib/api";
 import { useVivo } from "./comun";
 
-type Opcion = { id: number; nombre: string; oculto: boolean };
+type Opcion = { id: number; nombre: string; oculto: boolean; formaPagoId: number | null };
 const clave = (s: string) => s.trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
 
-/** Elegir un proveedor con buscador; si no está, se crea ahí mismo y queda guardado. */
-export function SelectorProveedor({ valor, onChange }: { valor: number | null; onChange: (id: number | null) => void }) {
+/** Elegir un proveedor con buscador; si no está, se crea ahí mismo y queda guardado. Avisa también su forma de pago habitual. */
+export function SelectorProveedor({ valor, onChange }: { valor: number | null; onChange: (id: number | null, formaPagoHabitual: number | null) => void }) {
   // Con los ocultos, para mostrar el elegido aunque esté oculto; para elegir se ofrecen solo los visibles.
   const { datos, recargar } = useVivo<Opcion[]>("/api/c/proveedores?ocultos=1");
   const [texto, setTexto] = useState("");
@@ -23,8 +23,8 @@ export function SelectorProveedor({ valor, onChange }: { valor: number | null; o
   }, [datos, texto]);
   const exacto = coincidencias.some((p) => clave(p.nombre) === clave(texto));
 
-  const elegir = (id: number) => {
-    onChange(id);
+  const elegir = (p: Opcion) => {
+    onChange(p.id, p.formaPagoId);
     setTexto("");
     setAbierto(false);
   };
@@ -34,7 +34,7 @@ export function SelectorProveedor({ valor, onChange }: { valor: number | null; o
     setCreando(false);
     if (!nuevo) return;
     await recargar();
-    elegir(nuevo.id);
+    elegir(nuevo);
   };
 
   if (valor && !datos) return <div className="campo text-stone-400">Cargando…</div>;
@@ -42,7 +42,7 @@ export function SelectorProveedor({ valor, onChange }: { valor: number | null; o
     return (
       <div className="flex items-center justify-between gap-2 rounded-xl border border-stone-300 bg-white px-3 py-2.5">
         <span className="truncate font-medium text-stone-800">{elegido.nombre}</span>
-        <button aria-label="Cambiar proveedor" title="Cambiar proveedor" onClick={() => onChange(null)} className="rounded-lg p-1 text-stone-400 hover:bg-stone-100 hover:text-stone-700">
+        <button aria-label="Cambiar proveedor" title="Cambiar proveedor" onClick={() => onChange(null, null)} className="rounded-lg p-1 text-stone-400 hover:bg-stone-100 hover:text-stone-700">
           <X className="size-4" />
         </button>
       </div>
@@ -62,7 +62,7 @@ export function SelectorProveedor({ valor, onChange }: { valor: number | null; o
         onKeyDown={(e) => {
           if (e.key !== "Enter") return;
           e.preventDefault();
-          if (coincidencias[0] && (exacto || !texto.trim())) elegir(coincidencias[0].id);
+          if (coincidencias[0] && (exacto || !texto.trim())) elegir(coincidencias[0]);
           else if (texto.trim().length >= 2) void crear();
         }}
       />
@@ -70,7 +70,7 @@ export function SelectorProveedor({ valor, onChange }: { valor: number | null; o
         <ul className="absolute inset-x-0 top-full z-10 mt-1 max-h-64 overflow-y-auto rounded-xl border border-stone-200 bg-white py-1 shadow-lg">
           {coincidencias.map((p) => (
             <li key={p.id}>
-              <button onMouseDown={(e) => e.preventDefault()} onClick={() => elegir(p.id)} className="w-full px-3 py-2 text-left text-sm text-stone-800 hover:bg-orange-50">
+              <button onMouseDown={(e) => e.preventDefault()} onClick={() => elegir(p)} className="w-full px-3 py-2 text-left text-sm text-stone-800 hover:bg-orange-50">
                 {p.nombre}
               </button>
             </li>

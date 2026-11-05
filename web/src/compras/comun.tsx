@@ -68,6 +68,30 @@ export function useVivo<T>(ruta: string | null) {
   return { datos, recargar };
 }
 
+/** Una elección que se recuerda en este navegador (ej. la pestaña). Si lo guardado no es un valor posible, vale el primero. */
+export function useRecordado<T extends string>(clave: string, posibles: readonly T[]): [T, (v: T) => void] {
+  const [valor, setValor] = useState<T>(() => {
+    try {
+      const guardado = localStorage.getItem(clave);
+      return posibles.find((p) => p === guardado) ?? posibles[0];
+    } catch {
+      return posibles[0];
+    }
+  });
+  const elegir = useCallback(
+    (v: T) => {
+      setValor(v);
+      try {
+        localStorage.setItem(clave, v);
+      } catch {
+        // Sin almacenamiento: se recuerda solo mientras está abierta.
+      }
+    },
+    [clave],
+  );
+  return [valor, elegir];
+}
+
 // ───────────── Tamaño de pantalla ─────────────
 
 /** movil: menos de 768 px · tablet: hasta 1279 px (el detalle va encima) · pc: desde 1280 px (el detalle va al costado). */

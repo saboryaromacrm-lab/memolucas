@@ -6,10 +6,23 @@ import type { Compra } from "../lib/tipos";
 import { atajosBloqueados, fechaCorta, Hoja, plata, useVivo, Ventana, type Ancho } from "./comun";
 import { Estado } from "./Facturas";
 import { lineasDePrecio, type Precios } from "./Productos";
+import { SelectorFormaPago } from "./SelectorFormaPago";
 
-type Proveedor = { id: number; nombre: string; notas: string; oculto: boolean; compras: number; esteMes: number; mesAnterior: number; ultimaCompra: string | null };
+type Proveedor = {
+  id: number;
+  nombre: string;
+  notas: string;
+  oculto: boolean;
+  formaPagoId: number | null;
+  compras: number;
+  esteMes: number;
+  mesAnterior: number;
+  ultimaCompra: string | null;
+};
 type Ficha = Proveedor & {
   productos: { id: number; nombre: string; categoria: string; fecha: string; unidadesPorBulto: number; precios: Precios }[];
+  /** Lo pagado este mes en cada forma de pago. */
+  pagos: { forma: string | null; total: number }[];
   /** Las últimas 50 compras, para la ficha. */
   ultimas: Compra[];
 };
@@ -214,6 +227,31 @@ function FichaProveedor({
             ))}
           </div>
           {p.notas && <p className="tarjeta whitespace-pre-wrap px-4 py-3 text-sm text-stone-700">{p.notas}</p>}
+
+          <section className="tarjeta space-y-3 px-4 py-3">
+            <label className="block">
+              <span className="etiqueta">Forma de pago habitual</span>
+              <SelectorFormaPago
+                className="py-2"
+                valor={p.formaPagoId}
+                onChange={(formaPagoId) => void accion(() => put(`/api/c/proveedores/${id}`, { formaPagoId }), "Forma de pago guardada").then(recargar)}
+              />
+              <span className="mt-1 block text-xs text-stone-500">Se pone sola al elegirlo en una compra, si la factura no dice cómo se pagó.</span>
+            </label>
+            {p.pagos.length > 0 && (
+              <div>
+                <span className="etiqueta">Este mes, por forma de pago</span>
+                <div className="divide-y divide-stone-100 text-sm">
+                  {p.pagos.map((x) => (
+                    <div key={x.forma ?? ""} className="flex justify-between gap-3 py-1.5">
+                      <span className={x.forma ? "text-stone-800" : "text-stone-500"}>{x.forma ?? "Sin especificar"}</span>
+                      <span className="font-medium tabular-nums">{plata(x.total)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </section>
 
           <section className="tarjeta divide-y divide-stone-100">
             <h3 className="px-4 py-2.5 text-sm font-semibold text-stone-800">Lo que le comprás</h3>
