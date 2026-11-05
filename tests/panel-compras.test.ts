@@ -155,6 +155,37 @@ describe("panel de compras", () => {
     expect((await sharp(conLogo.rawPayload).metadata()).width).toBe(512);
     const manifest = (await app.inject({ url: "/api/c/manifest.webmanifest", headers: { host: HOST } })).json();
     expect(manifest.name).toBe("Compras Coffit");
+    expect(manifest.icons).toContainEqual({ src: `/api/c/icono/512-recorte.png?v=${logo.id}`, sizes: "512x512", type: "image/png", purpose: "maskable" });
+    expect(manifest.icons).toContainEqual({ src: `/api/c/icono/192.png?v=${logo.id}`, sizes: "192x192", type: "image/png", purpose: "any" });
     expect((await app.inject({ url: "/api/c/marca", headers: { host: HOST } })).json().logo).toContain("/api/c/logo");
+  });
+
+  it("los íconos usan el logo con el fondo que le va y se guardan solo si llevan la versión", async () => {
+    /** El color de la esquina del ícono (el fondo). */
+    const esquina = async (url: string) => {
+      const { data } = await sharp((await app.inject({ url, headers: { host: HOST } })).rawPayload)
+        .extract({ left: 0, top: 0, width: 1, height: 1 })
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+      return [data[0], data[1], data[2]];
+    };
+    const usar = async (fondo: string, transparente: boolean) => {
+      const base = sharp({ create: { width: 200, height: 200, channels: 4, background: transparente ? "#00000000" : fondo } });
+      const dibujo = transparente ? base.composite([{ input: await sharp({ create: { width: 120, height: 120, channels: 4, background: fondo } }).png().toBuffer() }]) : base;
+      const logo = await guardarImagen(await dibujo.png().toBuffer(), "image/png");
+      await actualizarConfig({ comprasLogoAdjuntoId: logo.id });
+    };
+    await usar("#ffffff", true); // logo claro y transparente: fondo café
+    expect(await esquina("/api/c/icono/32.png")).toEqual([0x3b, 0x24, 0x16]);
+    await usar("#e07a2c", true); // naranja: contrasta más con café
+    expect(await esquina("/api/c/icono/192.png")).toEqual([0x3b, 0x24, 0x16]);
+    await usar("#111111", true); // logo oscuro: fondo beige
+    expect(await esquina("/api/c/icono/180.png")).toEqual([0xf3, 0xe8, 0xd8]);
+    await usar("#2255aa", false); // con su propio fondo: ese color
+    expect(await esquina("/api/c/icono/512-recorte.png")).toEqual([0x22, 0x55, 0xaa]);
+
+    expect((await app.inject({ url: "/api/c/icono/64.png", headers: { host: HOST } })).statusCode).toBe(404);
+    expect((await app.inject({ url: "/api/c/icono/192.png", headers: { host: HOST } })).headers["cache-control"]).toBe("no-cache");
+    expect((await app.inject({ url: "/api/c/icono/192.png?v=3", headers: { host: HOST } })).headers["cache-control"]).toContain("immutable");
   });
 });

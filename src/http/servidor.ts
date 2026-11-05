@@ -118,9 +118,14 @@ export async function crearServidor() {
         else res.header("Cache-Control", "no-cache");
       },
     });
-    app.get("/*", (req, reply) => {
+    // El panel de compras lleva la versión del logo en sus íconos: al cambiar el logo, el navegador los vuelve a pedir.
+    const paginaCompras = fs.readFileSync(path.join(web, "compras.html"), "utf8");
+    app.get("/*", async (req, reply) => {
       if (req.url.startsWith("/api/")) return reply.code(404).send({ error: "No existe" });
-      return esHostCompras(req.hostname).then((compras) => reply.header("Cache-Control", "no-cache").sendFile(compras ? "compras.html" : "index.html"));
+      reply.header("Cache-Control", "no-cache");
+      if (!(await esHostCompras(req.hostname))) return reply.sendFile("index.html");
+      const version = (await obtenerConfig()).comprasLogoAdjuntoId ?? 0;
+      return reply.type("text/html; charset=utf-8").send(paginaCompras.replace(/(\/api\/c\/(?:icono\/[\w-]+\.png|manifest\.webmanifest))"/g, `$1?v=${version}"`));
     });
   }
 

@@ -83,19 +83,54 @@ const ICONO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"
 <rect x="120" y="396" width="236" height="20" rx="10" fill="${COLORES_COFFIT.beige}"/>
 </svg>`;
 
-async function icono(tam: number): Promise<Buffer> {
+/**
+ * Los íconos del panel: tamaño y cuánto del cuadrado ocupa el logo. Los "recorte" son para Android, que los recorta
+ * en círculo: el logo tiene que entrar en el círculo central (80 %).
+ */
+const ICONOS: Record<string, { tam: number; logo: number }> = {
+  "32": { tam: 32, logo: 0.94 }, // pestaña del navegador
+  "180": { tam: 180, logo: 0.82 }, // iPhone (redondea las esquinas)
+  "192": { tam: 192, logo: 0.86 },
+  "512": { tam: 512, logo: 0.86 },
+  "192-recorte": { tam: 192, logo: 0.56 },
+  "512-recorte": { tam: 512, logo: 0.56 },
+};
+
+/** Luminancia relativa (0 negro, 1 blanco) de un color, para medir el contraste. */
+function luminancia(r: number, g: number, b: number) {
+  const lineal = (c: number) => (c / 255 <= 0.03928 ? c / 255 / 12.92 : ((c / 255 + 0.055) / 1.055) ** 2.4);
+  return 0.2126 * lineal(r) + 0.7152 * lineal(g) + 0.0722 * lineal(b);
+}
+const hexARgb = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)) as [number, number, number];
+const contraste = (a: number, b: number) => (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+
+/** Si el logo ya trae fondo (no es transparente), ese color; si no, café o beige: el que más contraste con el logo. */
+async function fondoDelIcono(ruta: string): Promise<string> {
+  const { data } = await sharp(ruta).resize(64, 64, { fit: "inside" }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const suma = [0, 0, 0];
+  let visible = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    const a = data[i + 3] / 255;
+    visible += a;
+    for (let c = 0; c < 3; c++) suma[c] += a * data[i + c];
+  }
+  if (visible >= (data.length / 4) * 0.99) return `rgb(${data[0]}, ${data[1]}, ${data[2]})`;
+  if (!visible) return COLORES_COFFIT.beige;
+  const logo = luminancia(suma[0] / visible, suma[1] / visible, suma[2] / visible);
+  const [cafe, beige] = [COLORES_COFFIT.cafe, COLORES_COFFIT.beige].map((c) => contraste(logo, luminancia(...hexARgb(c))));
+  return cafe >= beige ? COLORES_COFFIT.cafe : COLORES_COFFIT.beige;
+}
+
+async function icono({ tam, logo: parte }: { tam: number; logo: number }): Promise<Buffer> {
   const cfg = await obtenerConfig();
   const logo = cfg.comprasLogoAdjuntoId ? await obtenerAdjunto(cfg.comprasLogoAdjuntoId) : null;
-  if (logo && fs.existsSync(logo.rutaArchivo)) {
-    // El logo va centrado sobre beige, con margen (los íconos de Android se recortan en círculo).
-    const interior = Math.round(tam * 0.72);
-    const dibujo = await sharp(logo.rutaArchivo).resize(interior, interior, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } }).png().toBuffer();
-    return sharp({ create: { width: tam, height: tam, channels: 4, background: COLORES_COFFIT.beige } })
-      .composite([{ input: dibujo, gravity: "center" }])
-      .png()
-      .toBuffer();
-  }
-  return sharp(Buffer.from(ICONO_SVG)).resize(tam, tam).png().toBuffer();
+  if (!logo || !fs.existsSync(logo.rutaArchivo)) return sharp(Buffer.from(ICONO_SVG)).resize(tam, tam).png().toBuffer();
+  const interior = Math.round(tam * parte);
+  const dibujo = await sharp(logo.rutaArchivo).resize(interior, interior, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } }).png().toBuffer();
+  return sharp({ create: { width: tam, height: tam, channels: 4, background: await fondoDelIcono(logo.rutaArchivo) } })
+    .composite([{ input: dibujo, gravity: "center" }])
+    .png()
+    .toBuffer();
 }
 
 async function autenticarCompras(req: FastifyRequest, reply: FastifyReply) {
@@ -145,10 +180,15 @@ export const rutasPanelCompras: FastifyPluginAsync = async (app) => {
     return reply.header("Content-Type", a.mime).header("Cache-Control", "public, max-age=86400").send(fs.createReadStream(a.rutaArchivo));
   });
 
-  app.get("/icono/:tam", async (req, reply) => {
-    const tam = Number(String((req.params as { tam: string }).tam).replace(/\.png$/, ""));
-    if (![180, 192, 512].includes(tam)) return reply.code(404).send({ error: "No existe" });
-    return reply.header("Content-Type", "image/png").header("Cache-Control", "public, max-age=3600").send(await icono(tam));
+  // Las direcciones llevan la versión del logo (?v=): al cambiarlo cambian, así que se pueden guardar mucho tiempo.
+  app.get("/icono/:nombre", async (req, reply) => {
+    const variante = ICONOS[String((req.params as { nombre: string }).nombre).replace(/\.png$/, "")];
+    if (!variante) return reply.code(404).send({ error: "No existe" });
+    const versionada = "v" in (req.query as object);
+    return reply
+      .header("Content-Type", "image/png")
+      .header("Cache-Control", versionada ? "public, max-age=31536000, immutable" : "no-cache")
+      .send(await icono(variante));
   });
 
   app.get("/manifest.webmanifest", async (_req, reply) => {
@@ -161,7 +201,10 @@ export const rutasPanelCompras: FastifyPluginAsync = async (app) => {
       display: "standalone",
       background_color: COLORES_COFFIT.beige,
       theme_color: COLORES_COFFIT.cafe,
-      icons: [192, 512].map((t) => ({ src: `/api/c/icono/${t}.png?v=${v}`, sizes: `${t}x${t}`, type: "image/png", purpose: "any maskable" })),
+      icons: [192, 512].flatMap((t) => [
+        { src: `/api/c/icono/${t}.png?v=${v}`, sizes: `${t}x${t}`, type: "image/png", purpose: "any" },
+        { src: `/api/c/icono/${t}-recorte.png?v=${v}`, sizes: `${t}x${t}`, type: "image/png", purpose: "maskable" },
+      ]),
     });
   });
 

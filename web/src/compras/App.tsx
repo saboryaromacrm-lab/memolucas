@@ -9,6 +9,8 @@ import { Metricas } from "./Metricas";
 import { Productos } from "./Productos";
 
 type Marca = { nombre: string; logo: string | null };
+/** El ícono de la app (con el logo), tal como lo pone el servidor en la página. */
+const ICONO = document.querySelector<HTMLLinkElement>('link[rel="apple-touch-icon"]')?.href;
 /** metricas: si puede ver Métricas. */
 type Sesion = { nombre: string; metricas: boolean };
 
@@ -24,9 +26,11 @@ export function AppCompras() {
     window.addEventListener("sesion-vencida", vencida);
     return () => window.removeEventListener("sesion-vencida", vencida);
   }, []);
+  // Mientras abre: el ícono de la app sobre café.
   if (sesion === null)
     return (
-      <div className="flex min-h-dvh items-center justify-center">
+      <div className="flex min-h-dvh flex-col items-center justify-center gap-6 bg-cafe">
+        {ICONO && <img src={ICONO} alt="" className="size-24 rounded-3xl shadow-lg" />}
         <Loader2 className="size-6 animate-spin text-naranja" />
       </div>
     );
