@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { and, desc, eq, gt, inArray, lt, ne, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull, lt, ne, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { adjunto, comprobante, encuesta, grupo, type FilaComprobante } from "../db/schema.js";
 import { cifrar, descifrar } from "../lib/cifrado.js";
@@ -7,6 +7,7 @@ import { claveDe, controlar, EsquemaComprobante, type Comprobante } from "../lib
 import { bus } from "../lib/eventos.js";
 import { registrar } from "../lib/log.js";
 import { obtenerConfig } from "./configuracion.js";
+import { proveedorPara, sincronizarNombres } from "./proveedores.js";
 import { ErrorUsuario, filtroChat } from "./recordatorios.js";
 
 export type ComprobanteGuardado = { fila: FilaComprobante; datos: Comprobante };
@@ -24,6 +25,9 @@ export function leerDatos(fila: FilaComprobante): Comprobante {
   if (!texto) throw new Error(`No se pudo descifrar el comprobante ${fila.id}`);
   return JSON.parse(texto) as Comprobante;
 }
+
+/** El proveedor de la factura (se crea solo si es nuevo). */
+const proveedorDe = (datos: Comprobante) => proveedorPara(datos.encabezado.razonSocialEmisor, datos.encabezado.cuitEmisor);
 
 export const columnas = (datos: Comprobante, cierra: boolean) => ({
   datosCifrados: cifrar(JSON.stringify(datos)),
@@ -63,6 +67,7 @@ export async function guardarComprobante(d: {
       estado: d.cierra ? "pendiente" : "revisar",
       modelo: d.modelo,
       adjuntoIds: d.adjuntoIds,
+      proveedorId: await proveedorDe(d.datos),
       ...columnas(d.datos, d.cierra),
     })
     .returning();
@@ -75,7 +80,7 @@ export async function obtenerComprobante(id: number): Promise<ComprobanteGuardad
   return fila ? { fila, datos: leerDatos(fila) } : null;
 }
 
-export async function listarComprobantes(f: { estado?: string; desde?: Date; hasta?: Date } = {}): Promise<ComprobanteGuardado[]> {
+export async function listarComprobantes(f: { estado?: string; desde?: Date; hasta?: Date; proveedorId?: number } = {}): Promise<ComprobanteGuardado[]> {
   const filas = await db
     .select()
     .from(comprobante)
@@ -84,6 +89,7 @@ export async function listarComprobantes(f: { estado?: string; desde?: Date; has
         f.estado ? eq(comprobante.estado, f.estado as FilaComprobante["estado"]) : ne(comprobante.estado, "descartado"),
         f.desde ? gt(comprobante.creadoEn, f.desde) : undefined,
         f.hasta ? lt(comprobante.creadoEn, f.hasta) : undefined,
+        f.proveedorId ? eq(comprobante.proveedorId, f.proveedorId) : undefined,
       ),
     )
     .orderBy(desc(comprobante.id))
@@ -99,11 +105,21 @@ export async function actualizarDatos(id: number, nuevos: unknown): Promise<Comp
   const { comprobante: datos, cierra } = controlar(EsquemaComprobante.parse(nuevos));
   const [fila] = await db
     .update(comprobante)
-    .set({ ...columnas(datos, cierra), estado: cierra ? "pendiente" : "revisar", corrigiendoHasta: null, actualizadoEn: sql`now()` })
+    .set({ ...columnas(datos, cierra), proveedorId: await proveedorDe(datos), estado: cierra ? "pendiente" : "revisar", corrigiendoHasta: null, actualizadoEn: sql`now()` })
     .where(eq(comprobante.id, id))
     .returning();
   bus.avisar("compras");
   return { fila, datos };
+}
+
+/** Al arrancar: las facturas que todavía no tienen proveedor (las de antes de Proveedores) se vinculan solas. */
+export async function vincularProveedores() {
+  const filas = await db.select().from(comprobante).where(isNull(comprobante.proveedorId));
+  for (const fila of filas) {
+    const proveedorId = await proveedorDe(leerDatos(fila));
+    if (proveedorId) await db.update(comprobante).set({ proveedorId }).where(eq(comprobante.id, fila.id));
+  }
+  await sincronizarNombres();
 }
 
 export async function fijarMensaje(id: number, waMessageId: string | null) {

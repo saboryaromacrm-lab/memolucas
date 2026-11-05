@@ -8,6 +8,7 @@ import { normalizar } from "../lib/textos.js";
 import { borrarAdjunto } from "./adjuntos.js";
 import { columnas, leerDatos } from "./compras.js";
 import { claveProducto } from "./productos.js";
+import { nombreDeProveedor } from "./proveedores.js";
 import { ErrorUsuario } from "./recordatorios.js";
 
 // Compras sin factura (ej. 2 bidones de agua de 20 l por $ 14.000), cargadas a mano.
@@ -28,17 +29,18 @@ const Renglon = z.object({
   total: z.number().positive().max(1_000_000_000),
 });
 export const EsquemaCompraManual = z.object({
-  proveedor: z.string().trim().max(120),
+  /** Proveedor elegido o creado en el momento (opcional). */
+  proveedorId: z.number().int().positive().nullable(),
   fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Fecha inválida"),
   renglones: z.array(Renglon).min(1).max(50),
 });
 export type CompraManual = z.infer<typeof EsquemaCompraManual>;
 
 const UNIDAD_IMPRESA: Record<UnidadCompra, string> = { bulto: "CJ", unidad: "UN", kg: "KG", litro: "LT" };
-const proveedorDe = (d: CompraManual) => d.proveedor || "Sin proveedor";
+
 
 /** El comprobante que se muestra en Facturas (mismo formato que los leídos). */
-function comprobanteDe(d: CompraManual, clases: Comprobante["renglones"][number]["clase"][]): Comprobante {
+function comprobanteDe(d: CompraManual, proveedor: string, clases: Comprobante["renglones"][number]["clase"][]): Comprobante {
   const renglones = d.renglones.map((r, i) => ({
     clase: clases[i],
     codigo: "",
@@ -65,7 +67,7 @@ function comprobanteDe(d: CompraManual, clases: Comprobante["renglones"][number]
       fecha: d.fecha,
       cae: "",
       cuitEmisor: "",
-      razonSocialEmisor: d.proveedor,
+      razonSocialEmisor: proveedor,
       domicilioEmisor: "",
       condicionIvaEmisor: "",
       cuitReceptor: "",
@@ -113,18 +115,18 @@ async function productoDe(tx: Tx, r: CompraManual["renglones"][number]) {
 type ProductoElegido = Awaited<ReturnType<typeof productoDe>>;
 
 /** Pasa la compra a Productos (reemplaza lo que tenía, si se edita). */
-async function registrarPrecios(tx: Tx, comprobanteId: number, d: CompraManual, productos: ProductoElegido[]) {
+async function registrarPrecios(tx: Tx, comprobanteId: number, d: CompraManual, proveedor: string, productos: ProductoElegido[]) {
   await tx.delete(precioProducto).where(eq(precioProducto.comprobanteId, comprobanteId));
   for (const [i, r] of d.renglones.entries()) {
     const p = productos[i];
-    const alias = `${normalizar(proveedorDe(d))}|m:${p.clave}`;
-    await tx.insert(productoAlias).values({ clave: alias, productoId: p.id, proveedor: proveedorDe(d) }).onConflictDoNothing();
+    const alias = `${normalizar(proveedor)}|m:${p.clave}`;
+    await tx.insert(productoAlias).values({ clave: alias, productoId: p.id, proveedor }).onConflictDoNothing();
     await tx.insert(precioProducto).values({
       productoId: p.id,
       comprobanteId,
       renglon: i + 1,
       aliasClave: alias,
-      proveedor: proveedorDe(d),
+      proveedor,
       fecha: d.fecha,
       descripcion: p.nombre,
       cantidad: r.cantidad,
@@ -152,17 +154,24 @@ async function manual(id: number): Promise<FilaComprobante> {
 /** Crea (sin id) o reemplaza una compra sin factura. foto: el adjunto nuevo, null para quitarla, undefined para dejarla. */
 export async function guardarCompraManual(d: CompraManual, autor: string | null, foto: number | null | undefined, id?: number): Promise<number> {
   const anterior = id ? await manual(id) : null;
+  const nombreProveedor = d.proveedorId ? await nombreDeProveedor(d.proveedorId) : "";
   const adjuntoIds = foto === undefined ? (anterior?.adjuntoIds ?? []) : foto === null ? [] : [foto];
   const nuevoId = await db.transaction(async (tx) => {
     const productosAntes = anterior ? (await tx.select({ id: precioProducto.productoId }).from(precioProducto).where(eq(precioProducto.comprobanteId, anterior.id))).map((p) => p.id) : [];
     const productos: ProductoElegido[] = [];
     for (const r of d.renglones) productos.push(await productoDe(tx, r));
     // Sin clave: no tiene número, así que no se usa para detectar facturas repetidas.
-    const datos = { ...columnas(comprobanteDe(d, productos.map((p) => p.clase)), true), clave: null, adjuntoIds, actualizadoEn: new Date() };
+    const datos = {
+      ...columnas(comprobanteDe(d, nombreProveedor, productos.map((p) => p.clase)), true),
+      clave: null,
+      proveedorId: d.proveedorId,
+      adjuntoIds,
+      actualizadoEn: new Date(),
+    };
     const [fila] = anterior
       ? await tx.update(comprobante).set(datos).where(eq(comprobante.id, anterior.id)).returning()
       : await tx.insert(comprobante).values({ ...datos, chat: null, autor, origen: "manual", estado: "confirmado", confirmadoEn: new Date(), productosEn: new Date() }).returning();
-    await registrarPrecios(tx, fila.id, d, productos);
+    await registrarPrecios(tx, fila.id, d, nombreProveedor || "Sin proveedor", productos);
     await borrarHuerfanos(tx, productosAntes);
     return fila.id;
   });
@@ -183,7 +192,7 @@ export async function obtenerCompraManual(id: number): Promise<CompraManual & { 
     .where(eq(precioProducto.comprobanteId, id))
     .orderBy(precioProducto.renglon);
   return {
-    proveedor: datos.encabezado.razonSocialEmisor,
+    proveedorId: fila.proveedorId,
     fecha: datos.encabezado.fecha,
     fotoId: fila.adjuntoIds[0] ?? null,
     renglones: filas.map(({ precio: r, producto: p }) => ({

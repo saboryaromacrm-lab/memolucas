@@ -10,11 +10,12 @@ import { borrarCompraManual, guardarCompraManual, obtenerCompraManual, type Comp
 import { enviarAlErp, listarComprobantes } from "../src/servicios/compras.js";
 import { actualizarConfig } from "../src/servicios/configuracion.js";
 import { crearUsuario } from "../src/servicios/panel-compras.js";
+import { crearProveedor } from "../src/servicios/proveedores.js";
 import { listarProductos, procesarPendientes } from "../src/servicios/productos.js";
 import { baseLimpia } from "./ayuda.js";
 
 const bidones = (cambios: Partial<CompraManual["renglones"][number]> = {}): CompraManual => ({
-  proveedor: "Aguas del barrio",
+  proveedorId: null,
   fecha: "2026-11-05",
   renglones: [
     { nombre: "Bidón de agua 20 l", categoria: "Bebidas", clase: "gasto", cantidad: 2, unidadCompra: "unidad", unidadesPorBulto: 0, contenido: 20, medida: "l", total: 14000, ...cambios },
@@ -27,14 +28,16 @@ describe("compras sin factura", () => {
   });
 
   it("2 bidones de 20 l por $ 14.000: unidad $ 7.000 y litro $ 350, confirmada y fuera del ERP", async () => {
-    const id = await guardarCompraManual(bidones(), "Martín", null);
+    const aguas = await crearProveedor("Aguas del barrio");
+    const id = await guardarCompraManual({ ...bidones(), proveedorId: aguas.id }, "Martín", null);
     const [p] = await listarProductos();
     expect(p).toMatchObject({ nombre: "Bidón de agua 20 l", categoria: "Bebidas", clase: "gasto", contenido: 20, medida: "l" });
     expect(p.ultima!.precios.unidad).toBe(7000);
     expect(p.ultima!.precios.porMedida).toEqual({ valor: 350, medida: "l" });
 
     const [c] = await listarComprobantes();
-    expect(c.fila).toMatchObject({ id, origen: "manual", estado: "confirmado", autor: "Martín", clave: null, cierra: true });
+    expect(c.fila).toMatchObject({ id, origen: "manual", estado: "confirmado", autor: "Martín", clave: null, cierra: true, proveedorId: aguas.id });
+    expect(p.ultima!.proveedor).toBe("Aguas del barrio");
     expect(c.datos.pie.total).toBe(14000);
     expect(c.datos.renglones[0]).toMatchObject({ descripcion: "Bidón de agua 20 l", cantidad: 2, precioUnitario: 7000 });
 
