@@ -15,7 +15,7 @@ const MAX_INTENTOS = 5;
 /** Tipos que no sirven para precios: las notas de crédito restan y los remitos no traen precio. */
 const SIN_PRECIOS = new Set(["nota_credito", "remito"]);
 
-const claveProducto = (nombre: string) => normalizar(nombre);
+export const claveProducto = (nombre: string) => normalizar(nombre);
 const proveedorDe = (c: Comprobante) => c.encabezado.razonSocialEmisor.trim() || "Proveedor sin nombre";
 const claveAlias = (c: Comprobante, r: Comprobante["renglones"][number]) =>
   `${c.encabezado.cuitEmisor.replace(/\D/g, "") || normalizar(proveedorDe(c))}|${r.codigo.trim() ? `c:${normalizar(r.codigo)}` : `d:${normalizar(r.descripcion)}`}`;

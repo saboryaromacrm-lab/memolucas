@@ -25,7 +25,7 @@ export function leerDatos(fila: FilaComprobante): Comprobante {
   return JSON.parse(texto) as Comprobante;
 }
 
-const columnas = (datos: Comprobante, cierra: boolean) => ({
+export const columnas = (datos: Comprobante, cierra: boolean) => ({
   datosCifrados: cifrar(JSON.stringify(datos)),
   clave: claveDe(datos),
   fecha: datos.encabezado.fecha || null,
@@ -150,6 +150,7 @@ export type ResultadoEnvio = { ok: boolean; mensaje: string };
 export async function enviarAlErp(id: number): Promise<ResultadoEnvio> {
   const c = await obtenerComprobante(id);
   if (!c) throw new ErrorUsuario("No existe ese comprobante");
+  if (c.fila.origen === "manual") return { ok: false, mensaje: "Las compras sin factura no se mandan al ERP" };
   const cfg = await obtenerConfig();
   if (!cfg.erpUrl) return { ok: false, mensaje: "No hay dirección del ERP cargada" };
   const token = cfg.erpTokenCifrado ? descifrar(cfg.erpTokenCifrado) : null;

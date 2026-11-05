@@ -4,7 +4,7 @@ import sharp from "sharp";
 import { z } from "zod";
 import { entorno } from "../../entorno.js";
 import { bus } from "../../lib/eventos.js";
-import { guardarArchivo, MIMES_IMAGEN, obtenerAdjunto } from "../../servicios/adjuntos.js";
+import { borrarAdjunto, guardarArchivo, MIMES_IMAGEN, obtenerAdjunto } from "../../servicios/adjuntos.js";
 import {
   actualizarDatos,
   confirmarComprobante,
@@ -13,6 +13,7 @@ import {
   obtenerComprobante,
 } from "../../servicios/compras.js";
 import { obtenerConfig } from "../../servicios/configuracion.js";
+import { borrarCompraManual, EsquemaCompraManual, guardarCompraManual, obtenerCompraManual } from "../../servicios/compras-manuales.js";
 import { corregirConTexto } from "../../servicios/lectura-compras.js";
 import {
   adjuntoDeCompras,
@@ -88,6 +89,24 @@ async function autenticarCompras(req: FastifyRequest, reply: FastifyReply) {
   } catch {
     return reply.code(401).send({ error: "Tenés que ingresar con tu clave" });
   }
+}
+
+/** Lee un formulario con archivos (fotos o PDF). Los campos de texto quedan en "campos". */
+async function leerFormulario(req: FastifyRequest, maxArchivos: number) {
+  const cfg = await obtenerConfig();
+  const campos: Record<string, string> = {};
+  const archivos: { datos: Buffer; mime: string; nombre: string }[] = [];
+  for await (const parte of req.parts({ limits: { files: maxArchivos, fileSize: Math.max(cfg.fotoMaxMb, 20) * 1024 * 1024 } })) {
+    if (parte.type === "field") {
+      campos[parte.fieldname] = String(parte.value);
+      continue;
+    }
+    const mime = parte.mimetype.split(";")[0];
+    const datos = await parte.toBuffer();
+    if (mime !== "application/pdf" && !MIMES_IMAGEN.includes(mime)) throw new ErrorUsuario(`"${parte.filename}" no es una foto ni un PDF que se pueda leer.`);
+    archivos.push({ datos, mime, nombre: parte.filename || "foto.jpg" });
+  }
+  return { campos, archivos };
 }
 
 /** API del panel de compras (el que usa el colaborador desde el celular). */
@@ -180,20 +199,8 @@ export const rutasPanelCompras: FastifyPluginAsync = async (app) => {
 
     /** Fotos o PDF de un comprobante (pueden ser varias hojas). Se leen en segundo plano. */
     privado.post("/subir", { bodyLimit: 60 * 1024 * 1024 }, async (req) => {
-      const cfg = await obtenerConfig();
-      let clienteId = "";
-      const archivos: { datos: Buffer; mime: string; nombre: string }[] = [];
-      for await (const parte of req.parts({ limits: { files: 12, fileSize: Math.max(cfg.fotoMaxMb, 20) * 1024 * 1024 } })) {
-        if (parte.type === "field") {
-          if (parte.fieldname === "clienteId") clienteId = String(parte.value).slice(0, 80);
-          continue;
-        }
-        const mime = parte.mimetype.split(";")[0];
-        const datos = await parte.toBuffer();
-        if (mime !== "application/pdf" && !MIMES_IMAGEN.includes(mime))
-          throw new ErrorUsuario(`"${parte.filename}" no es una foto ni un PDF que se pueda leer.`);
-        archivos.push({ datos, mime, nombre: parte.filename || "foto.jpg" });
-      }
+      const { campos, archivos } = await leerFormulario(req, 12);
+      const clienteId = (campos.clienteId ?? "").slice(0, 80);
       if (!/^[\w-]{8,80}$/.test(clienteId)) throw new ErrorUsuario("Falta el identificador de la subida.");
       // Si el celular reintenta una subida que ya llegó, no se duplica.
       const existente = await existeLectura(clienteId);
@@ -207,6 +214,39 @@ export const rutasPanelCompras: FastifyPluginAsync = async (app) => {
       }
       const l = await crearLectura({ clienteId, usuario: req.usuarioCompras!, archivos: guardados });
       return { id: l.id, estado: l.estado };
+    });
+
+    // ───── Compras sin factura (cargadas a mano) ─────
+    /** Formulario con los datos (JSON) y, opcional, una foto del ticket o remito. Si no se guarda, la foto no queda suelta. */
+    const guardarManual = async (req: FastifyRequest, id?: number) => {
+      const { campos, archivos } = await leerFormulario(req, 1);
+      let crudo: unknown;
+      try {
+        crudo = JSON.parse(campos.datos ?? "");
+      } catch {
+        throw new ErrorUsuario("Datos inválidos");
+      }
+      const datos = EsquemaCompraManual.parse(crudo);
+      const nueva = archivos[0] ? (await guardarArchivo(archivos[0].datos, archivos[0].mime)).id : null;
+      // Sin foto nueva: al crear no hay; al editar queda la que tenía, salvo que se pida quitarla.
+      const foto = nueva ?? (campos.quitarFoto || !id ? null : undefined);
+      try {
+        return { id: await guardarCompraManual(datos, req.usuarioCompras!.nombre, foto, id) };
+      } catch (err) {
+        if (nueva) await borrarAdjunto(nueva);
+        throw err;
+      }
+    };
+
+    privado.post("/manuales", { bodyLimit: 30 * 1024 * 1024 }, async (req) => guardarManual(req));
+
+    privado.get("/manuales/:id", async (req) => obtenerCompraManual(Id.parse(req.params).id));
+
+    privado.put("/manuales/:id", { bodyLimit: 30 * 1024 * 1024 }, async (req) => guardarManual(req, Id.parse(req.params).id));
+
+    privado.delete("/manuales/:id", async (req) => {
+      await borrarCompraManual(Id.parse(req.params).id);
+      return { ok: true };
     });
 
     privado.post("/lecturas/:id/reintentar", async (req) => {

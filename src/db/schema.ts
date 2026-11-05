@@ -304,8 +304,8 @@ export const comprobante = pgTable(
     id: serial("id").primaryKey(),
     chat: text("chat"),
     autor: text("autor"),
-    /** Por dónde llegó: el bot de WhatsApp o el panel de compras. */
-    origen: text("origen").$type<"whatsapp" | "panel">().notNull().default("whatsapp"),
+    /** Por dónde llegó: el bot de WhatsApp, el panel de compras o cargada a mano (sin factura). */
+    origen: text("origen").$type<"whatsapp" | "panel" | "manual">().notNull().default("whatsapp"),
     estado: text("estado").$type<"pendiente" | "revisar" | "confirmado" | "descartado">().notNull(),
     datosCifrados: text("datos_cifrados").notNull(),
     /** Hash para detectar el mismo comprobante cargado dos veces. */

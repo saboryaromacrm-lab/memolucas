@@ -5,6 +5,7 @@ import { post } from "../lib/api";
 import type { Compra, ComprobanteDatos } from "../lib/tipos";
 import { Cargador, EstadoCola, TarjetaLectura, type Lectura } from "./Cargador";
 import { atajosBloqueados, fechaCorta, Hoja, plata, useVivo, type Ancho } from "./comun";
+import { CompraManualForm } from "./CompraManual";
 import { Correccion } from "./Correccion";
 import { Visor } from "./Visor";
 
@@ -26,6 +27,7 @@ function Estado({ c }: { c: Compra }) {
   return <span className={`inline-block whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-medium ${ESTADOS[c.estado][1]}`}>{ESTADOS[c.estado][0]}</span>;
 }
 function Cierra({ c }: { c: Compra }) {
+  if (c.origen === "manual") return <span className="block text-right text-xs text-stone-500">Sin factura</span>;
   return (
     <span className={`flex items-center justify-end gap-1 text-xs ${c.cierra ? "text-emerald-700" : "text-amber-700"}`}>
       {c.cierra ? <CheckCircle2 className="size-3.5" /> : <AlertTriangle className="size-3.5" />}
@@ -41,6 +43,8 @@ export function Facturas({ ancho }: { ancho: Ancho }) {
   const [abierta, setAbierta] = useState<number | null>(null);
   const [elegidas, setElegidas] = useState<Set<number>>(new Set());
   const [confirmando, setConfirmando] = useState(false);
+  /** Compra sin factura: "nueva" o la que se edita. */
+  const [manual, setManual] = useState<number | "nueva" | null>(null);
   const accion = useAccion();
   const avisar = useAviso();
   const pc = ancho === "pc";
@@ -155,15 +159,41 @@ export function Facturas({ ancho }: { ancho: Ancho }) {
   );
   const arriba = (
     <>
-      <Cargador ancho={ancho} />
+      <Cargador ancho={ancho} onSinFactura={() => setManual("nueva")} />
       <EstadoCola />
       {datos?.lecturas.map((l) => (
         <TarjetaLectura key={l.id} l={l} />
       ))}
     </>
   );
-  const detalle = abierta && (
-    <DetalleFactura key={abierta} id={abierta} ancho={ancho} onCerrar={() => setAbierta(null)} onConfirmar={confirmar} onDescartar={descartar} onCambio={recargar} />
+  const detalle = (
+    <>
+      {abierta && (
+        <DetalleFactura
+          key={abierta}
+          id={abierta}
+          ancho={ancho}
+          onCerrar={() => setAbierta(null)}
+          onConfirmar={confirmar}
+          onDescartar={descartar}
+          onEditarManual={setManual}
+          onCambio={recargar}
+        />
+      )}
+      {manual && (
+        <CompraManualForm
+          id={manual === "nueva" ? null : manual}
+          onCerrar={() => setManual(null)}
+          onGuardada={(id) => {
+            // Queda confirmada: se ve en "Confirmadas", y en la compu se abre al lado.
+            setManual(null);
+            if (id) setFiltro((f) => (f === "abiertas" ? "confirmado" : f));
+            setAbierta(id && ancho !== "movil" ? id : null);
+            void recargar();
+          }}
+        />
+      )}
+    </>
   );
 
   // ───── Celular: tarjetas y el detalle a pantalla completa ─────
@@ -340,6 +370,7 @@ function DetalleFactura({
   onCerrar,
   onConfirmar,
   onDescartar,
+  onEditarManual,
   onCambio,
 }: {
   id: number;
@@ -347,6 +378,7 @@ function DetalleFactura({
   onCerrar: () => void;
   onConfirmar: (id: number) => Promise<void>;
   onDescartar: (id: number) => Promise<void>;
+  onEditarManual: (id: number) => void;
   onCambio: () => Promise<void>;
 }) {
   const { datos: c, recargar } = useVivo<Detalle>(`/api/c/compras/${id}`);
@@ -354,6 +386,7 @@ function DetalleFactura({
   const [corrigiendo, setCorrigiendo] = useState(false);
   const [ocupado, setOcupado] = useState(false);
   const abierta = c && abiertaSegunEstado(c);
+  const conFotos = !!c && (c.archivos.length > 0 || c.origen !== "manual");
   const hacer = async (fn: () => Promise<void>) => {
     setOcupado(true);
     await fn();
@@ -367,34 +400,43 @@ function DetalleFactura({
       titulo={c ? c.proveedor || "Proveedor sin datos" : "Factura"}
       subtitulo={c && `${c.titulo} · ${fechaCorta(c.fecha)}${c.autor ? ` · Cargó ${c.autor}` : ""}`}
       pie={
-        abierta && (
-          <div className="flex gap-2">
-            <button
-              aria-label="Descartar"
-              title="Descartar"
-              disabled={ocupado}
-              onClick={() => void hacer(() => onDescartar(id))}
-              className="rounded-2xl border border-red-200 px-4 text-red-600 hover:bg-red-50 md:rounded-xl"
-            >
-              <Trash2 className="size-5" />
-            </button>
-            <button
-              onClick={() => setCorrigiendo(true)}
-              disabled={ocupado}
-              className="flex flex-1 items-center justify-center gap-2 rounded-2xl border border-stone-300 py-3.5 font-semibold text-stone-700 hover:bg-stone-50 md:rounded-xl md:py-2.5"
-            >
-              <Pencil className="size-4" /> Corregir
-            </button>
-            <button
-              onClick={() => void hacer(() => onConfirmar(id))}
-              disabled={ocupado}
-              title={ancho === "movil" ? undefined : "Confirmar (Ctrl+Enter)"}
-              className="flex flex-[1.4] items-center justify-center gap-2 rounded-2xl bg-cafe py-3.5 font-semibold text-beige hover:bg-marca-profundo disabled:opacity-60 md:rounded-xl md:py-2.5"
-            >
-              {ocupado ? <Loader2 className="size-5 animate-spin" /> : <Check className="size-5 text-naranja" />} Confirmar
-              {ancho !== "movil" && <span className="hidden text-xs font-normal text-beige/60 lg:inline">Ctrl+Enter</span>}
-            </button>
-          </div>
+        c?.origen === "manual" ? (
+          <button
+            onClick={() => onEditarManual(id)}
+            className="flex w-full items-center justify-center gap-2 rounded-2xl border border-stone-300 py-3.5 font-semibold text-stone-700 hover:bg-stone-50 md:rounded-xl md:py-2.5"
+          >
+            <Pencil className="size-4" /> Editar compra
+          </button>
+        ) : (
+          abierta && (
+            <div className="flex gap-2">
+              <button
+                aria-label="Descartar"
+                title="Descartar"
+                disabled={ocupado}
+                onClick={() => void hacer(() => onDescartar(id))}
+                className="rounded-2xl border border-red-200 px-4 text-red-600 hover:bg-red-50 md:rounded-xl"
+              >
+                <Trash2 className="size-5" />
+              </button>
+              <button
+                onClick={() => setCorrigiendo(true)}
+                disabled={ocupado}
+                className="flex flex-1 items-center justify-center gap-2 rounded-2xl border border-stone-300 py-3.5 font-semibold text-stone-700 hover:bg-stone-50 md:rounded-xl md:py-2.5"
+              >
+                <Pencil className="size-4" /> Corregir
+              </button>
+              <button
+                onClick={() => void hacer(() => onConfirmar(id))}
+                disabled={ocupado}
+                title={ancho === "movil" ? undefined : "Confirmar (Ctrl+Enter)"}
+                className="flex flex-[1.4] items-center justify-center gap-2 rounded-2xl bg-cafe py-3.5 font-semibold text-beige hover:bg-marca-profundo disabled:opacity-60 md:rounded-xl md:py-2.5"
+              >
+                {ocupado ? <Loader2 className="size-5 animate-spin" /> : <Check className="size-5 text-naranja" />} Confirmar
+                {ancho !== "movil" && <span className="hidden text-xs font-normal text-beige/60 lg:inline">Ctrl+Enter</span>}
+              </button>
+            </div>
+          )
         )
       }
     >
@@ -403,8 +445,11 @@ function DetalleFactura({
           <Loader2 className="size-6 animate-spin text-naranja" />
         </div>
       ) : (
-        <div className="space-y-4 p-4 @xl:grid @xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] @xl:items-start @xl:gap-5 @xl:space-y-0">
-          <div className="flex gap-2 overflow-x-auto @xl:sticky @xl:top-0 @xl:flex-col">
+        <div
+          className={`space-y-4 p-4 ${conFotos ? "@xl:grid @xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] @xl:items-start @xl:gap-5 @xl:space-y-0" : "mx-auto max-w-2xl"}`}
+        >
+          {/* Una compra sin factura y sin foto no necesita la columna de la foto. */}
+          <div className={`flex gap-2 overflow-x-auto @xl:sticky @xl:top-0 @xl:flex-col ${conFotos ? "" : "hidden"}`}>
             {c.archivos.length ? (
               c.archivos.map((a, i) =>
                 a.mime === "application/pdf" ? (
@@ -430,14 +475,16 @@ function DetalleFactura({
           </div>
 
           <div className="@container space-y-4">
-            <div className={`rounded-2xl border px-4 py-3 ${c.cierra ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-amber-200 bg-amber-50 text-amber-900"}`}>
-              <div className="flex items-center gap-2 font-semibold">
-                {c.cierra ? <CheckCircle2 className="size-5" /> : <AlertTriangle className="size-5" />}
-                {c.cierra ? "Las cuentas cierran" : "Las cuentas no cierran"}
+            {c.origen !== "manual" && (
+              <div className={`rounded-2xl border px-4 py-3 ${c.cierra ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-amber-200 bg-amber-50 text-amber-900"}`}>
+                <div className="flex items-center gap-2 font-semibold">
+                  {c.cierra ? <CheckCircle2 className="size-5" /> : <AlertTriangle className="size-5" />}
+                  {c.cierra ? "Las cuentas cierran" : "Las cuentas no cierran"}
+                </div>
+                {!c.cierra && <p className="mt-1 text-sm">{c.diferencias}</p>}
               </div>
-              {!c.cierra && <p className="mt-1 text-sm">{c.diferencias}</p>}
-            </div>
-            {c.dudas.length > 0 && (
+            )}
+            {c.origen !== "manual" && c.dudas.length > 0 && (
               <div className="tarjeta px-4 py-3 text-sm text-stone-700">
                 <div className="mb-1 font-semibold">Dudas de la lectura</div>
                 <ul className="list-disc space-y-0.5 pl-5">
@@ -448,11 +495,16 @@ function DetalleFactura({
               </div>
             )}
             <Resumen c={c} />
-            {c.estado !== "pendiente" && c.estado !== "revisar" && (
-              <p className="text-center text-sm text-stone-500">
-                {ESTADOS[c.estado][0]}
-                {c.enviadoEn ? " y enviada al ERP" : ""}.{c.envioError && !c.enviadoEn ? ` No se pudo mandar al ERP: ${c.envioError}` : ""}
-              </p>
+            {c.origen === "manual" ? (
+              <p className="text-center text-sm text-stone-500">Compra sin factura, cargada a mano. No va al ERP.</p>
+            ) : (
+              c.estado !== "pendiente" &&
+              c.estado !== "revisar" && (
+                <p className="text-center text-sm text-stone-500">
+                  {ESTADOS[c.estado][0]}
+                  {c.enviadoEn ? " y enviada al ERP" : ""}.{c.envioError && !c.enviadoEn ? ` No se pudo mandar al ERP: ${c.envioError}` : ""}
+                </p>
+              )
             )}
           </div>
         </div>
@@ -483,7 +535,7 @@ function Resumen({ c }: { c: Detalle }) {
         <Dato t="Comprobante" v={c.titulo} />
         <Dato t="Fecha" v={fechaCorta(String(d.encabezado.fecha))} />
         <Dato t="Proveedor" v={c.proveedor || "—"} />
-        <Dato t="CUIT" v={String(d.encabezado.cuitEmisor || "—")} />
+        {c.origen !== "manual" && <Dato t="CUIT" v={String(d.encabezado.cuitEmisor || "—")} />}
       </section>
       <section className="tarjeta divide-y divide-stone-100">
         {d.renglones.map((r, i) => (
@@ -492,7 +544,7 @@ function Resumen({ c }: { c: Detalle }) {
             <span className="min-w-0 flex-1">
               <span className="block text-stone-800">{r.descripcion}</span>
               <span className="block text-xs text-stone-500">
-                {r.cantidad} {r.unidad} × {plata(r.precioUnitario, m)}
+                {r.cantidad.toLocaleString("es-AR")} {r.unidad} × {plata(r.precioUnitario, m)}
                 {r.descuentos.length ? ` − ${r.descuentos.join("+")}%` : ""}
               </span>
             </span>

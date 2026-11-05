@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, Camera, ClipboardPaste, CloudUpload, FileText, Images, Loader2, Plus, RotateCcw, Sparkles, WifiOff, X } from "lucide-react";
+import { AlertTriangle, Camera, ClipboardPaste, CloudUpload, FileText, Images, Loader2, PenLine, Plus, RotateCcw, Sparkles, WifiOff, X } from "lucide-react";
 import { Boton, useAccion, useAviso } from "../componentes/ui";
 import { post } from "../lib/api";
 import { haceCuanto } from "../lib/fechas";
@@ -15,7 +15,7 @@ const botonSecundario = "flex items-center justify-center gap-2 rounded-xl borde
  * Cargar una factura: cámara, galería, PDF, pegar (Ctrl+V o botón) o arrastrar y soltar.
  * Las fotos se juntan como hojas de la misma factura hasta tocar "Leer factura"; cada PDF se manda directo.
  */
-export function Cargador({ ancho }: { ancho: Ancho }) {
+export function Cargador({ ancho, onSinFactura }: { ancho: Ancho; onSinFactura: () => void }) {
   const [hojas, setHojas] = useState<{ archivo: File; url: string }[]>([]);
   const [preparando, setPreparando] = useState(false);
   const [arrastrando, setArrastrando] = useState(false);
@@ -214,6 +214,9 @@ export function Cargador({ ancho }: { ancho: Ancho }) {
             <ClipboardPaste className="size-4" /> Pegar
           </button>
         </div>
+        <button onClick={onSinFactura} className={`${botonSecundario} mt-2 w-full`}>
+          <PenLine className="size-4" /> Compra sin factura
+        </button>
       </section>
     );
 
@@ -242,6 +245,9 @@ export function Cargador({ ancho }: { ancho: Ancho }) {
         </button>
         <button onClick={() => void pegarDelPortapapeles()} className={botonSecundario}>
           <ClipboardPaste className="size-4" /> Pegar
+        </button>
+        <button onClick={onSinFactura} className={botonSecundario}>
+          <PenLine className="size-4" /> Sin factura
         </button>
       </div>
     </section>

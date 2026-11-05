@@ -4,6 +4,15 @@ import { get } from "../lib/api";
 
 export const plata = (n: number | string | null, moneda = "PES") =>
   n === null ? "—" : `${moneda === "DOL" ? "US$" : "$"} ${Number(n).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+/** Números como se escriben en Argentina: "14.000" → 14000, "1.234,56" → 1234.56, "3,5" o "3.5" → 3.5 (0 si no es un número). */
+export function aNumero(s: string): number {
+  const t = s.replace(/[\s$]/g, "");
+  if (!t) return 0;
+  // Con coma, los puntos son de miles. Sin coma, "14.000" o "1.250.000" también (grupos de 3 cifras).
+  const miles = t.includes(",") || /^[1-9]\d{0,2}(\.\d{3})+$/.test(t);
+  const n = Number(miles ? t.replace(/\./g, "").replace(",", ".") : t);
+  return Number.isFinite(n) ? n : 0;
+}
 export const fechaCorta = (iso: string | null | undefined) => (iso && /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso.split("-").reverse().join("/") : iso || "—");
 
 // ───────────── Datos en vivo ─────────────

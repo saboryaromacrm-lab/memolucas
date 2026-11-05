@@ -34,7 +34,7 @@ export async function serializar({ fila, datos }: ComprobanteGuardado, grupos: M
   const { datosCifrados: _, ...resto } = fila;
   return {
     ...resto,
-    titulo: tituloComprobante(datos),
+    titulo: fila.origen === "manual" ? "Sin factura" : tituloComprobante(datos),
     proveedor: datos.encabezado.razonSocialEmisor,
     moneda: datos.encabezado.moneda,
     renglones: datos.renglones.length,
