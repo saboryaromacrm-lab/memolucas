@@ -26,6 +26,7 @@ import {
   reintentarLectura,
 } from "../../servicios/panel-compras.js";
 import { ErrorUsuario } from "../../servicios/recordatorios.js";
+import { actualizarProveedor, borrarProveedor, crearProveedor, juntarProveedores, listarProveedores, obtenerProveedor } from "../../servicios/proveedores.js";
 import {
   actualizarCompra,
   actualizarProducto,
@@ -33,9 +34,10 @@ import {
   listarProductos,
   obtenerProducto,
   productosCsv,
+  productosDeProveedor,
   separarAlias,
 } from "../../servicios/productos.js";
-import { nombresGrupos, serializar } from "./compras.js";
+import { nombres, serializar } from "./compras.js";
 import type { UsuarioCompras } from "../../db/schema.js";
 
 export const COOKIE_COMPRAS = "compras_sesion";
@@ -183,10 +185,10 @@ export const rutasPanelCompras: FastifyPluginAsync = async (app) => {
         const buscado = q.trim().toLowerCase();
         lista = lista.filter((c) => `${c.datos.encabezado.razonSocialEmisor} ${c.datos.encabezado.numero} ${c.datos.encabezado.cuitEmisor}`.toLowerCase().includes(buscado));
       }
-      const grupos = await nombresGrupos();
+      const n = await nombres();
       return {
         lecturas: (await lecturasAbiertas()).map((l) => ({ id: l.id, estado: l.estado, autor: l.autor, mensaje: l.mensaje, hojas: l.nombres.length, creadoEn: l.creadoEn, clienteId: l.clienteId })),
-        compras: await Promise.all(lista.map((c) => serializar(c, grupos, ADJUNTOS))),
+        compras: await Promise.all(lista.map((c) => serializar(c, n, ADJUNTOS))),
       };
     });
 
@@ -194,7 +196,7 @@ export const rutasPanelCompras: FastifyPluginAsync = async (app) => {
       const { id } = Id.parse(req.params);
       const c = await obtenerComprobante(id);
       if (!c) throw new ErrorUsuario("No existe ese comprobante");
-      return { ...(await serializar(c, await nombresGrupos(), ADJUNTOS)), datos: c.datos };
+      return { ...(await serializar(c, await nombres(), ADJUNTOS)), datos: c.datos };
     });
 
     /** Fotos o PDF de un comprobante (pueden ser varias hojas). Se leen en segundo plano. */
@@ -214,6 +216,42 @@ export const rutasPanelCompras: FastifyPluginAsync = async (app) => {
       }
       const l = await crearLectura({ clienteId, usuario: req.usuarioCompras!, archivos: guardados });
       return { id: l.id, estado: l.estado };
+    });
+
+    // ───── Proveedores ─────
+    privado.get("/proveedores", async (req) => {
+      const { ocultos } = z.object({ ocultos: z.string().optional() }).parse(req.query);
+      return listarProveedores(!!ocultos);
+    });
+
+    /** Ficha: el proveedor, sus últimas compras y lo que se le compra (con el último precio). */
+    privado.get("/proveedores/:id", async (req) => {
+      const { id } = Id.parse(req.params);
+      const [p, productos, compras, n] = await Promise.all([obtenerProveedor(id), productosDeProveedor(id), listarComprobantes({ proveedorId: id }), nombres()]);
+      return { ...p, productos, ultimas: await Promise.all(compras.slice(0, 50).map((c) => serializar(c, n, ADJUNTOS))) };
+    });
+
+    const DatosProveedor = z.object({ nombre: z.string().trim().min(2).max(120), notas: z.string().max(2000), oculto: z.boolean() });
+
+    privado.post("/proveedores", async (req) => {
+      const { nombre, notas } = DatosProveedor.pick({ nombre: true, notas: true }).partial({ notas: true }).parse(req.body);
+      return crearProveedor(nombre, notas);
+    });
+
+    privado.put("/proveedores/:id", async (req) => {
+      await actualizarProveedor(Id.parse(req.params).id, DatosProveedor.partial().parse(req.body));
+      return { ok: true };
+    });
+
+    privado.delete("/proveedores/:id", async (req) => {
+      await borrarProveedor(Id.parse(req.params).id);
+      return { ok: true };
+    });
+
+    privado.post("/proveedores/:id/juntar", async (req) => {
+      const { conId } = z.object({ conId: z.number().int().positive() }).parse(req.body);
+      await juntarProveedores(Id.parse(req.params).id, conId);
+      return { ok: true };
     });
 
     // ───── Compras sin factura (cargadas a mano) ─────
@@ -278,7 +316,7 @@ export const rutasPanelCompras: FastifyPluginAsync = async (app) => {
       if (!c) throw new ErrorUsuario("No existe ese comprobante");
       if (c.fila.estado === "confirmado" || c.fila.estado === "descartado") throw new ErrorUsuario("Ya está cerrado: no se puede corregir.");
       const r = await corregirConTexto(c.fila, texto);
-      return { ...(await serializar(r, await nombresGrupos(), ADJUNTOS)), datos: r.datos };
+      return { ...(await serializar(r, await nombres(), ADJUNTOS)), datos: r.datos };
     });
 
     /** Corrección con el formulario: llega el comprobante completo y se rehacen los controles. */
@@ -286,7 +324,7 @@ export const rutasPanelCompras: FastifyPluginAsync = async (app) => {
       const { id } = Id.parse(req.params);
       const { datos } = z.object({ datos: z.unknown() }).parse(req.body);
       const r = await actualizarDatos(id, datos);
-      return { ...(await serializar(r, await nombresGrupos(), ADJUNTOS)), datos: r.datos };
+      return { ...(await serializar(r, await nombres(), ADJUNTOS)), datos: r.datos };
     });
 
     // ───── Productos (precios por bulto, unidad y kg o litro de lo que se compró) ─────

@@ -23,7 +23,7 @@ const abiertaSegunEstado = (c: Pick<Compra, "estado">) => c.estado === "pendient
 /** Solo las que cierran se pueden confirmar de a varias; las otras conviene mirarlas una por una. */
 const confirmableEnLote = (c: Compra) => c.estado === "pendiente" && c.cierra;
 
-function Estado({ c }: { c: Compra }) {
+export function Estado({ c }: { c: Pick<Compra, "estado"> }) {
   return <span className={`inline-block whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-medium ${ESTADOS[c.estado][1]}`}>{ESTADOS[c.estado][0]}</span>;
 }
 function Cierra({ c }: { c: Compra }) {
@@ -40,6 +40,7 @@ export function Facturas({ ancho }: { ancho: Ancho }) {
   const { datos, recargar } = useVivo<{ lecturas: Lectura[]; compras: Compra[] }>("/api/c/compras");
   const [filtro, setFiltro] = useState<Filtro>("abiertas");
   const [q, setQ] = useState("");
+  const [proveedorId, setProveedorId] = useState<number | null>(null);
   const [abierta, setAbierta] = useState<number | null>(null);
   const [elegidas, setElegidas] = useState<Set<number>>(new Set());
   const [confirmando, setConfirmando] = useState(false);
@@ -54,9 +55,15 @@ export function Facturas({ ancho }: { ancho: Ancho }) {
     return (datos?.compras ?? []).filter(
       (c) =>
         (filtro === "abiertas" ? abiertaSegunEstado(c) : filtro === "confirmado" ? c.estado === "confirmado" : true) &&
+        (!proveedorId || c.proveedorId === proveedorId) &&
         (!buscado || `${c.proveedor} ${c.titulo} ${c.autor ?? ""}`.toLowerCase().includes(buscado)),
     );
-  }, [datos, filtro, q]);
+  }, [datos, filtro, q, proveedorId]);
+  // Los proveedores que tienen facturas en la lista, para filtrar por uno.
+  const proveedores = useMemo(() => {
+    const unicos = new Map((datos?.compras ?? []).flatMap((c) => (c.proveedorId ? [[c.proveedorId, c.proveedor] as const] : [])));
+    return [...unicos].sort((a, b) => a[1].localeCompare(b[1], "es"));
+  }, [datos]);
   const cantidadAbiertas = (datos?.compras ?? []).filter(abiertaSegunEstado).length;
   const loteVisible = lista.filter(confirmableEnLote);
   const seleccion = loteVisible.filter((c) => elegidas.has(c.id)).map((c) => c.id);
@@ -147,9 +154,24 @@ export function Facturas({ ancho }: { ancho: Ancho }) {
       ))}
     </div>
   );
+  const filtroProveedor = proveedores.length > 0 && (
+    <select
+      aria-label="Filtrar por proveedor"
+      className={`campo py-2 text-sm ${proveedorId ? "border-naranja text-stone-800" : "text-stone-500"}`}
+      value={proveedorId ?? ""}
+      onChange={(e) => setProveedorId(Number(e.target.value) || null)}
+    >
+      <option value="">Todos los proveedores</option>
+      {proveedores.map(([id, nombre]) => (
+        <option key={id} value={id}>
+          {nombre}
+        </option>
+      ))}
+    </select>
+  );
   const vacio = (
     <p className="px-4 py-10 text-center text-sm text-stone-500">
-      {q ? "No hay facturas con esa búsqueda." : filtro === "abiertas" ? "No hay facturas para revisar 🙌" : "Todavía no hay facturas acá."}
+      {q || proveedorId ? "No hay facturas con esa búsqueda." : filtro === "abiertas" ? "No hay facturas para revisar 🙌" : "Todavía no hay facturas acá."}
     </p>
   );
   const cargando = (
@@ -202,6 +224,7 @@ export function Facturas({ ancho }: { ancho: Ancho }) {
       <div className="space-y-4">
         {arriba}
         {filtros}
+        {filtroProveedor}
         {!datos ? (
           cargando
         ) : !lista.length ? (
@@ -237,7 +260,8 @@ export function Facturas({ ancho }: { ancho: Ancho }) {
     <section className="tarjeta flex min-h-0 flex-col overflow-hidden">
       <div className="flex flex-wrap items-center gap-3 border-b border-stone-100 px-4 py-3">
         {filtros}
-        <div className="relative ml-auto w-full max-w-64">
+        {filtroProveedor && <div className="ml-auto w-full max-w-56">{filtroProveedor}</div>}
+        <div className={`relative w-full max-w-64 ${filtroProveedor ? "" : "ml-auto"}`}>
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-stone-400" />
           <input className="campo py-2 pl-9 text-sm" placeholder="Buscar proveedor o número…" value={q} onChange={(e) => setQ(e.target.value)} />
         </div>

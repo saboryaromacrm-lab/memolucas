@@ -4,7 +4,7 @@ import { Boton, useAccion } from "../componentes/ui";
 import { post, put } from "../lib/api";
 import { atajosBloqueados, fechaCorta, Hoja, plata, useVivo, Ventana, type Ancho } from "./comun";
 
-type Precios = { bulto: number | null; unidad: number | null; porMedida: { valor: number; medida: "kg" | "l" } | null };
+export type Precios = { bulto: number | null; unidad: number | null; porMedida: { valor: number; medida: "kg" | "l" } | null };
 type UnidadCompra = "bulto" | "unidad" | "kg" | "litro";
 type CompraProducto = {
   id: number;
@@ -62,7 +62,7 @@ const ORDENES_MOVIL: [string, Orden][] = [
 ];
 
 /** "Caja x 15 $ 12.499,93 · Unidad $ 833,33 · Litro $ 1.666,66" */
-function lineasDePrecio(c: CompraProducto): [string, number][] {
+export function lineasDePrecio(c: Pick<CompraProducto, "precios" | "unidadesPorBulto">): [string, number][] {
   const p = c.precios;
   return [
     ...(p.bulto !== null ? [[c.unidadesPorBulto ? `Caja x ${c.unidadesPorBulto}` : "Bulto", p.bulto] as [string, number]] : []),

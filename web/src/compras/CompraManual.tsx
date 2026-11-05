@@ -5,12 +5,13 @@ import { api, del, get } from "../lib/api";
 import { ahora } from "../lib/fechas";
 import { aNumero, plata, Ventana } from "./comun";
 import { comprimir } from "./imagen";
+import { SelectorProveedor } from "./SelectorProveedor";
 
 type UnidadCompra = "bulto" | "unidad" | "kg" | "litro";
 type Clase = "mercaderia" | "gasto";
 /** Como lo devuelve el servidor (y como se manda al guardar). */
 type CompraManual = {
-  proveedor: string;
+  proveedorId: number | null;
   fecha: string;
   fotoId?: number | null;
   renglones: {
@@ -39,7 +40,7 @@ type Fila = {
   modo: "total" | "unidad";
   precio: string;
 };
-type ProductoConocido = { nombre: string; categoria: string; clase: Clase; contenido: number | null; medida: "kg" | "l" | null; proveedores: { proveedor: string }[] };
+type ProductoConocido = { nombre: string; categoria: string; clase: Clase; contenido: number | null; medida: "kg" | "l" | null };
 
 const FILA_NUEVA: Fila = { nombre: "", categoria: "", clase: "mercaderia", cantidad: "1", unidadCompra: "unidad", unidadesPorBulto: "", contenido: "", medida: "l", modo: "total", precio: "" };
 const COMO_VINO: Record<UnidadCompra, [string, string]> = { unidad: ["Unidades", "unidad"], bulto: ["Cajas o packs", "caja"], kg: ["Kilos", "kg"], litro: ["Litros", "litro"] };
@@ -69,7 +70,7 @@ function preciosDe(f: Fila): [string, number][] {
 
 /** Cargar (o editar) una compra sin factura: ej. 2 bidones de agua de 20 l por $ 14.000. */
 export function CompraManualForm({ id, onCerrar, onGuardada }: { id: number | null; onCerrar: () => void; onGuardada: (id: number | null) => void }) {
-  const [proveedor, setProveedor] = useState("");
+  const [proveedorId, setProveedorId] = useState<number | null>(null);
   const [fecha, setFecha] = useState(() => ahora().toISODate()!);
   const [filas, setFilas] = useState<Fila[]>([{ ...FILA_NUEVA }]);
   const [foto, setFoto] = useState<{ archivo: File; url: string } | null>(null);
@@ -85,7 +86,7 @@ export function CompraManualForm({ id, onCerrar, onGuardada }: { id: number | nu
     if (!id) return;
     void get<CompraManual>(`/api/c/manuales/${id}`)
       .then((c) => {
-        setProveedor(c.proveedor);
+        setProveedorId(c.proveedorId);
         setFecha(c.fecha);
         setFotoActual(c.fotoId ?? null);
         setFilas(
@@ -113,7 +114,6 @@ export function CompraManualForm({ id, onCerrar, onGuardada }: { id: number | nu
   );
 
   const porNombre = useMemo(() => new Map(conocidos.map((p) => [clave(p.nombre), p])), [conocidos]);
-  const proveedores = useMemo(() => [...new Set(conocidos.flatMap((p) => p.proveedores.map((x) => x.proveedor)))].sort(), [conocidos]);
   const categorias = useMemo(() => [...new Set(conocidos.map((p) => p.categoria))].sort(), [conocidos]);
 
   const cambiar = (i: number, cambios: Partial<Fila>) => setFilas((fs) => fs.map((f, j) => (j === i ? { ...f, ...cambios } : f)));
@@ -128,7 +128,7 @@ export function CompraManualForm({ id, onCerrar, onGuardada }: { id: number | nu
 
   const guardar = async () => {
     const datos: CompraManual = {
-      proveedor: proveedor.trim(),
+      proveedorId,
       fecha,
       renglones: filas.map((f) => {
         const contenido = f.unidadCompra === "unidad" || f.unidadCompra === "bulto" ? aNumero(f.contenido) : 0;
@@ -192,15 +192,10 @@ export function CompraManualForm({ id, onCerrar, onGuardada }: { id: number | nu
       ) : (
         <div className="space-y-4 px-4 py-4 md:px-6">
           <section className="tarjeta grid gap-3 p-4 @lg:grid-cols-[minmax(0,1fr)_11rem]">
-            <label className="block min-w-0">
-              <span className="etiqueta">Dónde se compró (opcional)</span>
-              <input className="campo" list="proveedores-manual" placeholder="Ej. Aguas del barrio" value={proveedor} onChange={(e) => setProveedor(e.target.value)} />
-              <datalist id="proveedores-manual">
-                {proveedores.map((p) => (
-                  <option key={p} value={p} />
-                ))}
-              </datalist>
-            </label>
+            <div className="min-w-0">
+              <span className="etiqueta">Proveedor (opcional)</span>
+              <SelectorProveedor valor={proveedorId} onChange={setProveedorId} />
+            </div>
             <label className="block">
               <span className="etiqueta">Fecha</span>
               <input className="campo" type="date" value={fecha} max={ahora().toISODate()!} onChange={(e) => setFecha(e.target.value)} />

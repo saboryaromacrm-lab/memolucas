@@ -294,6 +294,7 @@ export type FilaComprobante = typeof comprobante.$inferSelect;
 export type UsuarioCompras = typeof usuarioCompras.$inferSelect;
 export type LecturaCompras = typeof lecturaCompras.$inferSelect;
 export type Producto = typeof producto.$inferSelect;
+export type Proveedor = typeof proveedor.$inferSelect;
 export type PrecioProducto = typeof precioProducto.$inferSelect;
 export type UnidadCompra = "bulto" | "unidad" | "kg" | "litro";
 
@@ -306,6 +307,7 @@ export const comprobante = pgTable(
     autor: text("autor"),
     /** Por dónde llegó: el bot de WhatsApp, el panel de compras o cargada a mano (sin factura). */
     origen: text("origen").$type<"whatsapp" | "panel" | "manual">().notNull().default("whatsapp"),
+    proveedorId: integer("proveedor_id").references(() => proveedor.id, { onDelete: "set null" }),
     estado: text("estado").$type<"pendiente" | "revisar" | "confirmado" | "descartado">().notNull(),
     datosCifrados: text("datos_cifrados").notNull(),
     /** Hash para detectar el mismo comprobante cargado dos veces. */
@@ -329,7 +331,7 @@ export const comprobante = pgTable(
     creadoEn: creadoEn(),
     actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
   },
-  (t) => [index("comprobante_clave_idx").on(t.clave), index("comprobante_creado_idx").on(t.creadoEn)],
+  (t) => [index("comprobante_clave_idx").on(t.clave), index("comprobante_creado_idx").on(t.creadoEn), index("comprobante_proveedor_idx").on(t.proveedorId)],
 );
 
 /** Personas que entran al panel de compras, cada una con su clave. */
@@ -416,3 +418,18 @@ export const precioProducto = pgTable(
   },
   (t) => [index("precio_producto_idx").on(t.productoId), index("precio_comprobante_idx").on(t.comprobanteId)],
 );
+
+/** Proveedores de Coffit. Se crean solos con las facturas (por CUIT o nombre) o a mano. */
+export const proveedor = pgTable("proveedor", {
+  id: serial("id").primaryKey(),
+  nombre: text("nombre").notNull(),
+  /** Nombre normalizado: no puede haber dos proveedores con el mismo. */
+  clave: text("clave").notNull().unique(),
+  /** Solo para reconocerlo en las facturas; no se muestra. */
+  cuit: text("cuit").unique(),
+  notas: text("notas").notNull().default(""),
+  /** Oculto: no aparece para elegir, pero conserva sus compras. */
+  oculto: boolean("oculto").notNull().default(false),
+  creadoEn: creadoEn(),
+  actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
+});

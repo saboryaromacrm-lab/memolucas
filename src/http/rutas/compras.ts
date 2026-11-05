@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../../db/index.js";
-import { adjunto, grupo } from "../../db/schema.js";
+import { adjunto, grupo, proveedor } from "../../db/schema.js";
 import { normalizar } from "../../lib/textos.js";
 import { tituloComprobante } from "../../lib/comprobantes.js";
 import {
@@ -23,7 +23,7 @@ const Id = z.object({ id: z.coerce.number().int().positive() });
 const ESTADOS = ["pendiente", "revisar", "confirmado", "descartado"] as const;
 
 /** prefijo: desde dónde se sirven los archivos (el panel de compras usa su propia ruta). */
-export async function serializar({ fila, datos }: ComprobanteGuardado, grupos: Map<string, string>, prefijo = "/api/adjuntos") {
+export async function serializar({ fila, datos }: ComprobanteGuardado, n: Nombres, prefijo = "/api/adjuntos") {
   const archivos =
     fila.archivosBorrados || !fila.adjuntoIds.length
       ? []
@@ -35,18 +35,24 @@ export async function serializar({ fila, datos }: ComprobanteGuardado, grupos: M
   return {
     ...resto,
     titulo: fila.origen === "manual" ? "Sin factura" : tituloComprobante(datos),
-    proveedor: datos.encabezado.razonSocialEmisor,
+    // El nombre de Proveedores (si se lo cambió, se ve el nuevo); si no tiene, el de la factura.
+    proveedor: (fila.proveedorId && n.proveedores.get(fila.proveedorId)) || datos.encabezado.razonSocialEmisor,
     moneda: datos.encabezado.moneda,
     renglones: datos.renglones.length,
     clase: datos.clase,
     diferencias: datos.controles.diferencias,
     dudas: datos.dudas,
-    grupoNombre: fila.chat ? (grupos.get(fila.chat) ?? "Grupo") : null,
+    grupoNombre: fila.chat ? (n.grupos.get(fila.chat) ?? "Grupo") : null,
     archivos,
   };
 }
 
-export const nombresGrupos = async () => new Map((await db.select().from(grupo)).map((g) => [g.jid, g.nombre]));
+type Nombres = { grupos: Map<string, string>; proveedores: Map<number, string> };
+/** Nombres de grupos y proveedores, para mostrar cada comprobante. */
+export async function nombres(): Promise<Nombres> {
+  const [grupos, proveedores] = await Promise.all([db.select().from(grupo), db.select({ id: proveedor.id, nombre: proveedor.nombre }).from(proveedor)]);
+  return { grupos: new Map(grupos.map((g) => [g.jid, g.nombre])), proveedores: new Map(proveedores.map((p) => [p.id, p.nombre])) };
+}
 
 export const rutasCompras: FastifyPluginAsync = async (app) => {
   app.get("/compras", async (req) => {
@@ -56,22 +62,22 @@ export const rutasCompras: FastifyPluginAsync = async (app) => {
       const buscado = normalizar(q);
       lista = lista.filter((c) => normalizar(`${c.datos.encabezado.razonSocialEmisor} ${tituloComprobante(c.datos)} ${c.datos.encabezado.cuitEmisor}`).includes(buscado));
     }
-    const grupos = await nombresGrupos();
-    return Promise.all(lista.map((c) => serializar(c, grupos)));
+    const n = await nombres();
+    return Promise.all(lista.map((c) => serializar(c, n)));
   });
 
   app.get("/compras/:id", async (req) => {
     const { id } = Id.parse(req.params);
     const c = await obtenerComprobante(id);
     if (!c) throw new ErrorUsuario("No existe ese comprobante");
-    return { ...(await serializar(c, await nombresGrupos())), datos: c.datos };
+    return { ...(await serializar(c, await nombres())), datos: c.datos };
   });
 
   app.put("/compras/:id", async (req) => {
     const { id } = Id.parse(req.params);
     const { datos } = z.object({ datos: z.unknown() }).parse(req.body);
     const c = await actualizarDatos(id, datos);
-    return { ...(await serializar(c, await nombresGrupos())), datos: c.datos };
+    return { ...(await serializar(c, await nombres())), datos: c.datos };
   });
 
   app.post("/compras/:id/confirmar", async (req) => {

@@ -57,6 +57,13 @@
       "when": 1793841614534,
       "tag": "0007_productos",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1793892628165,
+      "tag": "0008_proveedores",
+      "breakpoints": true
     }
   ]
 }

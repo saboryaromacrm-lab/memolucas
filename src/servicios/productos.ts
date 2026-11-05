@@ -9,6 +9,7 @@ import { costosFinales, preciosDe, variacion, type Precios } from "../lib/precio
 import { normalizar } from "../lib/textos.js";
 import { leerDatos } from "./compras.js";
 import { obtenerConfig } from "./configuracion.js";
+import { sincronizarNombres } from "./proveedores.js";
 import { ErrorUsuario } from "./recordatorios.js";
 
 const MAX_INTENTOS = 5;
@@ -46,7 +47,10 @@ export async function procesarPendientes(): Promise<void> {
         await registrar("aviso", "productos", `No se pudieron pasar a Productos los renglones del comprobante ${fila.id}`, err);
       }
     }
-    if (pendientes.length) bus.avisar("compras");
+    if (pendientes.length) {
+      await sincronizarNombres();
+      bus.avisar("compras");
+    }
   } finally {
     procesando = false;
   }
@@ -180,6 +184,22 @@ export async function obtenerProducto(id: number) {
   const filas = await db.select().from(precioProducto).where(eq(precioProducto.productoId, id)).orderBy(...enOrden);
   const alias = await db.select().from(productoAlias).where(eq(productoAlias.productoId, id));
   return { ...armar(p, filas, (await obtenerConfig()).productosAlertaPct), alias };
+}
+
+/** Lo que se le compra a un proveedor: cada producto con su última compra. */
+export async function productosDeProveedor(proveedorId: number) {
+  const filas = await db
+    .select({ precio: precioProducto, producto })
+    .from(precioProducto)
+    .innerJoin(comprobante, eq(comprobante.id, precioProducto.comprobanteId))
+    .innerJoin(producto, eq(producto.id, precioProducto.productoId))
+    .where(eq(comprobante.proveedorId, proveedorId))
+    .orderBy(...enOrden);
+  const ultimas = new Map<number, (typeof filas)[number]>();
+  for (const f of filas) ultimas.set(f.producto.id, f);
+  return [...ultimas.values()]
+    .map(({ precio, producto: p }) => ({ id: p.id, nombre: p.nombre, categoria: p.categoria, fecha: precio.fecha, unidadesPorBulto: precio.unidadesPorBulto, precios: preciosDe(precio, p) }))
+    .sort((a, b) => a.nombre.localeCompare(b.nombre));
 }
 
 // ───────────── Cambios a mano ─────────────

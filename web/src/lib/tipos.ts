@@ -172,6 +172,7 @@ export type Compra = {
   id: number;
   estado: EstadoCompra;
   titulo: string;
+  proveedorId: number | null;
   proveedor: string;
   fecha: string | null;
   total: string | null;
