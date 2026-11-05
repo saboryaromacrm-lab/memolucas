@@ -1,16 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Check, CheckCircle2, FileText, Loader2, Pencil, Search, Trash2 } from "lucide-react";
+import { AlertTriangle, Check, CheckCircle2, FileText, Loader2, Pencil, Search, Trash2, X } from "lucide-react";
 import { useAccion, useAviso } from "../componentes/ui";
 import { post, put } from "../lib/api";
 import type { Compra, ComprobanteDatos } from "../lib/tipos";
+import { BuscadorProducto } from "./BuscadorProducto";
 import { Cargador, EstadoCola, TarjetaLectura, type Lectura } from "./Cargador";
 import { atajosBloqueados, fechaCorta, Hoja, plata, useVivo, type Ancho } from "./comun";
 import { CompraManualForm } from "./CompraManual";
 import { Correccion } from "./Correccion";
+import type { Producto } from "./Productos";
 import { SelectorFormaPago } from "./SelectorFormaPago";
 import { Visor } from "./Visor";
 
-type Detalle = Compra & { datos: ComprobanteDatos };
+/** productos: a qué producto fue cada renglón, cuando ya pasó a Productos (solo lo trae el detalle). */
+type Detalle = Compra & { datos: ComprobanteDatos; productos?: { renglon: number; productoId: number; nombre: string }[] };
 type Filtro = "abiertas" | "confirmado" | "todas";
 type Envio = { ok: boolean; mensaje: string } | null;
 
@@ -581,6 +584,47 @@ function DetalleFactura({
   );
 }
 
+/** A qué producto fue el renglón (cuando ya pasó a Productos), con la opción de corregirlo eligiendo entre los del proveedor. */
+function ProductoDelRenglon({ c, renglon, onCambio }: { c: Detalle; renglon: number; onCambio: () => Promise<void> }) {
+  const actual = c.productos?.find((x) => x.renglon === renglon);
+  const [cambiando, setCambiando] = useState(false);
+  const [texto, setTexto] = useState("");
+  const { datos } = useVivo<{ productos: Producto[] }>(cambiando ? "/api/c/productos" : null);
+  const excluir = useMemo(() => new Set(actual ? [actual.productoId] : []), [actual]);
+  const accion = useAccion();
+  if (!actual) return null;
+  const elegir = async (p: Producto) => {
+    if (!(await accion(() => put(`/api/c/compras/${c.id}/renglones/${renglon}/producto`, { productoId: p.id }), `Ahora va a “${p.nombre}”`))) return;
+    setCambiando(false);
+    await onCambio();
+  };
+  if (!cambiando)
+    return (
+      <span className="mt-0.5 flex flex-wrap items-center gap-x-2 pl-8 text-xs text-emerald-700">
+        → {actual.nombre}
+        {/* Las compras sin factura se corrigen editándolas. */}
+        {c.origen !== "manual" && (
+          <button onClick={() => (setTexto(""), setCambiando(true))} className="font-medium text-naranja hover:underline">
+            Cambiar
+          </button>
+        )}
+      </span>
+    );
+  return (
+    <span className="mt-1.5 block pl-8">
+      <span className="flex items-start gap-1">
+        <span className="min-w-0 flex-1">
+          <BuscadorProducto productos={datos?.productos ?? []} proveedorId={c.proveedorId} texto={texto} onTexto={setTexto} onElegir={(p) => void elegir(p)} excluir={excluir} autoFocus />
+        </span>
+        <button aria-label="Cancelar" title="Cancelar" onClick={() => setCambiando(false)} className="mt-1.5 rounded-lg p-1.5 text-stone-400 hover:bg-stone-100 hover:text-stone-700">
+          <X className="size-4" />
+        </button>
+      </span>
+      <span className="mt-1 block text-[11px] text-stone-500">Vale también para las otras compras de este renglón a este proveedor y para las que vengan.</span>
+    </span>
+  );
+}
+
 function Resumen({ c, onCambio }: { c: Detalle; onCambio: () => Promise<void> }) {
   const accion = useAccion();
   const d = c.datos;
@@ -603,19 +647,22 @@ function Resumen({ c, onCambio }: { c: Detalle; onCambio: () => Promise<void> })
       </section>
       <section className="tarjeta divide-y divide-stone-100">
         {d.renglones.map((r, i) => (
-          <div key={i} className={`flex gap-3 px-4 py-2.5 text-sm ${r.cierra ? "" : "bg-amber-50"}`}>
-            <span className="w-5 shrink-0 text-xs text-stone-400">{i + 1}</span>
-            <span className="min-w-0 flex-1">
-              <span className="block text-stone-800">{r.descripcion}</span>
-              <span className="block text-xs text-stone-500">
-                {r.cantidad.toLocaleString("es-AR")} {r.unidad} × {plata(r.precioUnitario, m)}
-                {r.descuentos.length ? ` − ${r.descuentos.join("+")}%` : ""}
+          <div key={i} className={`px-4 py-2.5 text-sm ${r.cierra ? "" : "bg-amber-50"}`}>
+            <div className="flex gap-3">
+              <span className="w-5 shrink-0 text-xs text-stone-400">{i + 1}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-stone-800">{r.descripcion}</span>
+                <span className="block text-xs text-stone-500">
+                  {r.cantidad.toLocaleString("es-AR")} {r.unidad} × {plata(r.precioUnitario, m)}
+                  {r.descuentos.length ? ` − ${r.descuentos.join("+")}%` : ""}
+                </span>
               </span>
-            </span>
-            <span className="shrink-0 text-right font-medium tabular-nums">
-              {plata(r.importe, m)}
-              {!r.cierra && <AlertTriangle className="ml-auto mt-0.5 size-3.5 text-amber-600" />}
-            </span>
+              <span className="shrink-0 text-right font-medium tabular-nums">
+                {plata(r.importe, m)}
+                {!r.cierra && <AlertTriangle className="ml-auto mt-0.5 size-3.5 text-amber-600" />}
+              </span>
+            </div>
+            <ProductoDelRenglon c={c} renglon={i + 1} onCambio={onCambio} />
           </div>
         ))}
       </section>

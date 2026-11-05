@@ -1,4 +1,4 @@
-import { and, eq, inArray, notExists, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db/index.js";
 import { comprobante, precioProducto, producto, productoAlias, type FilaComprobante, type UnidadCompra } from "../db/schema.js";
@@ -8,8 +8,8 @@ import { normalizar } from "../lib/textos.js";
 import { borrarAdjunto } from "./adjuntos.js";
 import { columnas, leerDatos } from "./compras.js";
 import { exigirFormaPago } from "./formas-pago.js";
-import { claveProducto } from "./productos.js";
-import { nombreDeProveedor } from "./proveedores.js";
+import { borrarHuerfanos, claveProducto, type Tx } from "./productos.js";
+import { enlazarSegunCompras, nombreDeProveedor } from "./proveedores.js";
 import { ErrorUsuario } from "./recordatorios.js";
 
 // Compras sin factura (ej. 2 bidones de agua de 20 l por $ 14.000), cargadas a mano.
@@ -98,8 +98,6 @@ function comprobanteDe(d: CompraManual, proveedor: string, clases: Comprobante["
   return controlar(datos).comprobante;
 }
 
-type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
-
 /** El producto de cada renglón: el que tiene ese nombre o uno nuevo. El contenido escrito se guarda en el producto. */
 async function productoDe(tx: Tx, r: CompraManual["renglones"][number]) {
   const contenido = r.contenido && r.medida ? { contenido: r.contenido, medida: r.medida } : {};
@@ -138,14 +136,7 @@ async function registrarPrecios(tx: Tx, comprobanteId: number, d: CompraManual, 
       costoFinal: r.total,
     });
   }
-}
-
-/** Los productos que quedaron sin ninguna compra (por editar o borrar) se borran. */
-async function borrarHuerfanos(tx: Tx, ids: number[]) {
-  if (!ids.length) return;
-  await tx
-    .delete(producto)
-    .where(and(inArray(producto.id, ids), notExists(tx.select({ uno: sql`1` }).from(precioProducto).where(eq(precioProducto.productoId, producto.id)))));
+  await enlazarSegunCompras(tx, sql`c.id = ${comprobanteId}`);
 }
 
 async function manual(id: number): Promise<FilaComprobante> {

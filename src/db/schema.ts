@@ -7,6 +7,7 @@ import {
   jsonb,
   numeric,
   pgTable,
+  primaryKey,
   serial,
   text,
   timestamp,
@@ -424,6 +425,21 @@ export const precioProducto = pgTable(
     creadoEn: creadoEn(),
   },
   (t) => [index("precio_producto_idx").on(t.productoId), index("precio_comprobante_idx").on(t.comprobanteId)],
+);
+
+/** Qué productos vende cada proveedor: se enlazan solos con cada compra, y también a mano desde su ficha. */
+export const productoProveedor = pgTable(
+  "producto_proveedor",
+  {
+    productoId: integer("producto_id")
+      .notNull()
+      .references(() => producto.id, { onDelete: "cascade" }),
+    proveedorId: integer("proveedor_id")
+      .notNull()
+      .references(() => proveedor.id, { onDelete: "cascade" }),
+    creadoEn: creadoEn(),
+  },
+  (t) => [primaryKey({ columns: [t.productoId, t.proveedorId] }), index("producto_proveedor_proveedor_idx").on(t.proveedorId)],
 );
 
 /** Proveedores de Coffit. Se crean solos con las facturas (por CUIT o nombre) o a mano. */

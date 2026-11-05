@@ -4,6 +4,8 @@ import { get } from "../lib/api";
 
 export const plata = (n: number | string | null, moneda = "PES") =>
   n === null ? "—" : `${moneda === "DOL" ? "US$" : "$"} ${Number(n).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+/** Para buscar sin importar mayúsculas ni acentos: "Café " → "cafe". */
+export const clave = (s: string) => s.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 /** Números como se escriben en Argentina: "14.000" → 14000, "1.234,56" → 1234.56, "3,5" o "3.5" → 3.5 (0 si no es un número). */
 export function aNumero(s: string): number {
   const t = s.replace(/[\s$]/g, "");

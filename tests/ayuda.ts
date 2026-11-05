@@ -45,7 +45,7 @@ export async function baseLimpia() {
     migrado = true;
   }
   await db.execute(
-    sql`truncate table mensaje, ocurrencia, recordatorio, nota, encuesta, precio_producto, producto_alias, producto, comprobante, proveedor, forma_pago, lectura_compras, usuario_compras, grupo, adjunto, borrador_pendiente, log_sistema, uso_ia, configuracion, acceso_panel restart identity cascade`,
+    sql`truncate table mensaje, ocurrencia, recordatorio, nota, encuesta, precio_producto, producto_alias, producto, comprobante, producto_proveedor, proveedor, forma_pago, lectura_compras, usuario_compras, grupo, adjunto, borrador_pendiente, log_sistema, uso_ia, configuracion, acceso_panel restart identity cascade`,
   );
   invalidarConfig();
   await actualizarConfig({ numeroAutorizado: "5491112345678" });

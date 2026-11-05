@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Eye, EyeOff, Loader2, Pencil, Plus, Search, Trash2 } from "lucide-react";
+import { Eye, EyeOff, Loader2, Pencil, Plus, Search, Trash2, X } from "lucide-react";
 import { Boton, useAccion } from "../componentes/ui";
 import { del, post, put } from "../lib/api";
 import type { Compra } from "../lib/tipos";
-import { atajosBloqueados, fechaCorta, Hoja, plata, useVivo, Ventana, type Ancho } from "./comun";
+import { BuscadorProducto } from "./BuscadorProducto";
+import { atajosBloqueados, clave, fechaCorta, Hoja, plata, useVivo, Ventana, type Ancho } from "./comun";
 import { Estado } from "./Facturas";
-import { lineasDePrecio, type Precios } from "./Productos";
+import { lineasDePrecio, type Precios, type Producto } from "./Productos";
 import { SelectorFormaPago } from "./SelectorFormaPago";
 
 type Proveedor = {
@@ -20,14 +21,13 @@ type Proveedor = {
   ultimaCompra: string | null;
 };
 type Ficha = Proveedor & {
-  productos: { id: number; nombre: string; categoria: string; fecha: string; unidadesPorBulto: number; precios: Precios }[];
+  /** Lo que vende: cuántas veces y cuándo se le compró por última vez (null si todavía no). */
+  productos: { id: number; nombre: string; categoria: string; compras: number; ultima: { fecha: string; unidadesPorBulto: number; precios: Precios } | null }[];
   /** Lo pagado este mes en cada forma de pago. */
   pagos: { forma: string | null; total: number }[];
   /** Las últimas 50 compras, para la ficha. */
   ultimas: Compra[];
 };
-
-const clave = (s: string) => s.trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
 
 export function Proveedores({ ancho }: { ancho: Ancho }) {
   const [ocultos, setOcultos] = useState(false);
@@ -253,30 +253,7 @@ function FichaProveedor({
             )}
           </section>
 
-          <section className="tarjeta divide-y divide-stone-100">
-            <h3 className="px-4 py-2.5 text-sm font-semibold text-stone-800">Lo que le comprás</h3>
-            {p.productos.length ? (
-              p.productos.map((x) => (
-                <div key={x.id} className="flex items-start gap-3 px-4 py-2.5 text-sm">
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-stone-800">{x.nombre}</span>
-                    <span className="text-xs text-stone-500">
-                      {x.categoria} · {fechaCorta(x.fecha)}
-                    </span>
-                  </span>
-                  <span className="flex shrink-0 flex-col items-end text-xs text-stone-500">
-                    {lineasDePrecio(x).map(([t, v]) => (
-                      <span key={t}>
-                        {t} <b className="tabular-nums text-stone-800">{plata(v)}</b>
-                      </span>
-                    ))}
-                  </span>
-                </div>
-              ))
-            ) : (
-              <p className="px-4 py-4 text-sm text-stone-500">Todavía no hay productos de este proveedor (aparecen con las facturas confirmadas).</p>
-            )}
-          </section>
+          <ProductosDelProveedor proveedorId={id} productos={p.productos} onCambio={recargar} />
 
           <section className="tarjeta divide-y divide-stone-100">
             <h3 className="px-4 py-2.5 text-sm font-semibold text-stone-800">Últimas compras</h3>
@@ -345,6 +322,76 @@ function FichaProveedor({
         </div>
       )}
     </Hoja>
+  );
+}
+
+/** Lo que vende el proveedor: se suma solo con cada compra, y se puede agregar o quitar a mano. */
+function ProductosDelProveedor({ proveedorId, productos, onCambio }: { proveedorId: number; productos: Ficha["productos"]; onCambio: () => Promise<void> }) {
+  const [agregando, setAgregando] = useState(false);
+  const [texto, setTexto] = useState("");
+  const { datos } = useVivo<{ productos: Producto[] }>(agregando ? "/api/c/productos" : null);
+  const enlazados = useMemo(() => new Set(productos.map((x) => x.id)), [productos]);
+  const accion = useAccion();
+  const hacer = async (pedido: () => Promise<unknown>, aviso: string) => {
+    if ((await accion(pedido, aviso)) !== undefined) await onCambio();
+  };
+  const agregar = async (x: Producto) => {
+    setTexto("");
+    await hacer(() => post(`/api/c/proveedores/${proveedorId}/productos`, { productoId: x.id }), `“${x.nombre}” agregado`);
+  };
+
+  return (
+    <section className="tarjeta divide-y divide-stone-100">
+      <div className="flex items-center justify-between gap-2 px-4 py-2.5">
+        <h3 className="text-sm font-semibold text-stone-800">Lo que le comprás</h3>
+        {!agregando && (
+          <button onClick={() => (setTexto(""), setAgregando(true))} className="flex items-center gap-1 text-sm font-medium text-naranja hover:underline">
+            <Plus className="size-4" /> Agregar producto
+          </button>
+        )}
+      </div>
+      {agregando && (
+        <div className="flex items-start gap-1 px-4 py-3">
+          <div className="min-w-0 flex-1">
+            <BuscadorProducto productos={datos?.productos ?? []} proveedorId={null} texto={texto} onTexto={setTexto} onElegir={(x) => void agregar(x)} excluir={enlazados} autoFocus />
+          </div>
+          <button aria-label="Terminar de agregar" title="Listo" onClick={() => setAgregando(false)} className="mt-1.5 rounded-lg p-1.5 text-stone-400 hover:bg-stone-100 hover:text-stone-700">
+            <X className="size-4" />
+          </button>
+        </div>
+      )}
+      {productos.length ? (
+        productos.map((x) => (
+          <div key={x.id} className="flex items-start gap-3 px-4 py-2.5 text-sm">
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-stone-800">{x.nombre}</span>
+              <span className="text-xs text-stone-500">
+                {x.categoria} · {x.ultima ? `${x.compras} ${x.compras === 1 ? "compra" : "compras"} · última ${fechaCorta(x.ultima.fecha)}` : "Todavía no se le compró"}
+              </span>
+            </span>
+            {x.ultima && (
+              <span className="flex shrink-0 flex-col items-end text-xs text-stone-500">
+                {lineasDePrecio(x.ultima).map(([t, v]) => (
+                  <span key={t}>
+                    {t} <b className="tabular-nums text-stone-800">{plata(v)}</b>
+                  </span>
+                ))}
+              </span>
+            )}
+            <button
+              aria-label={`Quitar ${x.nombre}`}
+              title="Ya no se lo vende: quitarlo de su lista"
+              onClick={() => void hacer(() => del(`/api/c/proveedores/${proveedorId}/productos/${x.id}`), `“${x.nombre}” quitado`)}
+              className="shrink-0 rounded-lg p-1 text-stone-400 hover:bg-red-50 hover:text-red-600"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
+        ))
+      ) : (
+        <p className="px-4 py-4 text-sm text-stone-500">Todavía no tiene productos: se suman solos con cada compra, o agregalos acá.</p>
+      )}
+    </section>
   );
 }
 

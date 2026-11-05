@@ -3,8 +3,10 @@ import { Camera, Loader2, Plus, Trash2, X } from "lucide-react";
 import { useAccion } from "../componentes/ui";
 import { api, del, get } from "../lib/api";
 import { ahora } from "../lib/fechas";
-import { aNumero, plata, Ventana } from "./comun";
+import { BuscadorProducto, textoUltimaVez, ultimaPara } from "./BuscadorProducto";
+import { aNumero, clave, plata, Ventana } from "./comun";
 import { comprimir } from "./imagen";
+import type { Producto } from "./Productos";
 import { SelectorFormaPago } from "./SelectorFormaPago";
 import { SelectorProveedor } from "./SelectorProveedor";
 
@@ -42,13 +44,10 @@ type Fila = {
   modo: "total" | "unidad";
   precio: string;
 };
-type ProductoConocido = { nombre: string; categoria: string; clase: Clase; contenido: number | null; medida: "kg" | "l" | null };
 
 const FILA_NUEVA: Fila = { nombre: "", categoria: "", clase: "mercaderia", cantidad: "1", unidadCompra: "unidad", unidadesPorBulto: "", contenido: "", medida: "l", modo: "total", precio: "" };
 const COMO_VINO: Record<UnidadCompra, [string, string]> = { unidad: ["Unidades", "unidad"], bulto: ["Cajas o packs", "caja"], kg: ["Kilos", "kg"], litro: ["Litros", "litro"] };
 const texto = (n: number | null) => (n ? String(n).replace(".", ",") : "");
-const clave = (s: string) => s.trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
-
 /** Total del renglón según cómo se escribió el precio. */
 const totalDe = (f: Fila) => (f.modo === "total" ? aNumero(f.precio) : aNumero(f.precio) * aNumero(f.cantidad));
 
@@ -78,14 +77,14 @@ export function CompraManualForm({ id, onCerrar, onGuardada }: { id: number | nu
   const [filas, setFilas] = useState<Fila[]>([{ ...FILA_NUEVA }]);
   const [foto, setFoto] = useState<{ archivo: File; url: string } | null>(null);
   const [fotoActual, setFotoActual] = useState<number | null>(null);
-  const [conocidos, setConocidos] = useState<ProductoConocido[]>([]);
+  const [conocidos, setConocidos] = useState<Producto[]>([]);
   const [cargando, setCargando] = useState(!!id);
   const [guardando, setGuardando] = useState(false);
   const elegirFoto = useRef<HTMLInputElement>(null);
   const accion = useAccion();
 
   useEffect(() => {
-    void get<{ productos: ProductoConocido[] }>("/api/c/productos").then((r) => setConocidos(r.productos)).catch(() => {});
+    void get<{ productos: Producto[] }>("/api/c/productos").then((r) => setConocidos(r.productos)).catch(() => {});
     if (!id) return;
     void get<CompraManual>(`/api/c/manuales/${id}`)
       .then((c) => {
@@ -121,10 +120,20 @@ export function CompraManualForm({ id, onCerrar, onGuardada }: { id: number | nu
   const categorias = useMemo(() => [...new Set(conocidos.map((p) => p.categoria))].sort(), [conocidos]);
 
   const cambiar = (i: number, cambios: Partial<Fila>) => setFilas((fs) => fs.map((f, j) => (j === i ? { ...f, ...cambios } : f)));
-  /** Al elegir un producto que ya existe, se completan su categoría, clase y contenido. */
-  const elegirNombre = (i: number, nombre: string) => {
+  /** Al elegir un producto que ya existe: su categoría, clase y contenido, y cómo vino la última vez que se le compró a este proveedor. */
+  const datosDe = (p: Producto): Partial<Fila> => {
+    const u = ultimaPara(p, proveedorId);
+    return {
+      nombre: p.nombre,
+      categoria: p.categoria,
+      clase: p.clase,
+      ...(p.contenido && p.medida ? { contenido: texto(p.contenido), medida: p.medida } : {}),
+      ...(u ? { unidadCompra: u.unidadCompra, unidadesPorBulto: u.unidadCompra === "bulto" ? texto(u.unidadesPorBulto) : "" } : {}),
+    };
+  };
+  const escribirNombre = (i: number, nombre: string) => {
     const p = porNombre.get(clave(nombre));
-    cambiar(i, p ? { nombre, categoria: p.categoria, clase: p.clase, ...(p.contenido && p.medida ? { contenido: texto(p.contenido), medida: p.medida } : {}) } : { nombre });
+    cambiar(i, p ? { ...datosDe(p), nombre } : { nombre });
   };
 
   const total = filas.reduce((t, f) => t + totalDe(f), 0);
@@ -257,20 +266,29 @@ export function CompraManualForm({ id, onCerrar, onGuardada }: { id: number | nu
 
           {filas.map((f, i) => {
             const existente = porNombre.get(clave(f.nombre));
+            const ultima = existente && ultimaPara(existente, proveedorId);
             const precios = preciosDe(f);
             const conContenido = f.unidadCompra === "unidad" || f.unidadCompra === "bulto";
             return (
               <section key={i} className="tarjeta space-y-3 p-4">
                 <div className="flex items-start gap-2">
-                  <label className="block min-w-0 flex-1">
+                  <div className="min-w-0 flex-1">
                     <span className="etiqueta">Producto</span>
-                    <input className="campo" list="productos-manual" placeholder="Ej. Bidón de agua 20 l" value={f.nombre} onChange={(e) => elegirNombre(i, e.target.value)} />
+                    <BuscadorProducto
+                      productos={conocidos}
+                      proveedorId={proveedorId}
+                      texto={f.nombre}
+                      onTexto={(nombre) => escribirNombre(i, nombre)}
+                      onElegir={(p) => cambiar(i, datosDe(p))}
+                      placeholder="Ej. Bidón de agua 20 l"
+                    />
                     {f.nombre.trim().length >= 2 && (
                       <span className={`mt-1 block text-xs ${existente ? "text-emerald-700" : "text-stone-500"}`}>
                         {existente ? "Ya está en Productos: se suma a su historial." : "Producto nuevo."}
                       </span>
                     )}
-                  </label>
+                    {ultima && <span className="block text-xs text-stone-500">{textoUltimaVez(ultima, proveedorId)}</span>}
+                  </div>
                   {filas.length > 1 && (
                     <button aria-label="Quitar producto" title="Quitar producto" onClick={() => setFilas((fs) => fs.filter((_, j) => j !== i))} className="mt-6 rounded-lg p-2 text-stone-400 hover:bg-red-50 hover:text-red-600">
                       <Trash2 className="size-4" />
@@ -353,11 +371,6 @@ export function CompraManualForm({ id, onCerrar, onGuardada }: { id: number | nu
               </section>
             );
           })}
-          <datalist id="productos-manual">
-            {conocidos.map((p) => (
-              <option key={p.nombre} value={p.nombre} />
-            ))}
-          </datalist>
           <datalist id="categorias-manual">
             {categorias.map((c) => (
               <option key={c} value={c} />

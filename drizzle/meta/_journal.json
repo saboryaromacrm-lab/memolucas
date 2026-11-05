@@ -71,6 +71,13 @@
       "when": 1793902265446,
       "tag": "0009_formas_pago",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1793905599211,
+      "tag": "0010_productos_proveedor",
+      "breakpoints": true
     }
   ]
 }

@@ -8,7 +8,7 @@ import { bus } from "../lib/eventos.js";
 import { registrar } from "../lib/log.js";
 import { obtenerConfig } from "./configuracion.js";
 import { exigirFormaPago, sugerirFormaPago } from "./formas-pago.js";
-import { proveedorPara, sincronizarNombres } from "./proveedores.js";
+import { enlazarSegunCompras, proveedorPara, sincronizarNombres } from "./proveedores.js";
 import { ErrorUsuario, filtroChat } from "./recordatorios.js";
 
 export type ComprobanteGuardado = { fila: FilaComprobante; datos: Comprobante };
@@ -136,12 +136,14 @@ export async function fijarFormaPago(id: number, formaPagoId: number | null) {
   bus.avisar("compras");
 }
 
-/** Al arrancar: las facturas que todavía no tienen proveedor (las de antes de Proveedores) se vinculan solas. */
+/** Al arrancar: las facturas que todavía no tienen proveedor (las de antes de Proveedores) se vinculan solas, con sus productos. */
 export async function vincularProveedores() {
   const filas = await db.select().from(comprobante).where(isNull(comprobante.proveedorId));
   for (const fila of filas) {
     const proveedorId = await proveedorDe(leerDatos(fila));
-    if (proveedorId) await db.update(comprobante).set({ proveedorId }).where(eq(comprobante.id, fila.id));
+    if (!proveedorId) continue;
+    await db.update(comprobante).set({ proveedorId }).where(eq(comprobante.id, fila.id));
+    await enlazarSegunCompras(db, sql`c.id = ${fila.id}`);
   }
   await sincronizarNombres();
 }
