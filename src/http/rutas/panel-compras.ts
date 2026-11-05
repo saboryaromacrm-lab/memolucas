@@ -32,6 +32,8 @@ import {
   actualizarProveedor,
   borrarProveedor,
   crearProveedor,
+  desenlazarProducto,
+  enlazarProducto,
   juntarProveedores,
   listarProveedores,
   obtenerProveedor,
@@ -44,7 +46,9 @@ import {
   listarProductos,
   obtenerProducto,
   productosCsv,
+  productosDeComprobante,
   productosDeProveedor,
+  reasignarRenglon,
   separarAlias,
 } from "../../servicios/productos.js";
 import { nombres, serializar } from "./compras.js";
@@ -202,11 +206,20 @@ export const rutasPanelCompras: FastifyPluginAsync = async (app) => {
       };
     });
 
+    /** El comprobante completo y, si ya pasó a Productos, a qué producto fue cada renglón. */
     privado.get("/compras/:id", async (req) => {
       const { id } = Id.parse(req.params);
       const c = await obtenerComprobante(id);
       if (!c) throw new ErrorUsuario("No existe ese comprobante");
-      return { ...(await serializar(c, await nombres(), ADJUNTOS)), datos: c.datos };
+      return { ...(await serializar(c, await nombres(), ADJUNTOS)), datos: c.datos, productos: await productosDeComprobante(id) };
+    });
+
+    /** Corrige a qué producto fue un renglón (y lo que venga igual de ese proveedor). */
+    privado.put("/compras/:id/renglones/:renglon/producto", async (req) => {
+      const { id, renglon } = Id.extend({ renglon: z.coerce.number().int().positive() }).parse(req.params);
+      const { productoId } = z.object({ productoId: z.number().int().positive() }).parse(req.body);
+      await reasignarRenglon(id, renglon, productoId);
+      return { ok: true };
     });
 
     /** Fotos o PDF de un comprobante (pueden ser varias hojas). Se leen en segundo plano. */
@@ -262,6 +275,19 @@ export const rutasPanelCompras: FastifyPluginAsync = async (app) => {
 
     privado.delete("/proveedores/:id", async (req) => {
       await borrarProveedor(Id.parse(req.params).id);
+      return { ok: true };
+    });
+
+    /** Lo que vende cada proveedor: se suma o se quita a mano (con cada compra se suma solo). */
+    privado.post("/proveedores/:id/productos", async (req) => {
+      const { productoId } = z.object({ productoId: z.number().int().positive() }).parse(req.body);
+      await enlazarProducto(Id.parse(req.params).id, productoId);
+      return { ok: true };
+    });
+
+    privado.delete("/proveedores/:id/productos/:productoId", async (req) => {
+      const { id, productoId } = Id.extend({ productoId: z.coerce.number().int().positive() }).parse(req.params);
+      await desenlazarProducto(id, productoId);
       return { ok: true };
     });
 

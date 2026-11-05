@@ -1,6 +1,6 @@
-import { and, asc, eq, isNotNull, ne, sql } from "drizzle-orm";
+import { and, asc, eq, isNotNull, ne, sql, type SQL } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { comprobante, formaPago, productoAlias, proveedor, type Proveedor } from "../db/schema.js";
+import { comprobante, formaPago, producto, productoAlias, productoProveedor, proveedor, type Proveedor } from "../db/schema.js";
 import { bus } from "../lib/eventos.js";
 import { ahora } from "../lib/fechas.js";
 import { normalizar } from "../lib/textos.js";
@@ -33,6 +33,34 @@ export async function proveedorPara(nombre: string, cuit: string): Promise<numbe
   bus.avisar("compras");
   // Si otro lo creó al mismo tiempo, se usa ese.
   return nuevo?.id ?? (await buscar())?.id ?? null;
+}
+
+/**
+ * Enlaza cada producto con el proveedor al que se le compró, según las compras que cumplen la condición
+ * (sobre precio_producto "p" y comprobante "c"). Lo ya enlazado queda como está.
+ */
+export async function enlazarSegunCompras(tx: Pick<typeof db, "execute">, condicion: SQL) {
+  await tx.execute(sql`
+    insert into producto_proveedor (producto_id, proveedor_id)
+    select distinct p.producto_id, c.proveedor_id
+    from precio_producto p join comprobante c on c.id = p.comprobante_id
+    where c.proveedor_id is not null and ${condicion}
+    on conflict do nothing`);
+}
+
+/** Desde la ficha: el proveedor vende este producto, aunque todavía no se le haya comprado. */
+export async function enlazarProducto(proveedorId: number, productoId: number) {
+  await obtenerProveedor(proveedorId);
+  const [p] = await db.select({ id: producto.id }).from(producto).where(eq(producto.id, productoId));
+  if (!p) throw new ErrorUsuario("No existe ese producto");
+  await db.insert(productoProveedor).values({ proveedorId, productoId }).onConflictDoNothing();
+  bus.avisar("compras");
+}
+
+/** Ya no se lo vende: deja de sugerirse al cargar (sus compras quedan). Si se le vuelve a comprar, se enlaza solo. */
+export async function desenlazarProducto(proveedorId: number, productoId: number) {
+  await db.delete(productoProveedor).where(and(eq(productoProveedor.proveedorId, proveedorId), eq(productoProveedor.productoId, productoId)));
+  bus.avisar("compras");
 }
 
 /** Productos guarda el nombre del proveedor de cada compra: se mantiene igual al de Proveedores. */
@@ -140,12 +168,16 @@ export async function borrarProveedor(id: number) {
   bus.avisar("compras");
 }
 
-/** Junta dos proveedores que son el mismo: las compras pasan al otro (y se queda con el CUIT y la forma de pago si no tenía). */
+/** Junta dos proveedores que son el mismo: las compras y los productos pasan al otro (y se queda con el CUIT y la forma de pago si no tenía). */
 export async function juntarProveedores(id: number, conId: number) {
   if (id === conId) throw new ErrorUsuario("Elegí otro proveedor.");
   const [origen, destino] = await Promise.all([obtenerProveedor(id), obtenerProveedor(conId)]);
   await db.transaction(async (tx) => {
     await tx.update(comprobante).set({ proveedorId: conId }).where(eq(comprobante.proveedorId, id));
+    await tx.execute(sql`
+      insert into producto_proveedor (producto_id, proveedor_id)
+      select producto_id, ${conId}::int from producto_proveedor where proveedor_id = ${id}
+      on conflict do nothing`);
     await tx.update(productoAlias).set({ proveedor: destino.nombre }).where(eq(productoAlias.proveedor, origen.nombre));
     await tx.delete(proveedor).where(eq(proveedor.id, id));
     const notas = [destino.notas, origen.notas].filter(Boolean).join("\n");

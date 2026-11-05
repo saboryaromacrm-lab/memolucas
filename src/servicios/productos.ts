@@ -1,6 +1,16 @@
-import { and, asc, eq, inArray, isNull, lt, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lt, notExists, notInArray, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { comprobante, precioProducto, producto, productoAlias, type FilaComprobante, type PrecioProducto, type Producto } from "../db/schema.js";
+import {
+  comprobante,
+  precioProducto,
+  producto,
+  productoAlias,
+  productoProveedor,
+  proveedor,
+  type FilaComprobante,
+  type PrecioProducto,
+  type Producto,
+} from "../db/schema.js";
 import { normalizarRenglones, type ProductoNormalizado } from "../bot/ia-productos.js";
 import type { Comprobante } from "../lib/comprobantes.js";
 import { bus } from "../lib/eventos.js";
@@ -9,7 +19,7 @@ import { costosFinales, preciosDe, variacion, type Precios } from "../lib/precio
 import { normalizar } from "../lib/textos.js";
 import { leerDatos } from "./compras.js";
 import { obtenerConfig } from "./configuracion.js";
-import { sincronizarNombres } from "./proveedores.js";
+import { enlazarSegunCompras, sincronizarNombres } from "./proveedores.js";
 import { ErrorUsuario } from "./recordatorios.js";
 
 const MAX_INTENTOS = 5;
@@ -73,12 +83,11 @@ async function registrarComprobante(fila: FilaComprobante) {
   const nuevos = renglones.filter((x) => !conocidos.has(x.alias));
   const normalizados = new Map<number, ProductoNormalizado>();
   if (nuevos.length) {
-    const existentes = await db.select({ nombre: producto.nombre, categoria: producto.categoria }).from(producto).orderBy(sql`${producto.id} desc`).limit(1500);
     const lista = await normalizarRenglones(
       await obtenerConfig(),
       proveedorDe(c),
       nuevos.map(({ r, i }) => ({ renglon: i + 1, codigo: r.codigo, descripcion: r.descripcion, cantidad: r.cantidad, unidad: r.unidad, unidadesPorBulto: r.unidadesPorBulto })),
-      existentes,
+      await existentesPara(fila.proveedorId),
     );
     for (const n of lista) normalizados.set(n.renglon - 1, n);
   }
@@ -124,23 +133,54 @@ async function registrarComprobante(fila: FilaComprobante) {
         costoFinal: costos[i],
       });
     }
+    await enlazarSegunCompras(tx, sql`c.id = ${fila.id}`);
     await tx.update(comprobante).set({ productosEn: new Date() }).where(eq(comprobante.id, fila.id));
   });
 }
 
+/** Los productos que ya existen, para que la IA los reconozca: primero los de este proveedor. */
+async function existentesPara(proveedorId: number | null) {
+  const campos = { id: producto.id, nombre: producto.nombre, categoria: producto.categoria };
+  const delProveedor = proveedorId
+    ? await db.select(campos).from(producto).innerJoin(productoProveedor, eq(productoProveedor.productoId, producto.id)).where(eq(productoProveedor.proveedorId, proveedorId))
+    : [];
+  const otros = await db
+    .select(campos)
+    .from(producto)
+    .where(delProveedor.length ? notInArray(producto.id, delProveedor.map((p) => p.id)) : undefined)
+    .orderBy(sql`${producto.id} desc`)
+    .limit(1500);
+  return { delProveedor, otros };
+}
+
+export type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/** Los productos que quedaron sin ninguna compra (por editar, borrar o mover compras) se borran. */
+export async function borrarHuerfanos(tx: Tx, ids: number[]) {
+  if (!ids.length) return;
+  await tx
+    .delete(producto)
+    .where(and(inArray(producto.id, ids), notExists(tx.select({ uno: sql`1` }).from(precioProducto).where(eq(precioProducto.productoId, producto.id)))));
+}
+
 // ───────────── Consultas ─────────────
 
-export type Compra = PrecioProducto & { precios: Precios; variacion: number | null };
+/** Cada compra con el proveedor de su comprobante (null si la compra no tiene proveedor). */
+type FilaPrecio = PrecioProducto & { proveedorId: number | null };
+export type Compra = FilaPrecio & { precios: Precios; variacion: number | null };
+/** Un proveedor que vende el producto, con lo que se le compró (ultima null si todavía nada). */
+type ProveedorDelProducto = { proveedorId: number; proveedor: string; oculto: boolean; compras: number; ultima: Compra | null };
 export type ResumenProducto = Producto & {
   ultima: Compra | null;
   variacion: number | null;
   alerta: boolean;
-  proveedores: { proveedor: string; ultima: Compra }[];
+  proveedores: ProveedorDelProducto[];
   compras: number;
 };
+type Enlace = Omit<ProveedorDelProducto, "compras" | "ultima">;
 
-/** Precios y variación de cada compra (contra la anterior del mismo producto). */
-function armar(p: Producto, filas: PrecioProducto[], alertaPct: number): ResumenProducto & { historial: Compra[] } {
+/** Precios y variación de cada compra (contra la anterior del mismo producto) y lo de cada proveedor que lo vende. */
+function armar(p: Producto, filas: FilaPrecio[], enlaces: Enlace[], alertaPct: number): ResumenProducto & { historial: Compra[] } {
   const historial: Compra[] = [];
   for (const f of filas) {
     const precios = preciosDe(f, p);
@@ -148,14 +188,15 @@ function armar(p: Producto, filas: PrecioProducto[], alertaPct: number): Resumen
     historial.push({ ...f, precios, variacion: anterior ? variacion(precios, anterior.precios) : null });
   }
   const ultima = historial.at(-1) ?? null;
-  const porProveedor = new Map<string, Compra>();
-  for (const h of historial) porProveedor.set(h.proveedor, h);
   return {
     ...p,
     ultima,
     variacion: ultima?.variacion ?? null,
     alerta: (ultima?.variacion ?? 0) >= alertaPct,
-    proveedores: [...porProveedor].map(([proveedor, u]) => ({ proveedor, ultima: u })),
+    proveedores: enlaces.map((e) => {
+      const suyas = historial.filter((h) => h.proveedorId === e.proveedorId);
+      return { ...e, compras: suyas.length, ultima: suyas.at(-1) ?? null };
+    }),
     compras: historial.length,
     historial,
   };
@@ -163,17 +204,42 @@ function armar(p: Producto, filas: PrecioProducto[], alertaPct: number): Resumen
 
 const enOrden = [asc(precioProducto.fecha), asc(precioProducto.id)];
 
-export async function listarProductos(): Promise<ResumenProducto[]> {
-  const { productosAlertaPct } = await obtenerConfig();
-  const [productos, filas] = await Promise.all([db.select().from(producto).orderBy(asc(producto.nombre)), db.select().from(precioProducto).orderBy(...enOrden)]);
-  const porProducto = new Map<number, PrecioProducto[]>();
-  for (const f of filas) {
-    const lista = porProducto.get(f.productoId);
-    if (lista) lista.push(f);
-    else porProducto.set(f.productoId, [f]);
+/** Agrupa por producto. */
+function porProducto<T extends { productoId: number }>(lista: T[]) {
+  const grupos = new Map<number, T[]>();
+  for (const x of lista) {
+    const grupo = grupos.get(x.productoId);
+    if (grupo) grupo.push(x);
+    else grupos.set(x.productoId, [x]);
   }
+  return grupos;
+}
+
+/** Las compras (con su proveedor) y los proveedores enlazados, de un producto o de todos. */
+async function comprasYEnlaces(productoId?: number) {
+  const [filas, enlaces] = await Promise.all([
+    db
+      .select({ precio: precioProducto, proveedorId: comprobante.proveedorId })
+      .from(precioProducto)
+      .innerJoin(comprobante, eq(comprobante.id, precioProducto.comprobanteId))
+      .where(productoId ? eq(precioProducto.productoId, productoId) : undefined)
+      .orderBy(...enOrden),
+    db
+      .select({ productoId: productoProveedor.productoId, proveedorId: proveedor.id, proveedor: proveedor.nombre, oculto: proveedor.oculto })
+      .from(productoProveedor)
+      .innerJoin(proveedor, eq(proveedor.id, productoProveedor.proveedorId))
+      .where(productoId ? eq(productoProveedor.productoId, productoId) : undefined)
+      .orderBy(asc(proveedor.nombre)),
+  ]);
+  return { compras: porProducto(filas.map((f) => ({ ...f.precio, proveedorId: f.proveedorId }))), enlaces: porProducto(enlaces) };
+}
+
+const sinProducto = ({ productoId: _, ...e }: Enlace & { productoId: number }): Enlace => e;
+
+export async function listarProductos(): Promise<ResumenProducto[]> {
+  const [{ productosAlertaPct }, productos, { compras, enlaces }] = await Promise.all([obtenerConfig(), db.select().from(producto).orderBy(asc(producto.nombre)), comprasYEnlaces()]);
   return productos.map((p) => {
-    const { historial: _, ...resumen } = armar(p, porProducto.get(p.id) ?? [], productosAlertaPct);
+    const { historial: _, ...resumen } = armar(p, compras.get(p.id) ?? [], (enlaces.get(p.id) ?? []).map(sinProducto), productosAlertaPct);
     return resumen;
   });
 }
@@ -181,25 +247,52 @@ export async function listarProductos(): Promise<ResumenProducto[]> {
 export async function obtenerProducto(id: number) {
   const [p] = await db.select().from(producto).where(eq(producto.id, id));
   if (!p) throw new ErrorUsuario("No existe ese producto");
-  const filas = await db.select().from(precioProducto).where(eq(precioProducto.productoId, id)).orderBy(...enOrden);
-  const alias = await db.select().from(productoAlias).where(eq(productoAlias.productoId, id));
-  return { ...armar(p, filas, (await obtenerConfig()).productosAlertaPct), alias };
+  const [{ compras, enlaces }, alias, { productosAlertaPct }] = await Promise.all([
+    comprasYEnlaces(id),
+    db.select().from(productoAlias).where(eq(productoAlias.productoId, id)),
+    obtenerConfig(),
+  ]);
+  return { ...armar(p, compras.get(id) ?? [], (enlaces.get(id) ?? []).map(sinProducto), productosAlertaPct), alias };
 }
 
-/** Lo que se le compra a un proveedor: cada producto con su última compra. */
+/** Los productos que vende un proveedor, con cuántas veces y cuándo se le compraron por última vez (null si todavía no). */
 export async function productosDeProveedor(proveedorId: number) {
-  const filas = await db
-    .select({ precio: precioProducto, producto })
+  const [enlazados, filas] = await Promise.all([
+    db
+      .select({ producto })
+      .from(productoProveedor)
+      .innerJoin(producto, eq(producto.id, productoProveedor.productoId))
+      .where(eq(productoProveedor.proveedorId, proveedorId))
+      .orderBy(asc(producto.nombre)),
+    db
+      .select({ precio: precioProducto })
+      .from(precioProducto)
+      .innerJoin(comprobante, eq(comprobante.id, precioProducto.comprobanteId))
+      .where(eq(comprobante.proveedorId, proveedorId))
+      .orderBy(...enOrden),
+  ]);
+  const suyas = porProducto(filas.map((f) => f.precio));
+  return enlazados.map(({ producto: p }) => {
+    const compras = suyas.get(p.id) ?? [];
+    const u = compras.at(-1);
+    return {
+      id: p.id,
+      nombre: p.nombre,
+      categoria: p.categoria,
+      compras: compras.length,
+      ultima: u ? { fecha: u.fecha, unidadesPorBulto: u.unidadesPorBulto, precios: preciosDe(u, p) } : null,
+    };
+  });
+}
+
+/** A qué producto fue cada renglón de un comprobante (cuando ya pasó a Productos). */
+export async function productosDeComprobante(comprobanteId: number) {
+  return db
+    .select({ renglon: precioProducto.renglon, productoId: producto.id, nombre: producto.nombre })
     .from(precioProducto)
-    .innerJoin(comprobante, eq(comprobante.id, precioProducto.comprobanteId))
     .innerJoin(producto, eq(producto.id, precioProducto.productoId))
-    .where(eq(comprobante.proveedorId, proveedorId))
-    .orderBy(...enOrden);
-  const ultimas = new Map<number, (typeof filas)[number]>();
-  for (const f of filas) ultimas.set(f.producto.id, f);
-  return [...ultimas.values()]
-    .map(({ precio, producto: p }) => ({ id: p.id, nombre: p.nombre, categoria: p.categoria, fecha: precio.fecha, unidadesPorBulto: precio.unidadesPorBulto, precios: preciosDe(precio, p) }))
-    .sort((a, b) => a.nombre.localeCompare(b.nombre));
+    .where(eq(precioProducto.comprobanteId, comprobanteId))
+    .orderBy(asc(precioProducto.renglon));
 }
 
 // ───────────── Cambios a mano ─────────────
@@ -218,12 +311,16 @@ export async function actualizarProducto(id: number, c: { nombre?: string; categ
   bus.avisar("compras");
 }
 
-/** Junta dos productos que son el mismo: las compras y los alias pasan al otro. */
+/** Junta dos productos que son el mismo: las compras, los alias y los proveedores pasan al otro. */
 export async function juntarProductos(id: number, conId: number) {
   if (id === conId) throw new ErrorUsuario("Elegí otro producto.");
   await db.transaction(async (tx) => {
     await tx.update(precioProducto).set({ productoId: conId }).where(eq(precioProducto.productoId, id));
     await tx.update(productoAlias).set({ productoId: conId }).where(eq(productoAlias.productoId, id));
+    await tx.execute(sql`
+      insert into producto_proveedor (producto_id, proveedor_id)
+      select ${conId}::int, proveedor_id from producto_proveedor where producto_id = ${id}
+      on conflict do nothing`);
     await tx.delete(producto).where(eq(producto.id, id));
   });
   bus.avisar("compras");
@@ -243,9 +340,42 @@ export async function separarAlias(id: number, aliasClave: string): Promise<numb
       .returning({ id: producto.id });
     await tx.update(productoAlias).set({ productoId: nuevo.id }).where(eq(productoAlias.clave, aliasClave));
     await tx.update(precioProducto).set({ productoId: nuevo.id }).where(eq(precioProducto.aliasClave, aliasClave));
+    await enlazarSegunCompras(tx, sql`p.producto_id = ${nuevo.id}`);
     bus.avisar("compras");
     return nuevo.id;
   });
+}
+
+/**
+ * Corrige a qué producto fue un renglón de una factura. Vale también para las otras compras con el mismo código o
+ * descripción de ese proveedor, y para las que vengan. El producto anterior deja de estar enlazado al proveedor si
+ * ya no se le compró, y se borra si quedó sin compras.
+ */
+export async function reasignarRenglon(comprobanteId: number, renglon: number, productoId: number) {
+  const [fila] = await db
+    .select({ precio: precioProducto, proveedorId: comprobante.proveedorId })
+    .from(precioProducto)
+    .innerJoin(comprobante, eq(comprobante.id, precioProducto.comprobanteId))
+    .where(and(eq(precioProducto.comprobanteId, comprobanteId), eq(precioProducto.renglon, renglon)));
+  if (!fila) throw new ErrorUsuario("Ese renglón todavía no pasó a Productos.");
+  const [destino] = await db.select({ id: producto.id }).from(producto).where(eq(producto.id, productoId));
+  if (!destino) throw new ErrorUsuario("No existe ese producto");
+  const { aliasClave, productoId: anterior } = fila.precio;
+  if (anterior === productoId) return;
+  await db.transaction(async (tx) => {
+    await tx.update(productoAlias).set({ productoId }).where(eq(productoAlias.clave, aliasClave));
+    await tx.update(precioProducto).set({ productoId }).where(eq(precioProducto.aliasClave, aliasClave));
+    await enlazarSegunCompras(tx, sql`p.alias_clave = ${aliasClave}`);
+    if (fila.proveedorId)
+      await tx.execute(sql`
+        delete from producto_proveedor pp
+        where pp.producto_id = ${anterior} and pp.proveedor_id = ${fila.proveedorId}
+          and not exists (
+            select 1 from precio_producto p join comprobante c on c.id = p.comprobante_id
+            where p.producto_id = ${anterior} and c.proveedor_id = ${fila.proveedorId})`);
+    await borrarHuerfanos(tx, [anterior]);
+  });
+  bus.avisar("compras");
 }
 
 /** Corrige cómo vino una compra (ej. la caja trae 12 y no 15). */

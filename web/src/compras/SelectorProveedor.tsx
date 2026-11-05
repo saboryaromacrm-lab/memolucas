@@ -2,11 +2,9 @@ import { useMemo, useState } from "react";
 import { Plus, Search, X } from "lucide-react";
 import { useAccion } from "../componentes/ui";
 import { post } from "../lib/api";
-import { useVivo } from "./comun";
+import { clave, useVivo } from "./comun";
 
 type Opcion = { id: number; nombre: string; oculto: boolean; formaPagoId: number | null };
-const clave = (s: string) => s.trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
-
 /** Elegir un proveedor con buscador; si no está, se crea ahí mismo y queda guardado. Avisa también su forma de pago habitual. */
 export function SelectorProveedor({ valor, onChange }: { valor: number | null; onChange: (id: number | null, formaPagoHabitual: number | null) => void }) {
   // Con los ocultos, para mostrar el elegido aunque esté oculto; para elegir se ofrecen solo los visibles.

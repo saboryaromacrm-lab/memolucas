@@ -6,8 +6,9 @@ import { atajosBloqueados, fechaCorta, Hoja, plata, useVivo, Ventana, type Ancho
 
 export type Precios = { bulto: number | null; unidad: number | null; porMedida: { valor: number; medida: "kg" | "l" } | null };
 type UnidadCompra = "bulto" | "unidad" | "kg" | "litro";
-type CompraProducto = {
+export type CompraProducto = {
   id: number;
+  proveedorId: number | null;
   proveedor: string;
   fecha: string;
   descripcion: string;
@@ -17,7 +18,9 @@ type CompraProducto = {
   precios: Precios;
   variacion: number | null;
 };
-type Producto = {
+/** Un proveedor que vende el producto: cuántas veces y cuándo se le compró por última vez (null si todavía no). */
+type ProveedorDelProducto = { proveedorId: number; proveedor: string; oculto: boolean; compras: number; ultima: CompraProducto | null };
+export type Producto = {
   id: number;
   nombre: string;
   categoria: string;
@@ -27,7 +30,7 @@ type Producto = {
   ultima: CompraProducto | null;
   variacion: number | null;
   alerta: boolean;
-  proveedores: { proveedor: string; ultima: CompraProducto }[];
+  proveedores: ProveedorDelProducto[];
   compras: number;
 };
 type DetalleProducto = Producto & { historial: CompraProducto[]; alias: { clave: string; proveedor: string }[] };
@@ -90,14 +93,17 @@ export function Productos({ ancho }: { ancho: Ancho }) {
   const [q, setQ] = useState("");
   const [categoria, setCategoria] = useState("");
   const [clase, setClase] = useState("");
-  const [proveedor, setProveedor] = useState("");
+  const [proveedorId, setProveedorId] = useState(0);
   const [orden, setOrden] = useState<Orden>({ campo: "nombre", asc: true });
   const [soloSubas, setSoloSubas] = useState(false);
   const [abierto, setAbierto] = useState<number | null>(null);
 
   const productos = useMemo(() => datos?.productos ?? [], [datos]);
   const categorias = useMemo(() => [...new Set(productos.map((p) => p.categoria))].sort(), [productos]);
-  const proveedores = useMemo(() => [...new Set(productos.flatMap((p) => p.proveedores.map((x) => x.proveedor)))].sort(), [productos]);
+  const proveedores = useMemo(
+    () => [...new Map(productos.flatMap((p) => p.proveedores.map((x) => [x.proveedorId, x.proveedor] as const)))].sort((a, b) => a[1].localeCompare(b[1], "es")),
+    [productos],
+  );
   const alertas = productos.filter((p) => p.alerta).length;
 
   const lista = useMemo(() => {
@@ -109,11 +115,11 @@ export function Productos({ ancho }: { ancho: Ancho }) {
           (!buscado || p.nombre.toLowerCase().includes(buscado)) &&
           (!categoria || p.categoria === categoria) &&
           (!clase || p.clase === clase) &&
-          (!proveedor || p.proveedores.some((x) => x.proveedor === proveedor)) &&
+          (!proveedorId || p.proveedores.some((x) => x.proveedorId === proveedorId)) &&
           (!soloSubas || p.alerta),
       )
       .sort((a, b) => (orden.asc ? comparar(a, b) : comparar(b, a)));
-  }, [productos, q, categoria, clase, proveedor, soloSubas, orden]);
+  }, [productos, q, categoria, clase, proveedorId, soloSubas, orden]);
 
   // ↑ ↓ para pasar de producto en la compu y la tablet.
   const actual = useRef({ lista, abierto });
@@ -147,10 +153,12 @@ export function Productos({ ancho }: { ancho: Ancho }) {
           <option key={c}>{c}</option>
         ))}
       </select>
-      <select className="campo w-auto py-2 text-sm" value={proveedor} onChange={(e) => setProveedor(e.target.value)}>
-        <option value="">Todos los proveedores</option>
-        {proveedores.map((p) => (
-          <option key={p}>{p}</option>
+      <select className="campo w-auto py-2 text-sm" value={proveedorId} onChange={(e) => setProveedorId(Number(e.target.value))}>
+        <option value={0}>Todos los proveedores</option>
+        {proveedores.map(([id, nombre]) => (
+          <option key={id} value={id}>
+            {nombre}
+          </option>
         ))}
       </select>
       <select className="campo w-auto py-2 text-sm" value={clase} onChange={(e) => setClase(e.target.value)}>
@@ -367,8 +375,9 @@ function FichaProducto({ id, ancho, productos, categorias, onCerrar }: { id: num
   const serie = (p?.historial ?? [])
     .filter((h) => (base === "medida" ? h.precios.porMedida : base === "unidad" ? h.precios.unidad !== null : h.precios.bulto !== null))
     .map((h) => referencia(h.precios)!);
-  const masBarato =
-    p && p.proveedores.length > 1 ? [...p.proveedores].sort((a, b) => (referencia(a.ultima.precios) ?? Infinity) - (referencia(b.ultima.precios) ?? Infinity))[0].proveedor : null;
+  // Entre los proveedores a los que ya se les compró, el de menor precio en su última compra.
+  const conPrecio = (p?.proveedores ?? []).filter((x) => referencia(x.ultima?.precios) !== null);
+  const masBarato = conPrecio.length > 1 ? conPrecio.reduce((a, b) => (referencia(b.ultima!.precios)! < referencia(a.ultima!.precios)! ? b : a)).proveedorId : null;
 
   return (
     <Hoja
@@ -415,23 +424,25 @@ function FichaProducto({ id, ancho, productos, categorias, onCerrar }: { id: num
             <section className="tarjeta divide-y divide-stone-100">
               <h3 className="px-4 py-2.5 text-sm font-semibold text-stone-800">Por proveedor</h3>
               {p.proveedores.map((x) => (
-                <div key={x.proveedor} className="flex items-center gap-3 px-4 py-2.5 text-sm">
+                <div key={x.proveedorId} className="flex items-center gap-3 px-4 py-2.5 text-sm">
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-stone-800">
                       {x.proveedor}
-                      {x.proveedor === masBarato && <span className="ml-1.5 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[11px] font-semibold text-emerald-700">Más barato</span>}
+                      {x.proveedorId === masBarato && <span className="ml-1.5 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[11px] font-semibold text-emerald-700">Más barato</span>}
                     </span>
-                    <span className="text-xs text-stone-500">{fechaCorta(x.ultima.fecha)}</span>
+                    <span className="text-xs text-stone-500">{x.ultima ? fechaCorta(x.ultima.fecha) : "Todavía no se le compró"}</span>
                   </span>
-                  <span className="text-right tabular-nums">
-                    {lineasDePrecio(x.ultima)
-                      .slice(-1)
-                      .map(([t, v]) => (
-                        <span key={t}>
-                          <b>{plata(v)}</b> <span className="text-xs text-stone-500">/ {t.toLowerCase()}</span>
-                        </span>
-                      ))}
-                  </span>
+                  {x.ultima && (
+                    <span className="text-right tabular-nums">
+                      {lineasDePrecio(x.ultima)
+                        .slice(-1)
+                        .map(([t, v]) => (
+                          <span key={t}>
+                            <b>{plata(v)}</b> <span className="text-xs text-stone-500">/ {t.toLowerCase()}</span>
+                          </span>
+                        ))}
+                    </span>
+                  )}
                 </div>
               ))}
             </section>
