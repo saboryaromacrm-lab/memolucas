@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Check, CheckCircle2, FileText, Loader2, Pencil, Search, Trash2, X } from "lucide-react";
+import { AlertTriangle, Check, CheckCircle2, FileText, Loader2, Pencil, Plus, Search, Trash2, X } from "lucide-react";
 import { useAccion, useAviso } from "../componentes/ui";
 import { post, put } from "../lib/api";
 import type { Compra, ComprobanteDatos } from "../lib/tipos";
 import { BuscadorProducto } from "./BuscadorProducto";
-import { Cargador, EstadoCola, TarjetaLectura, type Lectura } from "./Cargador";
-import { atajosBloqueados, fechaCorta, Hoja, nombrePeriodo, plata, useVivo, type Ancho } from "./comun";
+import { SoltarAca, useArchivosDeAfuera } from "./Cargador";
+import { atajosBloqueados, fechaCorta, Hoja, nombrePeriodo, plata, useVivo, type Ancho, type Destino } from "./comun";
 import { CompraManualForm } from "./CompraManual";
 import { Correccion } from "./Correccion";
 import type { Producto } from "./Productos";
@@ -74,19 +74,32 @@ function Cierra({ c }: { c: Compra }) {
   );
 }
 
-/** inicial: con qué filtros abre (desde Métricas). periodo: un mes ("2026-10") o un día, por la fecha de la factura. */
-export function Facturas({ ancho, inicial }: { ancho: Ancho; inicial?: { formaPagoId?: number; periodo?: string } }) {
+/**
+ * La lista de facturas cargadas. inicial: con qué filtros abre o cuál abre (desde Métricas o Cargar).
+ * periodo: un mes ("2026-10") o un día, por la fecha de la factura.
+ */
+export function Facturas({
+  ancho,
+  inicial,
+  ir,
+}: {
+  ancho: Ancho;
+  inicial?: { formaPagoId?: number; periodo?: string; abrir?: number };
+  ir: (d: Destino) => void;
+}) {
   const [periodo, setPeriodo] = useState(inicial?.periodo ?? null);
-  const { datos, recargar } = useVivo<{ lecturas: Lectura[]; compras: Compra[] }>(`/api/c/compras${periodo ? `?periodo=${periodo}` : ""}`);
+  const { datos, recargar } = useVivo<{ compras: Compra[] }>(`/api/c/compras${periodo ? `?periodo=${periodo}` : ""}`);
   const [filtro, setFiltro] = useState<Filtro>(inicial ? "todas" : "abiertas");
   const [q, setQ] = useState("");
   const [proveedorId, setProveedorId] = useState<number | null>(null);
   const [formaPagoId, setFormaPagoId] = useState<number | null>(inicial?.formaPagoId ?? null);
-  const [abierta, setAbierta] = useState<number | null>(null);
+  const [abierta, setAbierta] = useState<number | null>(inicial?.abrir ?? null);
   const [elegidas, setElegidas] = useState<Set<number>>(new Set());
   const [confirmando, setConfirmando] = useState(false);
-  /** Compra sin factura: "nueva" o la que se edita. */
-  const [manual, setManual] = useState<number | "nueva" | null>(null);
+  /** La compra sin factura que se edita. */
+  const [manual, setManual] = useState<number | null>(null);
+  // Pegar o soltar una factura acá la lleva a Cargar.
+  const arrastrando = useArchivosDeAfuera((archivos) => ir({ pestana: "cargar", archivos }));
   const accion = useAccion();
   const avisar = useAviso();
   const pc = ancho === "pc";
@@ -218,14 +231,13 @@ export function Facturas({ ancho, inicial }: { ancho: Ancho; inicial?: { formaPa
       <Loader2 className="size-6 animate-spin text-naranja" />
     </div>
   );
-  const arriba = (
-    <>
-      <Cargador ancho={ancho} onSinFactura={() => setManual("nueva")} />
-      <EstadoCola />
-      {datos?.lecturas.map((l) => (
-        <TarjetaLectura key={l.id} l={l} />
-      ))}
-    </>
+  const botonCargar = (
+    <button
+      onClick={() => ir({ pestana: "cargar" })}
+      className="flex shrink-0 items-center gap-1 rounded-full bg-naranja px-3.5 py-1.5 text-sm font-semibold text-white shadow-sm hover:brightness-95"
+    >
+      <Plus className="size-4" /> Cargar
+    </button>
   );
   const detalle = (
     <>
@@ -243,17 +255,17 @@ export function Facturas({ ancho, inicial }: { ancho: Ancho; inicial?: { formaPa
       )}
       {manual && (
         <CompraManualForm
-          id={manual === "nueva" ? null : manual}
+          id={manual}
           onCerrar={() => setManual(null)}
           onGuardada={(id) => {
-            // Queda confirmada: se ve en "Confirmadas", y en la compu se abre al lado.
+            // Editada sigue abierta al lado en la compu; borrada, se cierra.
             setManual(null);
-            if (id) setFiltro((f) => (f === "abiertas" ? "confirmado" : f));
             setAbierta(id && ancho !== "movil" ? id : null);
             void recargar();
           }}
         />
       )}
+      {arrastrando && <SoltarAca />}
     </>
   );
 
@@ -261,8 +273,10 @@ export function Facturas({ ancho, inicial }: { ancho: Ancho; inicial?: { formaPa
   if (ancho === "movil")
     return (
       <div className="space-y-4">
-        {arriba}
-        {filtros}
+        <div className="flex items-start justify-between gap-2">
+          {filtros}
+          {botonCargar}
+        </div>
         {filtrosPor}
         {!datos ? (
           cargando
@@ -304,6 +318,7 @@ export function Facturas({ ancho, inicial }: { ancho: Ancho; inicial?: { formaPa
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-stone-400" />
           <input className="campo py-2 pl-9 text-sm" placeholder="Buscar proveedor o número…" value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
+        {botonCargar}
         {filtrosPor}
       </div>
       {seleccion.length > 0 && (
@@ -413,18 +428,14 @@ export function Facturas({ ancho, inicial }: { ancho: Ancho; inicial?: { formaPa
   if (!pc)
     return (
       <div className="space-y-4">
-        {arriba}
         {tabla}
         {detalle}
       </div>
     );
   return (
-    <div className="flex h-full min-h-0 flex-col gap-4">
-      {arriba}
-      <div className={`grid min-h-0 flex-1 gap-4 ${abierta ? "grid-cols-[minmax(0,5fr)_minmax(0,7fr)]" : "grid-cols-1"}`}>
-        {tabla}
-        {detalle}
-      </div>
+    <div className={`grid h-full min-h-0 gap-4 ${abierta ? "grid-cols-[minmax(0,5fr)_minmax(0,7fr)]" : "grid-cols-1"}`}>
+      {tabla}
+      {detalle}
     </div>
   );
 }

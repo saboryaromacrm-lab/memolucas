@@ -12,13 +12,12 @@ export type Lectura = { id: number; estado: "leyendo" | "lista" | "error" | "rep
 const botonSecundario = "flex items-center justify-center gap-2 rounded-xl border border-stone-300 bg-white px-3 py-2.5 text-sm font-medium text-stone-700 hover:bg-stone-50 active:bg-stone-100";
 
 /**
- * Cargar una factura: cámara, galería, PDF, pegar (Ctrl+V o botón) o arrastrar y soltar.
+ * Cargar una factura: cámara, galería, PDF, pegar (Ctrl+V o botón), arrastrar y soltar, o una compra sin factura.
  * Las fotos se juntan como hojas de la misma factura hasta tocar "Leer factura"; cada PDF se manda directo.
  */
-export function Cargador({ ancho, onSinFactura }: { ancho: Ancho; onSinFactura: () => void }) {
+export function Cargador({ ancho, onSinFactura, iniciales }: { ancho: Ancho; onSinFactura: () => void; iniciales?: File[] }) {
   const [hojas, setHojas] = useState<{ archivo: File; url: string }[]>([]);
   const [preparando, setPreparando] = useState(false);
-  const [arrastrando, setArrastrando] = useState(false);
   const camara = useRef<HTMLInputElement>(null);
   const galeria = useRef<HTMLInputElement>(null);
   const pdf = useRef<HTMLInputElement>(null);
@@ -59,46 +58,11 @@ export function Cargador({ ancho, onSinFactura }: { ancho: Ancho; onSinFactura: 
     if (fotos.length) await agregar(fotos);
   };
 
-  // Ctrl+V en cualquier parte del panel (salvo escribiendo en un campo o con algo abierto encima).
+  const arrastrando = useArchivosDeAfuera((archivos) => void recibir.current(archivos));
+  // Lo que llegó pegado o arrastrado en Facturas.
   useEffect(() => {
-    const pegar = (e: ClipboardEvent) => {
-      const destino = e.target as HTMLElement | null;
-      if (destino?.closest("input, textarea, [contenteditable]") || document.querySelector("[data-superpuesto]")) return;
-      const archivos = [...(e.clipboardData?.files ?? [])];
-      if (!archivos.length) return;
-      e.preventDefault();
-      void recibir.current(archivos);
-    };
-    document.addEventListener("paste", pegar);
-    return () => document.removeEventListener("paste", pegar);
-  }, []);
-
-  // Arrastrar y soltar desde una carpeta de la compu.
-  useEffect(() => {
-    const conArchivos = (e: DragEvent) => !!e.dataTransfer?.types.includes("Files") && !document.querySelector("[data-superpuesto]");
-    const entra = (e: DragEvent) => {
-      if (!conArchivos(e)) return;
-      e.preventDefault();
-      setArrastrando(true);
-    };
-    const sale = (e: DragEvent) => !e.relatedTarget && setArrastrando(false);
-    const suelta = (e: DragEvent) => {
-      if (!conArchivos(e)) return;
-      e.preventDefault();
-      setArrastrando(false);
-      void recibir.current([...(e.dataTransfer?.files ?? [])]);
-    };
-    window.addEventListener("dragenter", entra);
-    window.addEventListener("dragover", entra);
-    window.addEventListener("dragleave", sale);
-    window.addEventListener("drop", suelta);
-    return () => {
-      window.removeEventListener("dragenter", entra);
-      window.removeEventListener("dragover", entra);
-      window.removeEventListener("dragleave", sale);
-      window.removeEventListener("drop", suelta);
-    };
-  }, []);
+    if (iniciales?.length) void recibir.current(iniciales);
+  }, [iniciales]);
 
   /** Botón Pegar: lee lo copiado (en el celular puede pedir permiso). */
   const pegarDelPortapapeles = async () => {
@@ -133,14 +97,7 @@ export function Cargador({ ancho, onSinFactura }: { ancho: Ancho; onSinFactura: 
           void recibir.current(archivos);
         }}
       />
-      {arrastrando && (
-        <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-cafe/80 p-6">
-          <div className="rounded-3xl border-4 border-dashed border-naranja px-10 py-14 text-center text-xl font-semibold text-beige">
-            <CloudUpload className="mx-auto mb-3 size-10 text-naranja" />
-            Soltá acá la foto o el PDF de la factura
-          </div>
-        </div>
-      )}
+      {arrastrando && <SoltarAca />}
     </>
   );
 
@@ -195,62 +152,112 @@ export function Cargador({ ancho, onSinFactura }: { ancho: Ancho; onSinFactura: 
       </section>
     );
 
-  // Celular: el botón grande para sacar la foto.
-  if (ancho === "movil")
-    return (
-      <section className="tarjeta p-4">
-        {entradas}
-        <button onClick={() => camara.current?.click()} className="flex w-full items-center justify-center gap-3 rounded-2xl bg-naranja py-5 text-lg font-semibold text-white shadow-md active:scale-[0.99]">
-          {preparando ? <Loader2 className="size-6 animate-spin" /> : <Camera className="size-6" />} Sacar foto a la factura
-        </button>
-        <div className="mt-3 grid grid-cols-3 gap-2">
-          <button onClick={() => galeria.current?.click()} className={botonSecundario}>
-            <Images className="size-4" /> Galería
-          </button>
-          <button onClick={() => pdf.current?.click()} className={botonSecundario}>
-            <FileText className="size-4" /> PDF
-          </button>
-          <button onClick={() => void pegarDelPortapapeles()} className={botonSecundario}>
-            <ClipboardPaste className="size-4" /> Pegar
-          </button>
-        </div>
-        <button onClick={onSinFactura} className={`${botonSecundario} mt-2 w-full`}>
-          <PenLine className="size-4" /> Compra sin factura
-        </button>
-      </section>
-    );
-
-  // Compu y tablet: zona para soltar archivos.
+  // Las opciones, una debajo de la otra; la primera (la más usada) en naranja.
+  const opciones = [
+    ...(ancho === "pc" ? [] : [{ icono: Camera, titulo: "Sacar foto", detalle: "Con la cámara. Si tiene varias hojas, sacá una por una.", hacer: () => camara.current?.click() }]),
+    { icono: Images, titulo: "Elegir fotos", detalle: "De la galería o de una carpeta: podés elegir varias hojas juntas.", hacer: () => galeria.current?.click() },
+    { icono: FileText, titulo: "Subir PDF", detalle: "La factura electrónica en PDF.", hacer: () => pdf.current?.click() },
+    {
+      icono: ClipboardPaste,
+      titulo: "Pegar",
+      detalle: ancho === "pc" ? "Una foto o un PDF que copiaste (también con Ctrl+V)." : "Una foto o un PDF que copiaste.",
+      hacer: () => void pegarDelPortapapeles(),
+    },
+    { icono: PenLine, titulo: "Compra sin factura", detalle: "Lo que se compró sin comprobante, cargado a mano.", hacer: onSinFactura },
+  ];
   return (
-    <section className="flex flex-wrap items-center gap-4 rounded-2xl border-2 border-dashed border-stone-300 bg-white/70 px-5 py-4 transition hover:border-naranja/60">
+    <section className="space-y-3">
       {entradas}
-      <span className="flex size-12 shrink-0 items-center justify-center rounded-full bg-orange-50 text-naranja">
-        {preparando ? <Loader2 className="size-6 animate-spin" /> : <CloudUpload className="size-6" />}
-      </span>
-      <div className="min-w-0 flex-1">
-        <div className="font-semibold text-stone-800">Cargar una factura</div>
-        <div className="text-sm text-stone-500">Arrastrá la foto o el PDF acá, o pegala con Ctrl+V. Las fotos seguidas se juntan como hojas de la misma factura.</div>
-      </div>
-      <div className="flex flex-wrap gap-2">
-        {ancho === "tablet" && (
-          <button onClick={() => camara.current?.click()} className={botonSecundario}>
-            <Camera className="size-4" /> Cámara
+      {ancho === "pc" && (
+        <button
+          onClick={() => galeria.current?.click()}
+          className="flex w-full items-center gap-4 rounded-2xl border-2 border-dashed border-stone-300 bg-white/70 px-5 py-6 text-left transition hover:border-naranja/60"
+        >
+          <span className="flex size-12 shrink-0 items-center justify-center rounded-full bg-orange-50 text-naranja">
+            {preparando ? <Loader2 className="size-6 animate-spin" /> : <CloudUpload className="size-6" />}
+          </span>
+          <span>
+            <span className="block font-semibold text-stone-800">Arrastrá acá la foto o el PDF de la factura</span>
+            <span className="block text-sm text-stone-500">O pegala con Ctrl+V. Las fotos seguidas se juntan como hojas de la misma factura.</span>
+          </span>
+        </button>
+      )}
+      <div className="grid gap-3 @xl:grid-cols-2">
+        {opciones.map(({ icono: Icono, titulo, detalle, hacer }, i) => (
+          <button
+            key={titulo}
+            onClick={hacer}
+            className={`flex items-center gap-4 rounded-2xl px-4 py-4 text-left shadow-sm transition active:scale-[0.99] ${i === 0 ? "bg-naranja text-white hover:brightness-95" : "tarjeta hover:border-naranja/50"}`}
+          >
+            <span className={`flex size-11 shrink-0 items-center justify-center rounded-full ${i === 0 ? "bg-white/20" : "bg-orange-50 text-naranja"}`}>
+              {i === 0 && preparando ? <Loader2 className="size-5 animate-spin" /> : <Icono className="size-5" />}
+            </span>
+            <span className="min-w-0">
+              <span className="block font-semibold">{titulo}</span>
+              <span className={`block text-sm ${i === 0 ? "text-white/85" : "text-stone-500"}`}>{detalle}</span>
+            </span>
           </button>
-        )}
-        <button onClick={() => galeria.current?.click()} className="flex items-center gap-2 rounded-xl bg-naranja px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:brightness-95">
-          <Images className="size-4" /> Elegir fotos
-        </button>
-        <button onClick={() => pdf.current?.click()} className={botonSecundario}>
-          <FileText className="size-4" /> PDF
-        </button>
-        <button onClick={() => void pegarDelPortapapeles()} className={botonSecundario}>
-          <ClipboardPaste className="size-4" /> Pegar
-        </button>
-        <button onClick={onSinFactura} className={botonSecundario}>
-          <PenLine className="size-4" /> Sin factura
-        </button>
+        ))}
       </div>
     </section>
+  );
+}
+
+/**
+ * Ctrl+V y arrastrar archivos en cualquier parte del panel (salvo escribiendo en un campo o con algo abierto encima).
+ * Devuelve si se está arrastrando algo, para mostrar dónde soltarlo.
+ */
+export function useArchivosDeAfuera(recibir: (archivos: File[]) => void): boolean {
+  const [arrastrando, setArrastrando] = useState(false);
+  const fn = useRef(recibir);
+  fn.current = recibir;
+  useEffect(() => {
+    const tapado = () => !!document.querySelector("[data-superpuesto]");
+    const pegar = (e: ClipboardEvent) => {
+      if ((e.target instanceof Element && e.target.closest("input, textarea, [contenteditable]")) || tapado()) return;
+      const archivos = [...(e.clipboardData?.files ?? [])];
+      if (!archivos.length) return;
+      e.preventDefault();
+      fn.current(archivos);
+    };
+    const conArchivos = (e: DragEvent) => !!e.dataTransfer?.types.includes("Files") && !tapado();
+    const entra = (e: DragEvent) => {
+      if (!conArchivos(e)) return;
+      e.preventDefault();
+      setArrastrando(true);
+    };
+    const sale = (e: DragEvent) => !e.relatedTarget && setArrastrando(false);
+    const suelta = (e: DragEvent) => {
+      if (!conArchivos(e)) return;
+      e.preventDefault();
+      setArrastrando(false);
+      fn.current([...(e.dataTransfer?.files ?? [])]);
+    };
+    document.addEventListener("paste", pegar);
+    window.addEventListener("dragenter", entra);
+    window.addEventListener("dragover", entra);
+    window.addEventListener("dragleave", sale);
+    window.addEventListener("drop", suelta);
+    return () => {
+      document.removeEventListener("paste", pegar);
+      window.removeEventListener("dragenter", entra);
+      window.removeEventListener("dragover", entra);
+      window.removeEventListener("dragleave", sale);
+      window.removeEventListener("drop", suelta);
+    };
+  }, []);
+  return arrastrando;
+}
+
+/** Mientras se arrastra un archivo sobre el panel. */
+export function SoltarAca() {
+  return (
+    <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-cafe/80 p-6">
+      <div className="rounded-3xl border-4 border-dashed border-naranja px-10 py-14 text-center text-xl font-semibold text-beige">
+        <CloudUpload className="mx-auto mb-3 size-10 text-naranja" />
+        Soltá acá la foto o el PDF de la factura
+      </div>
+    </div>
   );
 }
 

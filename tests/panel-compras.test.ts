@@ -146,6 +146,20 @@ describe("panel de compras", () => {
     expect(yo.statusCode).toBe(401);
   });
 
+  it("los contadores de la barra: facturas para revisar y lecturas en curso", async () => {
+    await crearUsuario("Martín", "4321");
+    const { cookie } = await entrar();
+    const guardar = (estado: "pendiente" | "revisar" | "confirmado" | "descartado", n: number) =>
+      db.insert(comprobante).values({ estado, datosCifrados: "x", cierra: true, origen: "panel", total: String(n) });
+    await Promise.all([guardar("pendiente", 1), guardar("revisar", 2), guardar("confirmado", 3), guardar("descartado", 4)]);
+    await db.insert(lecturaCompras).values([
+      { clienteId: "a", estado: "leyendo" },
+      { clienteId: "b", estado: "error", mensaje: "No se pudo leer" },
+      { clienteId: "c", estado: "leyendo", cerrada: true },
+    ]);
+    expect((await app.inject({ url: "/api/c/contadores", headers: { host: HOST, cookie } })).json()).toEqual({ paraRevisar: 2, leyendo: 1 });
+  });
+
   it("el ícono y el manifest se arman solos (con o sin logo)", async () => {
     const icono = await app.inject({ url: "/api/c/icono/192.png", headers: { host: HOST } });
     expect(icono.headers["content-type"]).toBe("image/png");

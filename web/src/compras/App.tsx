@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { BarChart3, Loader2, LogOut, Package, Receipt, Settings } from "lucide-react";
+import { BarChart3, Loader2, LogOut, Package, Receipt, Settings, Upload } from "lucide-react";
 import { get, post } from "../lib/api";
-import { iniciarCola } from "./cola";
-import { useAncho, useRecordado, type Destino } from "./comun";
+import { Cargar } from "./Cargar";
+import { escuchar, iniciarCola } from "./cola";
+import { useAncho, useRecordado, useVivo, type Destino } from "./comun";
 import { Configuracion } from "./Configuracion";
 import { Facturas } from "./Facturas";
 import { Metricas } from "./Metricas";
@@ -88,6 +89,7 @@ function Ingreso({ marca, onEntrar }: { marca: Marca; onEntrar: (s: Sesion) => v
 
 const PESTANA = "compras-pestana";
 const PESTANAS = [
+  ["cargar", "Cargar", Upload],
   ["facturas", "Facturas", Receipt],
   ["productos", "Productos", Package],
   ["metricas", "Métricas", BarChart3],
@@ -95,7 +97,22 @@ const PESTANAS = [
   ["configuracion", "Configu\u00ADración", Settings],
 ] as const;
 
-/** Celular: barra arriba con el logo y pestañas abajo, al alcance del pulgar. Compu y tablet: barra lateral. */
+type Pestana = (typeof PESTANAS)[number][0];
+
+/** El numerito de una pestaña: sobre el ícono, o al final del renglón en la barra ancha (className). */
+function Aviso({ n, className = "absolute -right-2.5 -top-1.5" }: { n?: number; className?: string }) {
+  if (!n) return null;
+  return (
+    <span className={`${className} min-w-4 rounded-full bg-naranja px-1 text-center text-[10px] font-bold leading-4 text-white ring-2 ring-white`}>
+      {n > 99 ? "99+" : n}
+    </span>
+  );
+}
+
+/**
+ * Celular: barra arriba con el logo y pestañas abajo, al alcance del pulgar, con Cargar en el medio.
+ * Compu y tablet: barra lateral.
+ */
 function Principal({ marca, sesion: { nombre, metricas }, onSalir }: { marca: Marca; sesion: Sesion; onSalir: () => void }) {
   const ancho = useAncho();
   const pestanas = PESTANAS.filter(([v]) => v !== "metricas" || metricas);
@@ -106,25 +123,46 @@ function Principal({ marca, sesion: { nombre, metricas }, onSalir }: { marca: Ma
     setDestino((x) => ({ d, vez: (x?.vez ?? 0) + 1 }));
     elegir(d.pestana);
   };
-  const abrir = (p: (typeof PESTANAS)[number][0]) => {
+  const abrir = (p: Pestana) => {
     setDestino(null);
     elegir(p);
   };
   const d = destino?.d;
   // Las fotos sin subir se siguen subiendo aunque se esté en otra pestaña.
   useEffect(() => iniciarCola(), []);
+  // Avisos: facturas para revisar, y lo que se está leyendo o espera señal.
+  const { datos: cuentas } = useVivo<{ paraRevisar: number; leyendo: number }>("/api/c/contadores");
+  const [enCola, setEnCola] = useState(0);
+  useEffect(() => escuchar((p) => setEnCola(p.length)), []);
+  const avisos: Partial<Record<Pestana, number>> = { cargar: (cuentas?.leyendo ?? 0) + enCola, facturas: cuentas?.paraRevisar };
   const salir = async () => {
     await post("/api/c/salir").catch(() => {});
     onSalir();
   };
   const contenido = {
-    facturas: <Facturas key={destino?.vez} ancho={ancho} inicial={d?.pestana === "facturas" ? d : undefined} />,
+    cargar: <Cargar key={destino?.vez} ancho={ancho} archivos={d?.pestana === "cargar" ? d.archivos : undefined} ir={ir} />,
+    facturas: <Facturas key={destino?.vez} ancho={ancho} inicial={d?.pestana === "facturas" ? d : undefined} ir={ir} />,
     productos: <Productos key={destino?.vez} ancho={ancho} inicial={d?.pestana === "productos" ? d : undefined} />,
     metricas: <Metricas ancho={ancho} ir={ir} />,
     configuracion: <Configuracion key={destino?.vez} ancho={ancho} proveedorId={d?.pestana === "configuracion" ? d.proveedorId : undefined} />,
   }[pestana];
 
-  if (ancho === "movil")
+  if (ancho === "movil") {
+    const otras = pestanas.filter(([v]) => v !== "cargar");
+    const medio = Math.ceil(otras.length / 2);
+    const botonDeAbajo = ([v, t, Icono]: (typeof pestanas)[number]) => (
+      <button
+        key={v}
+        onClick={() => abrir(v)}
+        className={`flex min-w-0 flex-1 flex-col items-center gap-0.5 py-2.5 text-[11px] font-semibold ${pestana === v ? "text-cafe" : "text-stone-400"}`}
+      >
+        <span className={`relative rounded-full px-4 py-1 ${pestana === v ? "bg-marca-suave text-naranja" : ""}`}>
+          <Icono className="size-5" />
+          <Aviso n={avisos[v]} />
+        </span>
+        {t}
+      </button>
+    );
     return (
       <div className="min-h-dvh pb-[calc(4.5rem+env(safe-area-inset-bottom))]">
         <header className="sticky top-0 z-20 flex items-center gap-3 bg-cafe px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] text-beige shadow-md">
@@ -136,18 +174,24 @@ function Principal({ marca, sesion: { nombre, metricas }, onSalir }: { marca: Ma
           </button>
         </header>
         <main className="px-4 pt-4">{contenido}</main>
-        <nav className="fixed inset-x-0 bottom-0 z-30 flex border-t border-stone-200 bg-white/95 pb-[env(safe-area-inset-bottom)] backdrop-blur">
-          {pestanas.map(([v, t, Icono]) => (
-            <button key={v} onClick={() => abrir(v)} className={`flex flex-1 flex-col items-center gap-0.5 py-2.5 text-xs font-semibold ${pestana === v ? "text-cafe" : "text-stone-400"}`}>
-              <span className={`rounded-full px-5 py-1 ${pestana === v ? "bg-marca-suave text-naranja" : ""}`}>
-                <Icono className="size-5" />
-              </span>
-              {t}
-            </button>
-          ))}
+        <nav className="fixed inset-x-0 bottom-0 z-30 flex items-end border-t border-stone-200 bg-white/95 pb-[env(safe-area-inset-bottom)] backdrop-blur">
+          {otras.slice(0, medio).map(botonDeAbajo)}
+          {/* Cargar, el botón grande del medio. */}
+          <button
+            onClick={() => abrir("cargar")}
+            className={`flex flex-1 flex-col items-center gap-0.5 pb-2.5 text-[11px] font-semibold ${pestana === "cargar" ? "text-cafe" : "text-stone-500"}`}
+          >
+            <span className="relative -mt-6 flex size-14 items-center justify-center rounded-full bg-naranja text-white shadow-lg ring-4 ring-white">
+              <Upload className="size-6" />
+              <Aviso n={avisos.cargar} />
+            </span>
+            Cargar
+          </button>
+          {otras.slice(medio).map(botonDeAbajo)}
         </nav>
       </div>
     );
+  }
 
   return (
     <div className="min-h-dvh pl-20 lg:pl-60">
@@ -165,7 +209,12 @@ function Principal({ marca, sesion: { nombre, metricas }, onSalir }: { marca: Ma
               title={t}
               className={`flex w-full flex-col items-center gap-1 rounded-xl px-2 py-2.5 text-[11px] font-semibold transition lg:flex-row lg:gap-3 lg:px-3 lg:text-sm ${pestana === v ? "bg-white/10 text-white shadow-[inset_3px_0_0_var(--color-naranja)]" : "text-beige/70 hover:bg-white/5 hover:text-white"}`}
             >
-              <Icono className={`size-5 ${pestana === v ? "text-naranja" : ""}`} /> {t}
+              <span className="relative">
+                <Icono className={`size-5 ${pestana === v ? "text-naranja" : ""}`} />
+                <Aviso n={avisos[v]} className="absolute -right-2.5 -top-1.5 lg:hidden" />
+              </span>
+              {t}
+              <Aviso n={avisos[v]} className="ml-auto hidden lg:inline" />
             </button>
           ))}
         </nav>

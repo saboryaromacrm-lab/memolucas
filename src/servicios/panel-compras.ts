@@ -1,7 +1,7 @@
 import { hash, verify } from "@node-rs/argon2";
-import { and, desc, eq, gt, ne, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, ne, or, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { lecturaCompras, usuarioCompras, type LecturaCompras, type UsuarioCompras } from "../db/schema.js";
+import { comprobante, lecturaCompras, usuarioCompras, type LecturaCompras, type UsuarioCompras } from "../db/schema.js";
 import { ErrorIA } from "../bot/ia.js";
 import { bus } from "../lib/eventos.js";
 import { registrar } from "../lib/log.js";
@@ -191,6 +191,19 @@ export async function cerrarLectura(id: number) {
 }
 
 /** Lo que se muestra arriba de la lista: lo que se está leyendo y los avisos sin cerrar de la última semana. */
+/** Para los avisos de la barra: cuántas facturas hay para revisar y cuántas se están leyendo. */
+export async function contadores() {
+  const cuantas = sql<number>`count(*)::int`;
+  const [[revisar], [leyendo]] = await Promise.all([
+    db.select({ n: cuantas }).from(comprobante).where(inArray(comprobante.estado, ["pendiente", "revisar"])),
+    db
+      .select({ n: cuantas })
+      .from(lecturaCompras)
+      .where(and(eq(lecturaCompras.cerrada, false), eq(lecturaCompras.estado, "leyendo"))),
+  ]);
+  return { paraRevisar: revisar.n, leyendo: leyendo.n };
+}
+
 export async function lecturasAbiertas() {
   const semana = new Date(Date.now() - 7 * 86_400_000);
   return db
