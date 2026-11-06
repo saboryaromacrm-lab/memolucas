@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull, lt, notExists, notInArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lt, notInArray, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
   comprobante,
@@ -18,7 +18,7 @@ import { registrar } from "../lib/log.js";
 import { celda, csv, numero } from "../lib/csv.js";
 import { costosFinales, preciosDe, variacion, type Precios } from "../lib/precios.js";
 import { normalizar } from "../lib/textos.js";
-import { leerDatos } from "./compras.js";
+import { borrarHuerfanos, leerDatos } from "./compras.js";
 import { obtenerConfig } from "./configuracion.js";
 import { enlazarSegunCompras, sincronizarNombres } from "./proveedores.js";
 import { ErrorUsuario } from "./recordatorios.js";
@@ -154,15 +154,6 @@ async function existentesPara(proveedorId: number | null) {
   return { delProveedor, otros };
 }
 
-export type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
-
-/** Los productos que quedaron sin ninguna compra (por editar, borrar o mover compras) se borran. */
-export async function borrarHuerfanos(tx: Tx, ids: number[]) {
-  if (!ids.length) return;
-  await tx
-    .delete(producto)
-    .where(and(inArray(producto.id, ids), notExists(tx.select({ uno: sql`1` }).from(precioProducto).where(eq(precioProducto.productoId, producto.id)))));
-}
 
 // ───────────── Consultas ─────────────
 

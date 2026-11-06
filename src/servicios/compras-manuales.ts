@@ -6,9 +6,9 @@ import { controlar, type Comprobante } from "../lib/comprobantes.js";
 import { bus } from "../lib/eventos.js";
 import { normalizar } from "../lib/textos.js";
 import { borrarAdjunto } from "./adjuntos.js";
-import { columnas, leerDatos } from "./compras.js";
+import { borrarComprobantes, borrarHuerfanos, columnas, leerDatos, type Tx } from "./compras.js";
 import { exigirFormaPago } from "./formas-pago.js";
-import { borrarHuerfanos, claveProducto, type Tx } from "./productos.js";
+import { claveProducto } from "./productos.js";
 import { enlazarSegunCompras, nombreDeProveedor } from "./proveedores.js";
 import { ErrorUsuario } from "./recordatorios.js";
 
@@ -206,13 +206,8 @@ export async function obtenerCompraManual(id: number): Promise<CompraManual & { 
   };
 }
 
+/** Cualquiera la puede borrar (la cargó a mano), aunque quede confirmada. */
 export async function borrarCompraManual(id: number) {
-  const fila = await manual(id);
-  await db.transaction(async (tx) => {
-    const productos = (await tx.select({ id: precioProducto.productoId }).from(precioProducto).where(eq(precioProducto.comprobanteId, id))).map((p) => p.id);
-    await tx.delete(comprobante).where(eq(comprobante.id, id));
-    await borrarHuerfanos(tx, productos);
-  });
-  for (const a of fila.adjuntoIds) await borrarAdjunto(a);
-  bus.avisar("compras");
+  await manual(id);
+  await borrarComprobantes([id], true);
 }

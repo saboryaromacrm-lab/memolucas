@@ -7,8 +7,8 @@ import { bus } from "../../lib/eventos.js";
 import { borrarAdjunto, guardarArchivo, MIMES_IMAGEN, obtenerAdjunto } from "../../servicios/adjuntos.js";
 import {
   actualizarDatos,
+  borrarComprobantes,
   confirmarComprobante,
-  descartarComprobante,
   fijarFormaPago,
   listarComprobantes,
   nombres,
@@ -423,8 +423,10 @@ export const rutasPanelCompras: FastifyPluginAsync = async (app) => {
       return { envio: r.envio };
     });
 
-    privado.post("/compras/:id/descartar", async (req) => {
-      if (!(await descartarComprobante(Id.parse(req.params).id))) throw new ErrorUsuario("Ese comprobante ya estaba confirmado o descartado.");
+    /** Borra una o varias facturas; las confirmadas, solo quien tiene Métricas. */
+    privado.post("/compras/borrar", async (req) => {
+      const { ids } = z.object({ ids: z.array(z.number().int().positive()).min(1).max(500) }).parse(req.body);
+      await borrarComprobantes(ids, req.usuarioCompras!.metricas);
       return { ok: true };
     });
 
