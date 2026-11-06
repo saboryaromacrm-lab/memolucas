@@ -64,6 +64,12 @@ function FiltroPor({ titulo, todos, opciones, valor, onChange }: { titulo: strin
   );
 }
 
+/** Por qué no cierra, en una línea (la primera diferencia). */
+function Motivo({ c }: { c: Compra }) {
+  if (c.cierra || !c.diferencias) return null;
+  return <span className="block truncate text-xs text-amber-700">{c.diferencias.split(". ")[0]}</span>;
+}
+
 function Cierra({ c }: { c: Compra }) {
   if (c.origen === "manual") return <span className="block text-right text-xs text-stone-500">Sin factura</span>;
   return (
@@ -82,20 +88,24 @@ export function Facturas({
   ancho,
   inicial,
   ir,
+  borraConfirmadas,
 }: {
   ancho: Ancho;
   inicial?: { formaPagoId?: number; periodo?: string; abrir?: number };
   ir: (d: Destino) => void;
+  /** Si puede borrar las confirmadas (quien tiene Métricas). */
+  borraConfirmadas: boolean;
 }) {
   const [periodo, setPeriodo] = useState(inicial?.periodo ?? null);
   const { datos, recargar } = useVivo<{ compras: Compra[] }>(`/api/c/compras${periodo ? `?periodo=${periodo}` : ""}`);
   const [filtro, setFiltro] = useState<Filtro>(inicial ? "todas" : "abiertas");
   const [q, setQ] = useState("");
+  const [soloNoCierran, setSoloNoCierran] = useState(false);
   const [proveedorId, setProveedorId] = useState<number | null>(null);
   const [formaPagoId, setFormaPagoId] = useState<number | null>(inicial?.formaPagoId ?? null);
   const [abierta, setAbierta] = useState<number | null>(inicial?.abrir ?? null);
   const [elegidas, setElegidas] = useState<Set<number>>(new Set());
-  const [confirmando, setConfirmando] = useState(false);
+  const [enLote, setEnLote] = useState(false);
   /** La compra sin factura que se edita. */
   const [manual, setManual] = useState<number | null>(null);
   // Pegar o soltar una factura acá la lleva a Cargar.
@@ -104,7 +114,7 @@ export function Facturas({
   const avisar = useAviso();
   const pc = ancho === "pc";
 
-  const lista = useMemo(() => {
+  const filtradas = useMemo(() => {
     const buscado = q.trim().toLowerCase();
     return (datos?.compras ?? []).filter(
       (c) =>
@@ -114,15 +124,19 @@ export function Facturas({
         (!buscado || `${c.proveedor} ${c.titulo} ${c.autor ?? ""}`.toLowerCase().includes(buscado)),
     );
   }, [datos, filtro, q, proveedorId, formaPagoId]);
+  const noCierran = filtradas.filter((c) => !c.cierra);
+  const lista = soloNoCierran ? noCierran : filtradas;
   const opciones = useMemo(() => {
     const compras = datos?.compras ?? [];
     return { proveedores: opcionesDe(compras, (c) => [c.proveedorId, c.proveedor]), formas: opcionesDe(compras, (c) => [c.formaPagoId, c.formaPago]) };
   }, [datos]);
   const cantidadAbiertas = (datos?.compras ?? []).filter(abiertaSegunEstado).length;
-  const loteVisible = lista.filter(confirmableEnLote);
-  const seleccion = loteVisible.filter((c) => elegidas.has(c.id)).map((c) => c.id);
+  const puedeBorrar = (c: Compra) => c.estado !== "confirmado" || borraConfirmadas;
+  const elegibles = lista.filter(puedeBorrar);
+  const seleccion = elegibles.filter((c) => elegidas.has(c.id));
+  const paraConfirmar = seleccion.filter(confirmableEnLote).map((c) => c.id);
 
-  /** Después de confirmar o descartar, en la compu pasa sola a la siguiente de la lista. */
+  /** Después de confirmar o borrar, en la compu pasa sola a la siguiente de la lista. */
   const siguiente = (id: number) => {
     const i = lista.findIndex((c) => c.id === id);
     const prox = lista[i + 1] ?? lista[i - 1];
@@ -140,21 +154,37 @@ export function Facturas({
     avisarEnvio(r.envio);
     siguiente(id);
   };
-  const descartar = async (id: number) => {
-    if (!confirm("¿Descartar esta factura?")) return;
-    if (await accion(() => post(`/api/c/compras/${id}/descartar`), "Descartada")) siguiente(id);
+  /** Borra del todo, después de avisar qué implica. Devuelve si se borraron. */
+  const borrar = async (ids: number[]) => {
+    const compras = (datos?.compras ?? []).filter((c) => ids.includes(c.id));
+    const aviso = [
+      ids.length === 1 ? "¿Borrar esta factura?" : `¿Borrar estas ${ids.length} facturas?`,
+      compras.some((c) => c.estado === "confirmado") && "También se saca de Productos y de Métricas.",
+      compras.some((c) => c.enviadoEn) && "Ya se mandó al ERP: borrarla acá no la borra allá.",
+    ];
+    if (!confirm(aviso.filter(Boolean).join(" "))) return false;
+    return !!(await accion(() => post("/api/c/compras/borrar", { ids }), ids.length === 1 ? "Factura borrada" : `${ids.length} facturas borradas`));
+  };
+  const borrarUna = async (id: number) => {
+    if (await borrar([id])) siguiente(id);
+  };
+  const borrarElegidas = async () => {
+    setEnLote(true);
+    if (await borrar(seleccion.map((c) => c.id))) setElegidas(new Set());
+    setEnLote(false);
+    void recargar();
   };
   const confirmarElegidas = async () => {
-    setConfirmando(true);
+    setEnLote(true);
     let fallaErp: Envio = null;
     let hechas = 0;
-    for (const id of seleccion) {
+    for (const id of paraConfirmar) {
       const r = await accion(() => post<{ envio: Envio }>(`/api/c/compras/${id}/confirmar`));
       if (!r) continue;
       hechas++;
       if (r.envio && !r.envio.ok) fallaErp = r.envio;
     }
-    setConfirmando(false);
+    setEnLote(false);
     setElegidas(new Set());
     if (hechas) avisarEnvio(fallaErp ?? { ok: true, mensaje: "" }, hechas);
     void recargar();
@@ -206,6 +236,12 @@ export function Facturas({
           {t}
         </button>
       ))}
+      <button
+        onClick={() => setSoloNoCierran(!soloNoCierran)}
+        className={`rounded-full px-3.5 py-1.5 text-sm font-medium transition ${soloNoCierran ? "bg-amber-600 text-white" : "border border-amber-300 bg-white text-amber-800 hover:border-amber-400"}`}
+      >
+        No cierran ({noCierran.length})
+      </button>
       {periodo && (
         <button onClick={() => setPeriodo(null)} title="Quitar el filtro de fecha" className="flex items-center gap-1 rounded-full bg-naranja px-3 py-1.5 text-sm font-medium text-white">
           {nombrePeriodo(periodo)} <X className="size-3.5" />
@@ -223,7 +259,7 @@ export function Facturas({
   );
   const vacio = (
     <p className="px-4 py-10 text-center text-sm text-stone-500">
-      {q || proveedorId || formaPagoId || periodo ? "No hay facturas con esa búsqueda." : filtro === "abiertas" ? "No hay facturas para revisar 🙌" : "Todavía no hay facturas acá."}
+      {q || proveedorId || formaPagoId || periodo || soloNoCierran ? "No hay facturas con esa búsqueda." : filtro === "abiertas" ? "No hay facturas para revisar 🙌" : "Todavía no hay facturas acá."}
     </p>
   );
   const cargando = (
@@ -248,7 +284,8 @@ export function Facturas({
           ancho={ancho}
           onCerrar={() => setAbierta(null)}
           onConfirmar={confirmar}
-          onDescartar={descartar}
+          puedeBorrar={puedeBorrar}
+          onBorrar={borrarUna}
           onEditarManual={setManual}
           onCambio={recargar}
         />
@@ -292,6 +329,7 @@ export function Facturas({
                     {c.titulo} · {fechaCorta(c.fecha)}
                     {c.autor && ` · ${c.autor}`}
                   </span>
+                  <Motivo c={c} />
                   <span className="mt-1 block">
                     <Estado c={c} />
                   </span>
@@ -326,12 +364,21 @@ export function Facturas({
           <span className="font-medium text-stone-700">
             {seleccion.length} {seleccion.length === 1 ? "elegida" : "elegidas"}
           </span>
+          {paraConfirmar.length > 0 && (
+            <button
+              onClick={() => void confirmarElegidas()}
+              disabled={enLote}
+              className="flex items-center gap-1.5 rounded-lg bg-cafe px-3 py-1.5 font-semibold text-beige hover:bg-marca-profundo disabled:opacity-60"
+            >
+              {enLote ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4 text-naranja" />} Confirmar {paraConfirmar.length}
+            </button>
+          )}
           <button
-            onClick={() => void confirmarElegidas()}
-            disabled={confirmando}
-            className="flex items-center gap-1.5 rounded-lg bg-cafe px-3 py-1.5 font-semibold text-beige hover:bg-marca-profundo disabled:opacity-60"
+            onClick={() => void borrarElegidas()}
+            disabled={enLote}
+            className="flex items-center gap-1.5 rounded-lg border border-red-200 bg-white px-3 py-1.5 font-semibold text-red-600 hover:bg-red-50 disabled:opacity-60"
           >
-            {confirmando ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4 text-naranja" />} Confirmar {seleccion.length}
+            <Trash2 className="size-4" /> Borrar {seleccion.length}
           </button>
           <button onClick={() => setElegidas(new Set())} className="text-stone-500 hover:text-stone-800">
             Limpiar
@@ -348,14 +395,14 @@ export function Facturas({
             <thead className="sticky top-0 z-10 bg-stone-50 text-left text-xs font-semibold uppercase tracking-wide text-stone-500 shadow-[0_1px_0_#e7e5e4]">
               <tr>
                 <th className="w-10 py-2.5 pl-4">
-                  {loteVisible.length > 0 && (
+                  {elegibles.length > 0 && (
                     <input
                       type="checkbox"
-                      aria-label="Elegir todas las que cierran"
-                      title="Elegir todas las que cierran"
+                      aria-label="Elegir todas"
+                      title="Elegir todas"
                       className="size-4 accent-cafe"
-                      checked={seleccion.length === loteVisible.length}
-                      onChange={(e) => setElegidas(new Set(e.target.checked ? loteVisible.map((c) => c.id) : []))}
+                      checked={seleccion.length === elegibles.length}
+                      onChange={(e) => setElegidas(new Set(e.target.checked ? elegibles.map((c) => c.id) : []))}
                     />
                   )}
                 </th>
@@ -375,7 +422,7 @@ export function Facturas({
                   className={`cursor-pointer ${abierta === c.id ? "bg-orange-50 shadow-[inset_3px_0_0_var(--color-naranja)]" : "hover:bg-stone-50"}`}
                 >
                   <td className="py-3 pl-4" onClick={(e) => e.stopPropagation()}>
-                    {confirmableEnLote(c) && (
+                    {puedeBorrar(c) && (
                       <input
                         type="checkbox"
                         aria-label="Elegir"
@@ -398,6 +445,7 @@ export function Facturas({
                       {c.titulo}
                       <span className="@xl:hidden"> · {fechaCorta(c.fecha)}</span>
                     </div>
+                    <Motivo c={c} />
                   </td>
                   <td className="hidden whitespace-nowrap px-3 py-3 text-stone-600 @xl:table-cell">{fechaCorta(c.fecha)}</td>
                   <td className="hidden max-w-32 truncate px-3 py-3 text-stone-600 @4xl:table-cell">{c.autor ?? "—"}</td>
@@ -445,7 +493,8 @@ function DetalleFactura({
   ancho,
   onCerrar,
   onConfirmar,
-  onDescartar,
+  puedeBorrar,
+  onBorrar,
   onEditarManual,
   onCambio,
 }: {
@@ -453,7 +502,8 @@ function DetalleFactura({
   ancho: Ancho;
   onCerrar: () => void;
   onConfirmar: (id: number) => Promise<void>;
-  onDescartar: (id: number) => Promise<void>;
+  puedeBorrar: (c: Compra) => boolean;
+  onBorrar: (id: number) => Promise<void>;
   onEditarManual: (id: number) => void;
   onCambio: () => Promise<void>;
 }) {
@@ -476,7 +526,7 @@ function DetalleFactura({
       titulo={c ? c.proveedor || "Proveedor sin datos" : "Factura"}
       subtitulo={c && `${c.titulo} · ${fechaCorta(c.fecha)}${c.autor ? ` · Cargó ${c.autor}` : ""}`}
       pie={
-        c?.origen === "manual" ? (
+        !c ? null : c.origen === "manual" ? (
           <button
             onClick={() => onEditarManual(id)}
             className="flex w-full items-center justify-center gap-2 rounded-2xl border border-stone-300 py-3.5 font-semibold text-stone-700 hover:bg-stone-50 md:rounded-xl md:py-2.5"
@@ -484,33 +534,40 @@ function DetalleFactura({
             <Pencil className="size-4" /> Editar compra
           </button>
         ) : (
-          abierta && (
+          (abierta || puedeBorrar(c)) && (
             <div className="flex gap-2">
-              <button
-                aria-label="Descartar"
-                title="Descartar"
-                disabled={ocupado}
-                onClick={() => void hacer(() => onDescartar(id))}
-                className="rounded-2xl border border-red-200 px-4 text-red-600 hover:bg-red-50 md:rounded-xl"
-              >
-                <Trash2 className="size-5" />
-              </button>
-              <button
-                onClick={() => setCorrigiendo(true)}
-                disabled={ocupado}
-                className="flex flex-1 items-center justify-center gap-2 rounded-2xl border border-stone-300 py-3.5 font-semibold text-stone-700 hover:bg-stone-50 md:rounded-xl md:py-2.5"
-              >
-                <Pencil className="size-4" /> Corregir
-              </button>
-              <button
-                onClick={() => void hacer(() => onConfirmar(id))}
-                disabled={ocupado}
-                title={ancho === "movil" ? undefined : "Confirmar (Ctrl+Enter)"}
-                className="flex flex-[1.4] items-center justify-center gap-2 rounded-2xl bg-cafe py-3.5 font-semibold text-beige hover:bg-marca-profundo disabled:opacity-60 md:rounded-xl md:py-2.5"
-              >
-                {ocupado ? <Loader2 className="size-5 animate-spin" /> : <Check className="size-5 text-naranja" />} Confirmar
-                {ancho !== "movil" && <span className="hidden text-xs font-normal text-beige/60 lg:inline">Ctrl+Enter</span>}
-              </button>
+              {puedeBorrar(c) && (
+                <button
+                  aria-label="Borrar"
+                  title="Borrar"
+                  disabled={ocupado}
+                  onClick={() => void hacer(() => onBorrar(id))}
+                  className={`flex items-center justify-center gap-2 rounded-2xl border border-red-200 px-4 text-red-600 hover:bg-red-50 md:rounded-xl ${abierta ? "" : "flex-1 py-3.5 font-semibold md:py-2.5"}`}
+                >
+                  <Trash2 className="size-5" />
+                  {!abierta && "Borrar factura"}
+                </button>
+              )}
+              {abierta && (
+                <>
+                  <button
+                    onClick={() => setCorrigiendo(true)}
+                    disabled={ocupado}
+                    className="flex flex-1 items-center justify-center gap-2 rounded-2xl border border-stone-300 py-3.5 font-semibold text-stone-700 hover:bg-stone-50 md:rounded-xl md:py-2.5"
+                  >
+                    <Pencil className="size-4" /> Corregir
+                  </button>
+                  <button
+                    onClick={() => void hacer(() => onConfirmar(id))}
+                    disabled={ocupado}
+                    title={ancho === "movil" ? undefined : "Confirmar (Ctrl+Enter)"}
+                    className="flex flex-[1.4] items-center justify-center gap-2 rounded-2xl bg-cafe py-3.5 font-semibold text-beige hover:bg-marca-profundo disabled:opacity-60 md:rounded-xl md:py-2.5"
+                  >
+                    {ocupado ? <Loader2 className="size-5 animate-spin" /> : <Check className="size-5 text-naranja" />} Confirmar
+                    {ancho !== "movil" && <span className="hidden text-xs font-normal text-beige/60 lg:inline">Ctrl+Enter</span>}
+                  </button>
+                </>
+              )}
             </div>
           )
         )

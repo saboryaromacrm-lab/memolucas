@@ -1,11 +1,12 @@
 import fs from "node:fs/promises";
-import { and, desc, eq, gt, inArray, isNull, lt, ne, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull, lt, ne, notExists, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { adjunto, comprobante, encuesta, formaPago, grupo, proveedor, type FilaComprobante } from "../db/schema.js";
+import { adjunto, comprobante, encuesta, formaPago, grupo, precioProducto, producto, proveedor, type FilaComprobante } from "../db/schema.js";
 import { cifrar, descifrar } from "../lib/cifrado.js";
 import { claveDe, controlar, EsquemaComprobante, type Comprobante } from "../lib/comprobantes.js";
 import { bus } from "../lib/eventos.js";
 import { registrar } from "../lib/log.js";
+import { borrarAdjunto } from "./adjuntos.js";
 import { obtenerConfig } from "./configuracion.js";
 import { exigirFormaPago, sugerirFormaPago } from "./formas-pago.js";
 import { enlazarSegunCompras, fechaDeCompra, proveedorPara, sincronizarNombres } from "./proveedores.js";
@@ -147,6 +148,34 @@ export async function fijarFormaPago(id: number, formaPagoId: number | null) {
   await exigirFormaPago(formaPagoId);
   const [fila] = await db.update(comprobante).set({ formaPagoId, actualizadoEn: sql`now()` }).where(eq(comprobante.id, id)).returning({ id: comprobante.id });
   if (!fila) throw new ErrorUsuario("No existe ese comprobante");
+  bus.avisar("compras");
+}
+
+export type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/** Los productos que quedaron sin ninguna compra (por editar, borrar o mover compras) se borran. */
+export async function borrarHuerfanos(tx: Tx, ids: number[]) {
+  if (!ids.length) return;
+  await tx
+    .delete(producto)
+    .where(and(inArray(producto.id, ids), notExists(tx.select({ uno: sql`1` }).from(precioProducto).where(eq(precioProducto.productoId, producto.id)))));
+}
+
+/**
+ * Borra comprobantes del todo, con sus fotos. Lo que habían pasado a Productos sale con ellos (los productos que
+ * quedan sin compras se borran; el proveedor queda). Las confirmadas solo si se puede (quien tiene Métricas).
+ */
+export async function borrarComprobantes(ids: number[], conConfirmadas: boolean) {
+  const filas = await db.select().from(comprobante).where(inArray(comprobante.id, ids));
+  if (filas.length !== new Set(ids).size) throw new ErrorUsuario("Alguna de esas facturas ya no existe.");
+  if (!conConfirmadas && filas.some((f) => f.estado === "confirmado")) throw new ErrorUsuario("Las facturas confirmadas solo las puede borrar quien tiene Métricas.");
+  await db.transaction(async (tx) => {
+    const productos = await tx.select({ id: precioProducto.productoId }).from(precioProducto).where(inArray(precioProducto.comprobanteId, ids));
+    // Sus precios en Productos se borran solos con el comprobante.
+    await tx.delete(comprobante).where(inArray(comprobante.id, ids));
+    await borrarHuerfanos(tx, productos.map((p) => p.id));
+  });
+  for (const a of filas.flatMap((f) => f.adjuntoIds)) await borrarAdjunto(a);
   bus.avisar("compras");
 }
 

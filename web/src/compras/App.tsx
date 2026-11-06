@@ -141,7 +141,7 @@ function Principal({ marca, sesion: { nombre, metricas }, onSalir }: { marca: Ma
   };
   const contenido = {
     cargar: <Cargar key={destino?.vez} ancho={ancho} archivos={d?.pestana === "cargar" ? d.archivos : undefined} ir={ir} />,
-    facturas: <Facturas key={destino?.vez} ancho={ancho} inicial={d?.pestana === "facturas" ? d : undefined} ir={ir} />,
+    facturas: <Facturas key={destino?.vez} ancho={ancho} inicial={d?.pestana === "facturas" ? d : undefined} ir={ir} borraConfirmadas={metricas} />,
     productos: <Productos key={destino?.vez} ancho={ancho} inicial={d?.pestana === "productos" ? d : undefined} />,
     metricas: <Metricas ancho={ancho} ir={ir} />,
     configuracion: <Configuracion key={destino?.vez} ancho={ancho} proveedorId={d?.pestana === "configuracion" ? d.proveedorId : undefined} />,
