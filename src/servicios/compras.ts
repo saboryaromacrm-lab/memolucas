@@ -150,6 +150,26 @@ export async function fijarFormaPago(id: number, formaPagoId: number | null) {
   bus.avisar("compras");
 }
 
+/** Al arrancar: las facturas sin confirmar se vuelven a controlar, por si el control cambió (ej. una que no cerraba y ahora sí). */
+export async function recontrolarPendientes() {
+  const filas = await db
+    .select()
+    .from(comprobante)
+    .where(inArray(comprobante.estado, ["pendiente", "revisar"]));
+  let cambiaron = 0;
+  for (const fila of filas) {
+    const antes = leerDatos(fila);
+    const { comprobante: datos, cierra } = controlar(antes);
+    if (JSON.stringify(datos) === JSON.stringify(antes)) continue;
+    await db
+      .update(comprobante)
+      .set({ ...columnas(datos, cierra), estado: cierra ? "pendiente" : "revisar" })
+      .where(eq(comprobante.id, fila.id));
+    cambiaron++;
+  }
+  if (cambiaron) bus.avisar("compras");
+}
+
 /** Al arrancar: las facturas que todavía no tienen proveedor (las de antes de Proveedores) se vinculan solas, con sus productos. */
 export async function vincularProveedores() {
   const filas = await db.select().from(comprobante).where(isNull(comprobante.proveedorId));

@@ -6,7 +6,7 @@ import { crearServidor } from "./http/servidor.js";
 import { logger, registrar } from "./lib/log.js";
 import { obtenerConfig } from "./servicios/configuracion.js";
 import { fijarEnviador } from "./servicios/enviador.js";
-import { vincularProveedores } from "./servicios/compras.js";
+import { recontrolarPendientes, vincularProveedores } from "./servicios/compras.js";
 import { retomarLecturas } from "./servicios/panel-compras.js";
 import { barrer, detenerScheduler, iniciarScheduler } from "./servicios/scheduler.js";
 import { whatsapp } from "./whatsapp/conexion.js";
@@ -44,6 +44,7 @@ async function arrancar() {
   void barrer();
   void retomarLecturas();
   void vincularProveedores().catch((err) => registrar("error", "compras", "No se pudieron vincular los proveedores", err));
+  void recontrolarPendientes().catch((err) => registrar("error", "compras", "No se pudieron volver a controlar las facturas", err));
   await registrar("info", "sistema", "Memolucas arrancó");
 
   let cerrando = false;
