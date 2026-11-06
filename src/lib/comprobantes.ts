@@ -95,9 +95,11 @@ export function controlar(c: Comprobante): { comprobante: Comprobante; cierra: b
   const diferencias: string[] = [];
   const renglones = c.renglones.map((r, i) => {
     const factor = r.descuentos.reduce((f, d) => f * (1 - d / 100), 1);
-    const posibles = [r.cantidad * r.precioUnitario * factor];
     // Renglones por bulto con precio por unidad ("2 cajas x 12").
-    if (r.unidadesPorBulto > 0) posibles.push(r.cantidad * r.unidadesPorBulto * r.precioUnitario * factor);
+    const sinIva = [r.cantidad * r.precioUnitario * factor, ...(r.unidadesPorBulto > 0 ? [r.cantidad * r.unidadesPorBulto * r.precioUnitario * factor] : [])];
+    // Precio sin IVA e importe con IVA (ej. "P.U. NETO" e "IMPORTE TOTAL"): la alícuota del renglón o, si no figura, la única de la factura.
+    const alicuota = r.alicuotaIva || (c.pie.ivas.length === 1 ? c.pie.ivas[0].alicuota : 0);
+    const posibles = [...sinIva, ...(alicuota > 0 ? sinIva.map((x) => x * (1 + alicuota / 100)) : [])];
     const sinPrecios = r.precioUnitario === 0 && r.importe === 0;
     const cierra = sinPrecios || posibles.some((p) => Math.abs(p - r.importe) <= TOLERANCIA);
     if (!cierra)
