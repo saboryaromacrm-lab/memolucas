@@ -22,6 +22,7 @@ import { metricas, metricasCsv } from "../../servicios/metricas.js";
 import {
   adjuntoDeCompras,
   cerrarLectura,
+  contadores,
   crearLectura,
   existeLectura,
   ingresar,
@@ -224,6 +225,8 @@ export const rutasPanelCompras: FastifyPluginAsync = async (app) => {
     privado.addHook("onRequest", autenticarCompras);
 
     privado.get("/yo", async (req) => ({ nombre: req.usuarioCompras!.nombre, metricas: req.usuarioCompras!.metricas }));
+
+    privado.get("/contadores", async () => contadores());
 
     privado.get("/eventos", { config: { rateLimit: false } }, (req, reply) => {
       reply.hijack();

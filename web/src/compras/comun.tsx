@@ -20,9 +20,10 @@ export const fechaCorta = (iso: string | null | undefined) => (iso && /^\d{4}-\d
 /** "octubre 2026" para un mes ("2026-10"); "28/10/2026" para un día. */
 export const nombrePeriodo = (p: string) => (p.length === 7 ? DateTime.fromISO(p).setLocale("es").toFormat("LLLL yyyy") : fechaCorta(p));
 
-/** Desde Métricas: abrir otra pestaña con un filtro o una ficha. */
+/** Abrir otra pestaña con un filtro, una ficha o archivos para cargar (desde Métricas, Cargar o Facturas). */
 export type Destino =
-  | { pestana: "facturas"; formaPagoId?: number; periodo?: string }
+  | { pestana: "cargar"; archivos?: File[] }
+  | { pestana: "facturas"; formaPagoId?: number; periodo?: string; abrir?: number }
   | { pestana: "productos"; productoId?: number; categoria?: string }
   | { pestana: "configuracion"; proveedorId: number };
 
