@@ -728,7 +728,7 @@ export class Procesador {
     const cfg = await obtenerConfig();
     let interp: Interpretacion;
     try {
-      interp = await interpretar(cfg, texto, await this.contexto(historial, borrador?.datos ?? null, ocCitada));
+      interp = await interpretar(cfg, texto, await this.contexto(historial, borrador?.datos ?? null, citadoFila));
     } catch (err) {
       if (enGrupo()) return; // En el grupo no se interrumpe la charla con errores.
       if (err instanceof ErrorIA && /clave/i.test(err.message))
@@ -754,7 +754,22 @@ export class Procesador {
     }
   }
 
-  private async contexto(historial: Awaited<ReturnType<typeof ultimosMensajes>>, borrador: DatosBorrador | null, ocCitada: number | null) {
+  /** Qué mensaje cita el usuario: un aviso, otro mensaje del bot (con su recordatorio, si tiene) o uno suyo. */
+  private async respondiendoA(citado: typeof mensaje.$inferSelect): Promise<string> {
+    const [oc] = citado.ocurrenciaId ? await db.select().from(ocurrencia).where(eq(ocurrencia.id, citado.ocurrenciaId)) : [];
+    const recordatorioId = oc?.recordatorioId ?? citado.recordatorioId;
+    const r = recordatorioId ? await obtenerRecordatorio(recordatorioId) : null;
+    if (oc && r)
+      return `El usuario está respondiendo al aviso de "${r.titulo}" (ID ${r.id}${r.rrule ? ", se repite" : ""}). Si dice solo un momento ("mañana", "en 2 horas", "a las 18"), es posponer ese aviso. Si dice que no va o que se suspendió, es cancelar_aviso. Si dice que lo cambiaron de día u hora, es editar.`;
+    const quien = citado.direccion === "saliente" ? "un mensaje tuyo" : "un mensaje suyo anterior";
+    const cita = `El usuario está respondiendo citando ${quien}: "${citado.texto ?? "(sin texto)"}".`;
+    if (r)
+      return `${cita} Es del recordatorio "${r.titulo}" (ID ${r.id}, ${aLocal(r.proximaInstancia ?? r.fechaHora).toFormat("ccc dd/MM HH:mm", { locale: "es" })}). Lo que pida es sobre ese recordatorio: cambiarlo, borrarlo o avisos antes. Si pide que también le recuerdes a otra hora o día ("a las 17 también"), es crear otro recordatorio con el mismo título a esa hora, sin tocar el original.`;
+    return `${cita} Usalo para entender a qué se refiere. Si cita una lista con varios recordatorios y no queda claro de cuál habla, preguntale cuál.`;
+  }
+
+  /** citado: el mensaje que el usuario cita al responder (del bot o suyo), si cita alguno. */
+  private async contexto(historial: Awaited<ReturnType<typeof ultimosMensajes>>, borrador: DatosBorrador | null, citado: typeof mensaje.$inferSelect | null) {
     const activos = await recordatoriosActivos(chat());
     const esperando = await pendientesSinConfirmar(chat());
     const ultima = await ultimaOcurrenciaEnviada(undefined, chat());
@@ -782,13 +797,7 @@ export class Procesador {
       }. Si el usuario crea un recordatorio ahora, se le adjunta ${adjunta}.`;
     else if (borrador)
       propuesta = `${origen} recibido sin propuesta (${borrador.descripcion ?? "sin datos"}). Si el usuario dice cuándo, crear_recordatorio (usá un título que describa el contenido) y se le adjunta ${adjunta}.`;
-    let respondiendoA: string | null = null;
-    if (ocCitada) {
-      const [oc] = await db.select().from(ocurrencia).where(eq(ocurrencia.id, ocCitada));
-      const r = oc ? await obtenerRecordatorio(oc.recordatorioId) : null;
-      if (r)
-        respondiendoA = `El usuario está respondiendo al aviso de "${r.titulo}" (ID ${r.id}${r.rrule ? ", se repite" : ""}). Si dice solo un momento ("mañana", "en 2 horas", "a las 18"), es posponer ese aviso. Si dice que no va o que se suspendió, es cancelar_aviso. Si dice que lo cambiaron de día u hora, es editar.`;
-    }
+    const respondiendoA = citado ? await this.respondiendoA(citado) : null;
     // Las notas son personales: en el grupo no se muestran.
     const notas = (enGrupo() ? [] : await todasLasNotas())
       .slice(0, 100)
@@ -952,6 +961,7 @@ export class Procesador {
         const items = i.recordatorios.filter((r) => r.titulo && fechaDe(r.fecha_hora));
         if (i.falta_info || !items.length) return this.decir(i.respuesta ?? "¿Para cuándo te lo recuerdo? 🗓️", { intencion: "falta_info" });
         const respuestas: string[] = [];
+        const creados: number[] = [];
         let ofrecer = false;
         let conFoto = ctx.borrador?.datos.adjuntoId ?? null;
         let link = ctx.borrador?.datos.url ?? null;
@@ -967,6 +977,7 @@ export class Procesador {
             adjuntoId: conFoto,
           };
           const rec = await crearRecordatorio(datos);
+          creados.push(rec.id);
           conFoto = null; // La foto y el link van solo con el primero.
           link = null;
           respuestas.push(await textoConfirmacion(rec, !respuestas.length));
@@ -974,7 +985,8 @@ export class Procesador {
         }
         if (ctx.borrador) await cerrarBorrador(ctx.borrador.id);
         if (ofrecer) respuestas.push("¿Querés que te avise antes también? Decime, por ejemplo, *1 hora antes* o *el día anterior*.");
-        return this.decir(respuestas.join("\n\n"), { intencion: "crear_recordatorio" });
+        // Con uno solo, el mensaje queda unido a él: si lo citan después, se sabe de cuál hablan.
+        return this.decir(respuestas.join("\n\n"), { recordatorioId: creados.length === 1 ? creados[0] : null, intencion: "crear_recordatorio" });
       }
       case "aceptar_propuesta":
         if (ctx.borrador?.datos.propuesta) return this.aceptarBorrador(ctx.borrador.id, ctx.borrador.datos);
