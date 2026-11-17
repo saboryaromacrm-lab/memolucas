@@ -110,6 +110,8 @@ function documentoDe(msg: WAMessage) {
 /** En grupos, fotos y links solo se procesan si se lo piden al bot. */
 const PIDE_BOT = /\b(recorda|recordame|recordanos|recuerden|avisa|avisame|avisanos|anota|nota|agrega|guarda|guardalo|guardala|memo|memolucas|bot)\b/;
 const MINUTOS_BORRADOR_GRUPO = 30;
+/** Hasta cuánto después de una pregunta del bot ("¿para qué día?") un "hoy" o "mañana" es la respuesta y no un comando. */
+const MINUTOS_RESPUESTA_A_PREGUNTA = 30;
 
 /** Registra un mensaje con el chat y el autor del contexto actual. */
 const registrarAqui = (m: Parameters<typeof registrarMensaje>[0]) =>
@@ -641,8 +643,16 @@ export class Procesador {
   private async texto(msg: WAMessage, texto: string, tipo: "texto" | "audio" = "texto", eco?: string) {
     const historial = await ultimosMensajes(5, chat());
     const citado = idCitado(msg);
-    const ocCitada = citado ? (await mensajePorWaId(citado))?.ocurrenciaId ?? null : null;
+    const citadoFila = citado ? await mensajePorWaId(citado) : null;
+    const ocCitada = citadoFila?.ocurrenciaId ?? null;
     const entrante = await registrarAqui({ direccion: "entrante", texto, tipo, waMessageId: msg.key.id });
+    // ¿Contesta una pregunta del bot? Citándola, siempre; si no, si fue lo último que dijo el bot y hace poco.
+    const ultimaDelBot = historial.findLast((m) => m.direccion === "saliente");
+    const respondePregunta =
+      citadoFila?.intencionDetectada === "falta_info" ||
+      (!citadoFila &&
+        ultimaDelBot?.intencionDetectada === "falta_info" &&
+        entrante.creadoEn.getTime() - ultimaDelBot.creadoEn.getTime() <= MINUTOS_RESPUESTA_A_PREGUNTA * 60_000);
     const anotar = (intencion: string) =>
       db.update(mensaje).set({ intencionDetectada: intencion }).where(eq(mensaje.id, entrante.id));
 
@@ -669,10 +679,11 @@ export class Procesador {
       return this.rechazarBorrador(borrador.id, borrador.datos);
     }
 
-    // 3) Comandos rápidos sin IA. Si responde a un aviso ("mañana", "en 2 horas"), lo interpreta la IA como posponer.
+    // 3) Comandos rápidos sin IA. Si responde a un aviso ("mañana", "en 2 horas"), lo interpreta la IA como posponer;
+    // si contesta una pregunta del bot ("¿para qué día?" → "hoy"), la IA lo toma como la respuesta.
     const comando = detectarComando(texto);
     // En el grupo, "hoy", "lista", etc. pueden ser charla: los interpreta la IA. "listo" confirma solo si hay un aviso esperando.
-    let cmd = ocCitada && comando?.tipo === "listar" ? null : comando;
+    let cmd = (ocCitada || respondePregunta) && comando?.tipo === "listar" ? null : comando;
     if (enGrupo() && cmd) {
       const esperando = cmd.tipo === "confirmar" && (ocCitada || (await ultimaOcurrenciaEnviada(undefined, chat(), true)));
       cmd = esperando ? cmd : null;

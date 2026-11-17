@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WAMessage } from "baileys";
 import { DateTime } from "luxon";
+import { eq, sql } from "drizzle-orm";
+import { db } from "../src/db/index.js";
+import { mensaje } from "../src/db/schema.js";
 import { Procesador } from "../src/bot/procesador.js";
 import type { AnalisisEnlace, AnalisisFoto, Interpretacion } from "../src/bot/ia.js";
 import type { ContenidoEnlace } from "../src/servicios/enlaces.js";
@@ -117,6 +120,36 @@ describe("bot", () => {
     await bot.procesar(texto("Recordame llamar a Juan"));
     expect(respuestas[0]).toBe("¿Para cuándo te lo recuerdo?");
     expect(await recordatoriosActivos()).toHaveLength(0);
+  });
+
+  it("'hoy' contesta la pregunta del bot (¿para qué día?) y no muestra la agenda", async () => {
+    const pregunta = { ...base, intencion: "crear_recordatorio" as const, falta_info: "fecha", respuesta: "Dale, ¿para qué día te agendo *ir a buscar la plata de Mariel* a las 16?" };
+    const agendado = {
+      ...base,
+      intencion: "crear_recordatorio" as const,
+      recordatorios: [{ titulo: "Ir a buscar la plata de Mariel", descripcion: null, fecha_hora: "2026-10-22T16:00:00-03:00", recurrencia: null, avisos_previos_min: [], es_evento: false }],
+    };
+    transcribir.mockResolvedValue("Haceme acordar a las 16 de ir a buscar la plata de Mariel");
+    interpretar.mockResolvedValueOnce(pregunta).mockResolvedValueOnce(agendado);
+    await bot.procesar({ key: { id: "AUD9", remoteJid: YO }, message: { audioMessage: { seconds: 5, mimetype: "audio/ogg; codecs=opus" } } });
+    expect(respuestas.at(-1)).toContain("¿para qué día te agendo");
+    await bot.procesar(texto("Hoy"));
+    expect(interpretar).toHaveBeenCalledTimes(2);
+    expect(interpretar.mock.calls[1][1]).toBe("Hoy");
+    expect(respuestas.at(-1)).toContain("*Ir a buscar la plata de Mariel*");
+    expect(await recordatoriosActivos()).toHaveLength(1);
+
+    // Pasada media hora, "hoy" suelto vuelve a ser la agenda; citando la pregunta, sigue siendo la respuesta.
+    interpretar.mockResolvedValueOnce(pregunta);
+    await bot.procesar(texto("Recordame a las 16 ir a buscar la plata de Mariel"));
+    const preguntaId = `OUT${respuestas.length}`;
+    await db.update(mensaje).set({ creadoEn: sql`now() - interval '31 minutes'` }).where(eq(mensaje.waMessageId, preguntaId));
+    await bot.procesar(texto("hoy"));
+    expect(interpretar).toHaveBeenCalledTimes(3);
+    expect(respuestas.at(-1)).toContain("Ir a buscar la plata de Mariel");
+    interpretar.mockResolvedValueOnce(agendado);
+    await bot.procesar(respuestaA(preguntaId, "hoy"));
+    expect(interpretar).toHaveBeenCalledTimes(4);
   });
 
   it("comandos rápidos sin IA y 'listo' confirma el último aviso", async () => {
