@@ -152,6 +152,31 @@ describe("bot", () => {
     expect(interpretar).toHaveBeenCalledTimes(4);
   });
 
+  it("citando un mensaje, la IA sabe cuál es y de qué recordatorio (\"a las 17 también\")", async () => {
+    const plata = (fecha_hora: string) => ({
+      ...base,
+      intencion: "crear_recordatorio" as const,
+      recordatorios: [{ titulo: "Ir a buscar la plata de Mariel", descripcion: null, fecha_hora, recurrencia: null, avisos_previos_min: [], es_evento: false }],
+    });
+    interpretar.mockResolvedValueOnce(plata("2026-10-22T16:00:00-03:00")).mockResolvedValueOnce(plata("2026-10-22T17:00:00-03:00"));
+    const pedido = texto("Haceme acordar a las 16 de ir a buscar la plata de Mariel");
+    await bot.procesar(pedido);
+    const confirmacion = `OUT${respuestas.length}`;
+    await bot.procesar(respuestaA(confirmacion, "A las 17 tambien haceme acordar"));
+
+    const { respondiendoA } = interpretar.mock.calls[1][2] as { respondiendoA: string };
+    const [original] = await recordatoriosActivos();
+    expect(respondiendoA).toContain(`Es del recordatorio "Ir a buscar la plata de Mariel" (ID ${original.id}`);
+    expect(respondiendoA).toContain("a las 17 también");
+    expect(respondiendoA).toContain(respuestas[0].split("\n")[0]);
+    expect((await recordatoriosActivos()).map((r) => r.titulo)).toEqual(["Ir a buscar la plata de Mariel", "Ir a buscar la plata de Mariel"]);
+
+    // Citando un mensaje propio, también lo recibe.
+    interpretar.mockResolvedValueOnce(base);
+    await bot.procesar(respuestaA(pedido.key.id!, "esto"));
+    expect((interpretar.mock.calls[2][2] as { respondiendoA: string }).respondiendoA).toContain("citando un mensaje suyo anterior");
+  });
+
   it("comandos rápidos sin IA y 'listo' confirma el último aviso", async () => {
     interpretar.mockResolvedValue({
       ...base,
