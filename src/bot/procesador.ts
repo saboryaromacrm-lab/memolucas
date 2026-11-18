@@ -213,7 +213,8 @@ async function cerrarBorrador(id: number) {
   await db.delete(borradorPendiente).where(eq(borradorPendiente.id, id));
 }
 
-type Ctx = { ocCitada: number | null; borrador: Awaited<ReturnType<typeof borradorActivo>> };
+/** msg: el mensaje al que se reacciona con ✅ si se marca algo como hecho. */
+type Ctx = { ocCitada: number | null; borrador: Awaited<ReturnType<typeof borradorActivo>>; msg: WAMessage };
 
 // ───────────── Procesador ─────────────
 
@@ -326,11 +327,8 @@ export class Procesador {
     const comp = await comprobantePorMensaje(r.key.id, chat());
     if (comp) return this.confirmarCompra(comp.id);
     const original = await mensajePorWaId(r.key.id);
-    if (!original?.ocurrenciaId) return;
-    const oc = await confirmarOcurrencia(original.ocurrenciaId);
-    if (!oc) return;
-    const rec = await obtenerRecordatorio(oc.recordatorioId);
-    await this.decir(frases.hecho(rec?.titulo ?? "el recordatorio"), { recordatorioId: oc.recordatorioId, intencion: "confirmar" });
+    // Su propia reacción ya muestra que quedó hecho: no se contesta.
+    if (original?.ocurrenciaId) await confirmarOcurrencia(original.ocurrenciaId);
   }
 
   /** Voto en una encuesta del bot: se toma el primero y se responde corto. */
@@ -347,9 +345,11 @@ export class Procesador {
     if (!(await marcarRespondida(enc.id))) return; // Ya se había votado.
     await registrarAqui({ direccion: "entrante", tipo: "voto", texto: enc.opciones[elegida], waMessageId: msg.key.id, intencionDetectada: "voto" });
     const a = enc.accion;
+    // Al votar no hay mensaje del usuario al que reaccionar: se reacciona sobre la encuesta.
+    const encuesta: WAMessage = { key: { remoteJid: msg.key.remoteJid, id, fromMe: true } };
     switch (a.tipo) {
       case "aviso": {
-        if (elegida === 0) return this.confirmar(a.ocurrenciaId);
+        if (elegida === 0) return this.confirmar(a.ocurrenciaId, encuesta);
         const cfg = await obtenerConfig();
         const [h, mi] = cfg.horaDefecto.split(":").map(Number);
         const hasta =
@@ -371,7 +371,7 @@ export class Procesador {
         const recId = a.ids[elegida];
         if (!recId) return;
         const interp = { ...(a.interpretacion as unknown as Interpretacion), recordatorio_ids: [recId] };
-        return this.ejecutarSeguro(interp, { ocCitada: null, borrador: await borradorActivo() });
+        return this.ejecutarSeguro(interp, { ocCitada: null, borrador: await borradorActivo(), msg: encuesta });
       }
       case "comprobante":
         if (elegida === 0) return this.confirmarCompra(a.comprobanteId);
@@ -719,7 +719,7 @@ export class Procesador {
             if (cmd.explicito) return this.decir(frases.nadaPendiente());
             return; // "ok" suelto: no hace falta responder.
           }
-          return this.confirmar(oc.id);
+          return this.confirmar(oc.id, msg);
         }
       }
     }
@@ -741,7 +741,7 @@ export class Procesador {
       interp = { ...interp, intencion: "desconocido" }; // En privado siempre se contesta.
     }
     if (eco) await this.decir(eco, { intencion: "transcripcion" });
-    return this.ejecutarSeguro(interp, { ocCitada, borrador });
+    return this.ejecutarSeguro(interp, { ocCitada, borrador, msg });
   }
 
   private async ejecutarSeguro(interp: Interpretacion, ctx: Ctx) {
@@ -896,11 +896,12 @@ export class Procesador {
     return `🗒️ Tus notas (${ns.length}):\n${lineas.join("\n")}${ns.length > 40 ? "\n…y más en el panel." : ""}\n\nPreguntame: _¿cuál era la clave del wifi?_`;
   }
 
-  private async confirmar(ocId: number) {
+  /** Marca el aviso como hecho en silencio: sin mensaje, solo una reacción ✅ (queda en el historial). */
+  private async confirmar(ocId: number, reaccionarA: WAMessage) {
     const oc = await confirmarOcurrencia(ocId);
     if (!oc) return this.decir(frases.yaCerrado());
-    const rec = await obtenerRecordatorio(oc.recordatorioId);
-    return this.decir(frases.hecho(rec?.titulo ?? "el recordatorio"), { recordatorioId: oc.recordatorioId, intencion: "confirmar" });
+    await this.canal.reaccionar(reaccionarA, "✅").catch(() => {});
+    await registrarAqui({ direccion: "saliente", tipo: "reaccion", texto: "✅", recordatorioId: oc.recordatorioId, intencionDetectada: "confirmar" });
   }
 
   private async posponerA(ocId: number, hasta: Date) {
@@ -1005,7 +1006,7 @@ export class Procesador {
         if (!oc && i.recordatorio_ids.length === 1) oc = await ultimaOcurrenciaEnviada(i.recordatorio_ids[0], chat());
         oc ??= await ultimaOcurrenciaEnviada(undefined, chat());
         if (!oc) return this.decir(frases.nadaPendiente());
-        return this.confirmar(oc.id);
+        return this.confirmar(oc.id, ctx.msg);
       }
       case "posponer": {
         const hasta = fechaDe(i.posponer_hasta) ?? (i.posponer_minutos ? new Date(Date.now() + i.posponer_minutos * 60_000) : null);

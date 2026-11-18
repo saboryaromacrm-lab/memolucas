@@ -76,6 +76,8 @@ describe("bot", () => {
   const respuestas: string[] = [];
   const destinos: (string | null)[] = [];
   const encuestas: { nombre: string; opciones: string[]; id: string }[] = [];
+  /** Las reacciones del bot: sobre qué mensaje y con qué emoji. */
+  const reacciones: { id: string; emoji: string }[] = [];
   const canal = {
     responderEncuesta: async (nombre: string, opciones: string[]) => {
       const id = `ENC${encuestas.length + 1}`;
@@ -85,7 +87,7 @@ describe("bot", () => {
     descifrarVoto: (msg: WAMessage) => [hashOpcion(Buffer.from(msg.message!.pollUpdateMessage!.vote!.encPayload!).toString())],
     responder: async (t: string, destino?: string | null) => (respuestas.push(t), destinos.push(destino ?? null), `OUT${respuestas.length}`),
     responderImagen: async (_r: string, _m: string, t: string) => (respuestas.push(`[foto] ${t}`), `OUT${respuestas.length}`),
-    reaccionar: async () => {},
+    reaccionar: async (m: WAMessage, emoji: string) => void reacciones.push({ id: m.key.id!, emoji }),
     descargarMedia: async () => sharp({ create: { width: 20, height: 20, channels: 3, background: "#fff" } }).jpeg().toBuffer(),
   };
   const bot = new Procesador(canal);
@@ -96,6 +98,7 @@ describe("bot", () => {
     respuestas.length = 0;
     destinos.length = 0;
     encuestas.length = 0;
+    reacciones.length = 0;
     interpretar.mockReset();
     fijarAzar(() => 0);
     reloj(local("2026-10-22T08:00"));
@@ -190,9 +193,19 @@ describe("bot", () => {
 
     vi.setSystemTime(local("2026-10-22T09:00"));
     for (const id of await ocurrenciasVencidas()) await procesarOcurrencia(id);
-    await bot.procesar(texto("listo"));
-    expect(respuestas.at(-1)).toContain("*Tomar la pastilla*, hecho");
+    // "listo" lo marca en silencio: sin mensaje, con una reacción ✅ sobre lo que escribió.
+    const listo = texto("listo");
+    const antes = respuestas.length;
+    await bot.procesar(listo);
+    expect(respuestas).toHaveLength(antes);
+    expect(reacciones).toEqual([{ id: listo.key.id, emoji: "✅" }]);
+    expect(await recordatoriosActivos()).toHaveLength(0);
     expect(interpretar).toHaveBeenCalledTimes(1);
+
+    // Sin nada esperando, avisa: así no cree que registró algo.
+    await bot.procesar(texto("hecho"));
+    expect(respuestas.at(-1)).toBe("No tengo ningún aviso esperando 👌");
+    expect(reacciones).toHaveLength(1);
   });
 
   it("si la IA falla responde el mensaje de error", async () => {
@@ -421,8 +434,10 @@ describe("bot", () => {
     vi.setSystemTime(local("2026-10-22T09:15"));
     for (const id of await ocurrenciasVencidas()) await procesarOcurrencia(id);
     expect(wa.encuestas).toHaveLength(2);
+    const antes = respuestas.length;
     await bot.procesar(voto(wa.encuestas[1].id, "✅ Hecho"));
-    expect(respuestas.at(-1)).toContain("*Sacar la ropa*, hecho");
+    expect(respuestas).toHaveLength(antes);
+    expect(reacciones).toEqual([{ id: wa.encuestas[1].id, emoji: "✅" }]);
     expect(await recordatoriosActivos()).toHaveLength(0);
   });
 
@@ -437,9 +452,10 @@ describe("bot", () => {
     expect(wa.enviados).toHaveLength(1);
     expect(wa.encuestas).toHaveLength(2);
     expect(wa.encuestas[1].nombre).toBe("🔁 ¿Pudiste con Tomar la pastilla?");
-    // Escribir "listo" sigue funcionando.
+    // Escribir "listo" sigue funcionando (en silencio).
     await bot.procesar(texto("listo"));
-    expect(respuestas.at(-1)).toContain("*Tomar la pastilla*, hecho");
+    expect(reacciones.map((r) => r.emoji)).toEqual(["✅"]);
+    expect(await recordatoriosActivos()).toHaveLength(0);
   });
 
   it("'no voy' respondiendo al aviso: un turno único se cancela", async () => {
@@ -581,8 +597,10 @@ describe("bot", () => {
       expect(wa.enviados[0].destino).toBe(G);
 
       // "listo" en el grupo confirma el aviso que está insistiendo.
+      const antes = respuestas.length;
       await bot.procesar(enGrupo("listo"), origen);
-      expect(respuestas.at(-1)).toContain("*Cumple de la abuela*, hecho");
+      expect(respuestas).toHaveLength(antes);
+      expect(reacciones.map((r) => r.emoji)).toEqual(["✅"]);
     });
 
     it("'listo' en el grupo sin avisos pendientes es charla", async () => {

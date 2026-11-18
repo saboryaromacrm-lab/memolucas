@@ -9,7 +9,6 @@ export const variar = (opciones: string[]) => opciones[Math.floor(azar() * opcio
 
 export const frases = {
   intro: () => variar(["Agendado 👌", "Listo, quedó así:", "Hecho, te lo anoto 👇", "Dale 👍"]),
-  hecho: (t: string) => variar([`✅ ¡Bien ahí! *${t}*, hecho.`, `✅ Listo, *${t}* tachado.`, `👏 Genial, marqué *${t}* como hecho.`]),
   pospuesto: (t: string, cuando: string) =>
     variar([`⏰ Dale, te vuelvo a avisar ${cuando}: *${t}*.`, `👌 Ok, *${t}* para ${cuando}.`, `⏰ Hecho, te lo recuerdo ${cuando}.`]),
   borrado: (t: string) => variar([`🗑️ Listo, borré *${t}*.`, `🗑️ Chau *${t}*, ya no te lo recuerdo.`]),
