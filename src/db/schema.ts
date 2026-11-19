@@ -1,13 +1,10 @@
-import { sql } from "drizzle-orm";
 import {
   boolean,
-  doublePrecision,
   index,
   integer,
   jsonb,
   numeric,
   pgTable,
-  primaryKey,
   serial,
   text,
   timestamp,
@@ -92,25 +89,6 @@ export const configuracion = pgTable("configuracion", {
   // Opciones para tocar (encuestas de WhatsApp) en avisos y propuestas.
   usarEncuestas: boolean("usar_encuestas").notNull().default(true),
 
-  // Compras (facturas de proveedores): lectura con IA y envío al ERP.
-  comprasModelo: text("compras_modelo").notNull().default("claude-sonnet-5-5"),
-  comprasModeloReintento: text("compras_modelo_reintento").notNull().default("claude-opus-5-5"),
-  /** Instructivo para la IA; vacío = el que viene con la app. */
-  comprasInstructivo: text("compras_instructivo").notNull().default(""),
-  comprasEsperaSeg: integer("compras_espera_seg").notNull().default(60),
-  comprasDiasArchivo: integer("compras_dias_archivo").notNull().default(30),
-  erpUrl: text("erp_url").notNull().default(""),
-  erpTokenCifrado: text("erp_token_cifrado"),
-  erpEnvioAuto: boolean("erp_envio_auto").notNull().default(true),
-  /** Panel de compras (para el colaborador): su dirección, su logo y su bloqueo por intentos. */
-  comprasDominio: text("compras_dominio").notNull().default("comprascoff.saboryaroma.com"),
-  comprasLogoAdjuntoId: integer("compras_logo_adjunto_id"),
-  comprasIntentosFallidos: integer("compras_intentos_fallidos").notNull().default(0),
-  comprasBloqueadoHasta: ts("compras_bloqueado_hasta"),
-  /** Productos: modelo que reconoce la presentación y aviso de suba de precio (%). */
-  productosModelo: text("productos_modelo").notNull().default("claude-haiku-5-5"),
-  productosAlertaPct: integer("productos_alerta_pct").notNull().default(10),
-
   actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
 });
 
@@ -128,7 +106,7 @@ export const adjunto = pgTable("adjunto", {
 export const grupo = pgTable("grupo", {
   jid: text("jid").primaryKey(),
   nombre: text("nombre").notNull(),
-  /** Grupo de compras: toda foto o PDF es un comprobante y no se hacen recordatorios. */
+  /** Era el grupo de compras: a la primera foto o PDF se le avisa que las facturas ahora van al ERP, y pasa a ser normal. */
   compras: boolean("compras").notNull().default(false),
   creadoEn: creadoEn(),
   actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
@@ -244,8 +222,7 @@ export const borradorPendiente = pgTable("borrador_pendiente", {
 export type AccionEncuesta =
   | { tipo: "aviso"; ocurrenciaId: number }
   | { tipo: "propuesta"; borradorId: number }
-  | { tipo: "elegir"; ids: number[]; interpretacion: Record<string, unknown> }
-  | { tipo: "comprobante"; comprobanteId: number };
+  | { tipo: "elegir"; ids: number[]; interpretacion: Record<string, unknown> };
 
 /** Encuestas que manda el bot: la clave para descifrar los votos y qué hacer con cada opción. */
 export const encuesta = pgTable(
@@ -291,186 +268,3 @@ export type Configuracion = typeof configuracion.$inferSelect;
 export type Adjunto = typeof adjunto.$inferSelect;
 export type Nota = typeof nota.$inferSelect;
 export type Grupo = typeof grupo.$inferSelect;
-export type FilaComprobante = typeof comprobante.$inferSelect;
-export type UsuarioCompras = typeof usuarioCompras.$inferSelect;
-export type LecturaCompras = typeof lecturaCompras.$inferSelect;
-export type Producto = typeof producto.$inferSelect;
-export type Proveedor = typeof proveedor.$inferSelect;
-export type FormaPago = typeof formaPago.$inferSelect;
-export type PrecioProducto = typeof precioProducto.$inferSelect;
-export type UnidadCompra = "bulto" | "unidad" | "kg" | "litro";
-
-/** Comprobantes de compra leídos con IA. Los datos (el JSON del instructivo) van cifrados. */
-export const comprobante = pgTable(
-  "comprobante",
-  {
-    id: serial("id").primaryKey(),
-    chat: text("chat"),
-    autor: text("autor"),
-    /** Por dónde llegó: el bot de WhatsApp, el panel de compras o cargada a mano (sin factura). */
-    origen: text("origen").$type<"whatsapp" | "panel" | "manual">().notNull().default("whatsapp"),
-    proveedorId: integer("proveedor_id").references(() => proveedor.id, { onDelete: "set null" }),
-    formaPagoId: integer("forma_pago_id").references(() => formaPago.id, { onDelete: "set null" }),
-    estado: text("estado").$type<"pendiente" | "revisar" | "confirmado" | "descartado">().notNull(),
-    datosCifrados: text("datos_cifrados").notNull(),
-    /** Hash para detectar el mismo comprobante cargado dos veces. */
-    clave: text("clave"),
-    fecha: text("fecha"),
-    total: numeric("total", { precision: 16, scale: 2 }),
-    cierra: boolean("cierra").notNull(),
-    modelo: text("modelo"),
-    adjuntoIds: integer("adjunto_ids").array().notNull().default([]),
-    archivosBorrados: boolean("archivos_borrados").notNull().default(false),
-    /** Mensaje con el resumen que mandó el bot (para responderle). */
-    waMessageId: text("wa_message_id"),
-    /** Hasta cuándo el próximo mensaje del chat se toma como corrección. */
-    corrigiendoHasta: ts("corrigiendo_hasta"),
-    confirmadoEn: ts("confirmado_en"),
-    enviadoEn: ts("enviado_en"),
-    envioError: text("envio_error"),
-    /** Cuándo se pasaron sus renglones a Productos (null = falta) y cuántas veces falló. */
-    productosEn: ts("productos_en"),
-    productosIntentos: integer("productos_intentos").notNull().default(0),
-    creadoEn: creadoEn(),
-    actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
-  },
-  (t) => [
-    index("comprobante_clave_idx").on(t.clave),
-    index("comprobante_creado_idx").on(t.creadoEn),
-    index("comprobante_proveedor_idx").on(t.proveedorId),
-    index("comprobante_forma_pago_idx").on(t.formaPagoId),
-  ],
-);
-
-/** Personas que entran al panel de compras, cada una con su clave. */
-export const usuarioCompras = pgTable("usuario_compras", {
-  id: serial("id").primaryKey(),
-  nombre: text("nombre").notNull(),
-  claveHash: text("clave_hash").notNull(),
-  activo: boolean("activo").notNull().default(true),
-  /** Si puede ver Métricas (los números del negocio). */
-  metricas: boolean("metricas").notNull().default(false),
-  // Se incrementa al cambiar la clave o desactivarla: cierra sus sesiones.
-  version: integer("version").notNull().default(1),
-  ultimoIngreso: ts("ultimo_ingreso"),
-  creadoEn: creadoEn(),
-});
-
-/** Fotos o PDF subidos desde el panel de compras mientras se leen (o si la lectura falló). */
-export const lecturaCompras = pgTable(
-  "lectura_compras",
-  {
-    id: serial("id").primaryKey(),
-    /** Lo genera el celular: si se reintenta la subida, no se duplica. */
-    clienteId: text("cliente_id").notNull(),
-    usuarioId: integer("usuario_id"),
-    autor: text("autor"),
-    estado: text("estado").$type<"leyendo" | "lista" | "error" | "repetido" | "vacia">().notNull().default("leyendo"),
-    adjuntoIds: integer("adjunto_ids").array().notNull().default([]),
-    nombres: text("nombres").array().notNull().default([]),
-    comprobanteIds: integer("comprobante_ids").array().notNull().default([]),
-    mensaje: text("mensaje"),
-    /** El aviso (error, repetido) ya se vio y se cerró. */
-    cerrada: boolean("cerrada").notNull().default(false),
-    creadoEn: creadoEn(),
-    actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
-  },
-  (t) => [uniqueIndex("lectura_cliente_idx").on(t.clienteId)],
-);
-
-/** Productos comprados (de las facturas confirmadas). El mismo producto de distintos proveedores es uno solo. */
-export const producto = pgTable("producto", {
-  id: serial("id").primaryKey(),
-  nombre: text("nombre").notNull(),
-  /** Nombre normalizado: no puede haber dos productos con el mismo. */
-  clave: text("clave").notNull().unique(),
-  categoria: text("categoria").notNull().default("Otros"),
-  clase: text("clase").$type<"mercaderia" | "gasto">().notNull().default("mercaderia"),
-  /** Contenido de cada unidad, en kg o litros (ej. 0,5 l), para el precio por kg o litro. */
-  contenido: doublePrecision("contenido"),
-  medida: text("medida").$type<"kg" | "l">(),
-  creadoEn: creadoEn(),
-  actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
-});
-
-/** Cómo figura el producto en las facturas de cada proveedor (código o descripción): así no se vuelve a preguntar a la IA. */
-export const productoAlias = pgTable("producto_alias", {
-  clave: text("clave").primaryKey(),
-  productoId: integer("producto_id")
-    .notNull()
-    .references(() => producto.id, { onDelete: "cascade" }),
-  proveedor: text("proveedor").notNull(),
-  creadoEn: creadoEn(),
-});
-
-/** Cada compra de un producto: de acá salen los precios por bulto, unidad y kg o litro. */
-export const precioProducto = pgTable(
-  "precio_producto",
-  {
-    id: serial("id").primaryKey(),
-    productoId: integer("producto_id")
-      .notNull()
-      .references(() => producto.id, { onDelete: "cascade" }),
-    comprobanteId: integer("comprobante_id")
-      .notNull()
-      .references(() => comprobante.id, { onDelete: "cascade" }),
-    renglon: integer("renglon").notNull(),
-    aliasClave: text("alias_clave").notNull(),
-    proveedor: text("proveedor").notNull(),
-    fecha: text("fecha").notNull(),
-    descripcion: text("descripcion").notNull(),
-    cantidad: doublePrecision("cantidad").notNull(),
-    unidadCompra: text("unidad_compra").$type<UnidadCompra>().notNull(),
-    unidadesPorBulto: doublePrecision("unidades_por_bulto").notNull().default(0),
-    /** Lo que costó el renglón: con IVA e impuestos internos, sin percepciones, con descuentos y bonificación. */
-    costoFinal: doublePrecision("costo_final").notNull(),
-    creadoEn: creadoEn(),
-  },
-  (t) => [index("precio_producto_idx").on(t.productoId), index("precio_comprobante_idx").on(t.comprobanteId)],
-);
-
-/** Qué productos vende cada proveedor: se enlazan solos con cada compra, y también a mano desde su ficha. */
-export const productoProveedor = pgTable(
-  "producto_proveedor",
-  {
-    productoId: integer("producto_id")
-      .notNull()
-      .references(() => producto.id, { onDelete: "cascade" }),
-    proveedorId: integer("proveedor_id")
-      .notNull()
-      .references(() => proveedor.id, { onDelete: "cascade" }),
-    creadoEn: creadoEn(),
-  },
-  (t) => [primaryKey({ columns: [t.productoId, t.proveedorId] }), index("producto_proveedor_proveedor_idx").on(t.proveedorId)],
-);
-
-/** Proveedores de Coffit. Se crean solos con las facturas (por CUIT o nombre) o a mano. */
-export const proveedor = pgTable("proveedor", {
-  id: serial("id").primaryKey(),
-  nombre: text("nombre").notNull(),
-  /** Nombre normalizado: no puede haber dos proveedores con el mismo. */
-  clave: text("clave").notNull().unique(),
-  /** Solo para reconocerlo en las facturas; no se muestra. */
-  cuit: text("cuit").unique(),
-  notas: text("notas").notNull().default(""),
-  /** Oculto: no aparece para elegir, pero conserva sus compras. */
-  oculto: boolean("oculto").notNull().default(false),
-  /** La forma de pago habitual: se pone sola al elegirlo en una compra. */
-  formaPagoId: integer("forma_pago_id").references(() => formaPago.id, { onDelete: "set null" }),
-  creadoEn: creadoEn(),
-  actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
-});
-
-/** Formas de pago de las compras (efectivo, transferencia…), en el orden en que se ofrecen. */
-export const formaPago = pgTable("forma_pago", {
-  id: serial("id").primaryKey(),
-  nombre: text("nombre").notNull(),
-  /** Nombre normalizado: no puede haber dos con el mismo. */
-  clave: text("clave").notNull().unique(),
-  /** Cómo la anota el lector de facturas (pagoQueFigura.medio), para preelegirla. */
-  medio: text("medio").unique(),
-  orden: integer("orden").notNull().default(0),
-  /** Oculta: no aparece para elegir, pero conserva sus compras. */
-  oculta: boolean("oculta").notNull().default(false),
-  creadoEn: creadoEn(),
-});

@@ -1,8 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import sharp from "sharp";
 import { eq } from "drizzle-orm";
 import { DateTime } from "luxon";
 import { db } from "../src/db/index.js";
+import { rutas } from "../src/entorno.js";
 import { ocurrencia, recordatorio } from "../src/db/schema.js";
+import { guardarImagen } from "../src/servicios/adjuntos.js";
 import { actualizarConfig } from "../src/servicios/configuracion.js";
 import { ocurrenciasVencidas, procesarOcurrencia } from "../src/servicios/disparador.js";
 import {
@@ -13,6 +18,7 @@ import {
   posponerOcurrencia,
   recurrentesParaAvanzar,
 } from "../src/servicios/recordatorios.js";
+import { borrarArchivosSueltos } from "../src/servicios/scheduler.js";
 import { baseLimpia, enviadorFalso, reloj } from "./ayuda.js";
 
 const Z = "America/Argentina/Buenos_Aires";
@@ -160,5 +166,31 @@ describe("ciclo de un recordatorio", () => {
     t.ir(local("2026-10-22T09:00"));
     await barrer();
     expect(wa.enviados).toHaveLength(0);
+  });
+});
+
+describe("archivos sueltos", () => {
+  beforeEach(async () => {
+    await baseLimpia();
+    // La carpeta de pruebas tiene los archivos que dejan las otras pruebas.
+    await fs.rm(rutas.media, { recursive: true, force: true });
+  });
+
+  it("borra los archivos que no son de ningún adjunto (de más de una hora); los demás quedan", async () => {
+    const foto = await guardarImagen(await sharp({ create: { width: 10, height: 10, channels: 3, background: "#fff" } }).jpeg().toBuffer(), "image/jpeg");
+    const viejo = path.join(rutas.media, "factura-vieja.jpg");
+    const recien = path.join(rutas.media, "guardandose.jpg");
+    await fs.writeFile(viejo, "x");
+    await fs.writeFile(recien, "x");
+    const haceDosHoras = new Date(Date.now() - 2 * 3_600_000);
+    await fs.utimes(viejo, haceDosHoras, haceDosHoras);
+    await fs.utimes(foto.rutaArchivo, haceDosHoras, haceDosHoras);
+
+    expect(await borrarArchivosSueltos()).toBe(1);
+    const existe = (r: string) => fs.access(r).then(() => true, () => false);
+    expect(await existe(viejo)).toBe(false);
+    expect(await existe(recien)).toBe(true);
+    expect(await existe(foto.rutaArchivo)).toBe(true);
+    await fs.rm(recien);
   });
 });

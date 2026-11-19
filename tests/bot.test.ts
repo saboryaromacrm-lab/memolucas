@@ -3,7 +3,7 @@ import type { WAMessage } from "baileys";
 import { DateTime } from "luxon";
 import { eq, sql } from "drizzle-orm";
 import { db } from "../src/db/index.js";
-import { mensaje } from "../src/db/schema.js";
+import { grupo, mensaje } from "../src/db/schema.js";
 import { Procesador } from "../src/bot/procesador.js";
 import type { AnalisisEnlace, AnalisisFoto, Interpretacion } from "../src/bot/ia.js";
 import type { ContenidoEnlace } from "../src/servicios/enlaces.js";
@@ -556,6 +556,27 @@ describe("bot", () => {
     });
     await bot.procesar(texto("agregá leche y pan a la lista"));
     expect(respuestas[0]).toContain("Anotado: *Compras*");
+  });
+
+  it("un PDF por privado avisa que las facturas ahora se cargan en el ERP", async () => {
+    await bot.procesar({ key: { id: "PDF1", remoteJid: YO }, message: { documentMessage: { mimetype: "application/pdf", fileName: "factura.pdf" } } });
+    expect(respuestas).toEqual(["🧾 Las facturas ahora se cargan en el ERP de Coffit: https://tiendacoffit.saboryaroma.com"]);
+  });
+
+  it("en el que era el grupo de compras, la primera foto recibe el aviso del ERP y después es un grupo normal", async () => {
+    const G = "120363000000000009@g.us";
+    const origen = { grupo: { jid: G, nombre: "Compras Coffit" }, autor: "Martín" };
+    await db.insert(grupo).values({ jid: G, nombre: "Compras Coffit", compras: true });
+    const foto = (id: string): WAMessage => ({ key: { id, remoteJid: G }, pushName: "Martín", message: { imageMessage: { mimetype: "image/jpeg", fileLength: 1000 } } });
+    analizarFoto.mockReset();
+    await bot.procesar(foto("GC1"), origen);
+    expect(respuestas).toEqual(["🧾 Las facturas ahora se cargan en el ERP de Coffit: https://tiendacoffit.saboryaroma.com"]);
+    const [g] = await db.select().from(grupo).where(eq(grupo.jid, G));
+    expect(g.compras).toBe(false);
+    // La segunda foto ya es charla de un grupo normal: no se contesta ni se analiza.
+    await bot.procesar(foto("GC2"), origen);
+    expect(respuestas).toHaveLength(1);
+    expect(analizarFoto).not.toHaveBeenCalled();
   });
 
   describe("grupo de la familia", () => {

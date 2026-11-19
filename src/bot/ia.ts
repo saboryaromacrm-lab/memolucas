@@ -337,8 +337,8 @@ function unirTurnos(ms: Anthropic.MessageParam[]): Anthropic.MessageParam[] {
 
 export const EsquemaFoto = z.object({
   tipo: z
-    .enum(["factura", "compra", "turno", "entrada", "invitacion", "receta", "otro"])
-    .describe('"factura": servicio o cuenta a pagar con vencimiento (luz, gas, tarjeta). "compra": comprobante de un proveedor por mercadería o insumos ya comprados (factura, remito, ticket)'),
+    .enum(["factura", "turno", "entrada", "invitacion", "receta", "otro"])
+    .describe('"factura": servicio o cuenta a pagar con vencimiento (luz, gas, tarjeta)'),
   descripcion: z.string().describe("Qué es, en una frase"),
   util: z.boolean().describe("true si tiene datos para armar un recordatorio"),
   titulo: z.string().nullable(),
