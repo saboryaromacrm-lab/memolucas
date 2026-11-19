@@ -144,7 +144,7 @@ function Principal({ marca, sesion: { nombre, metricas }, onSalir }: { marca: Ma
     facturas: <Facturas key={destino?.vez} ancho={ancho} inicial={d?.pestana === "facturas" ? d : undefined} ir={ir} borraConfirmadas={metricas} />,
     productos: <Productos key={destino?.vez} ancho={ancho} inicial={d?.pestana === "productos" ? d : undefined} />,
     metricas: <Metricas ancho={ancho} ir={ir} />,
-    configuracion: <Configuracion key={destino?.vez} ancho={ancho} proveedorId={d?.pestana === "configuracion" ? d.proveedorId : undefined} />,
+    configuracion: <Configuracion key={destino?.vez} ancho={ancho} proveedorId={d?.pestana === "configuracion" ? d.proveedorId : undefined} metricas={metricas} />,
   }[pestana];
 
   if (ancho === "movil") {
