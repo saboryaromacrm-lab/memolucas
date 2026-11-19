@@ -25,6 +25,7 @@ export const frases = {
       "No te entendí bien 🤔. Probá con algo como _recordame mañana a las 10 pagar la luz_, o escribí *ayuda*.",
       "Mmm, no lo pesqué 🤔. Podés decirme por ejemplo _avisame el viernes a las 9 que tengo turno_.",
     ]),
+  horaPasada: () => variar(["Esa hora ya pasó 🤔 ¿Te lo pongo más tarde o mañana?", "Uy, esa hora ya pasó 🤔 ¿Para cuándo te lo pongo?"]),
   otraFecha: () => variar(["Dale, ¿para cuándo? Decime día y hora 🗓️", "Ok, ¿qué día y a qué hora te lo pongo?"]),
   rechazado: () => variar(["Dale, no te lo recuerdo 👍", "Ok, lo dejamos así 👍"]),
 };

@@ -265,7 +265,9 @@ Hora por defecto si no se indica: ${cfg.horaDefecto}. "A la tarde" = ${cfg.horaT
 Tu tarea es interpretar el último mensaje y devolver SIEMPRE el JSON de intención.
 Reglas:
 - Los campos que no correspondan van vacíos: "" en textos, 0 en números, [] en listas.
-- No inventes fechas. Si falta el día (ej. "recordame llamar a Juan"), usá falta_info "fecha" y en "respuesta" preguntá cuándo, mencionando lo que entendiste: "Dale, ¿para cuándo te agendo *llamar a Juan*?".
+- No inventes fechas. Si dice la hora pero no el día ("escribir a Ideas a las 9", "turno con el doctor a las 15"), es HOY a esa hora: no preguntes el día.
+- Si esa hora de hoy ya pasó, no agendes: falta_info "fecha" y preguntá. Si es una hora de 1 a 12 y la misma de la tarde/noche todavía no pasó, ofrecé las dos: "Las 6 ya pasaron, ¿te lo pongo hoy a las 18 o mañana a las 6?". Si no: "Las 18 ya pasaron, ¿te lo pongo mañana a las 18?".
+- Si no dice ni día ni hora (ej. "recordame llamar a Juan"), usá falta_info "fecha" y en "respuesta" preguntá en cuánto tiempo, mencionando lo que entendiste: "Dale, ¿en cuánto tiempo te recuerdo *llamar a Juan*?". Si es un turno, cita, reunión, viaje o evento, preguntá cuándo es: "¿Qué día y a qué hora es el *turno con el doctor*?".
 - Si es un TURNO, CITA, REUNIÓN, VIAJE o EVENTO y dice el día pero no la hora, NO uses la hora por defecto: falta_info "hora" y preguntá, ej. "¿A qué hora es el turno con el doctor el viernes?". Para tareas comunes sin hora ("mañana comprar pilas") sí usá la hora por defecto.
 - "Mañana", "pasado", "el finde" (sábado), "el lunes" (el próximo) se resuelven con la fecha actual. Relativos ("en 2 horas") desde la hora actual exacta.
 - fecha_hora siempre en ISO 8601 con offset. Para recurrentes, fecha_hora es la primera vez y recurrencia es una RRULE (sin DTSTART), ej. "todos los lunes a las 8" → FREQ=WEEKLY;BYDAY=MO;BYHOUR=8;BYMINUTE=0; "el 10 de cada mes" → FREQ=MONTHLY;BYMONTHDAY=10; "cada 3 días" → FREQ=DAILY;INTERVAL=3.

@@ -961,6 +961,8 @@ export class Procesador {
       case "crear_recordatorio": {
         const items = i.recordatorios.filter((r) => r.titulo && fechaDe(r.fecha_hora));
         if (i.falta_info || !items.length) return this.decir(i.respuesta ?? "¿Para cuándo te lo recuerdo? 🗓️", { intencion: "falta_info" });
+        // Una hora que ya pasó no va a sonar nunca: se pregunta en vez de agendarla.
+        if (items.some((it) => !it.recurrencia && fechaDe(it.fecha_hora)! <= new Date())) return this.decir(frases.horaPasada(), { intencion: "falta_info" });
         const respuestas: string[] = [];
         const creados: number[] = [];
         let ofrecer = false;
