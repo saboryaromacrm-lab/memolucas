@@ -7,16 +7,16 @@ import { db } from "../db/index.js";
 import {
   adjunto,
   borradorPendiente,
+  grupo,
   mensaje,
   ocurrencia,
   type AccionEncuesta,
-  type FilaComprobante,
   type Ocurrencia,
   type Recordatorio,
 } from "../db/schema.js";
 import { ahora, aLocal, formatearCuando } from "../lib/fechas.js";
 import { registrar } from "../lib/log.js";
-import { borrarAdjunto, guardarArchivo, guardarImagen, imagenParaIa, MIMES_IMAGEN } from "../servicios/adjuntos.js";
+import { borrarAdjunto, guardarImagen, imagenParaIa, MIMES_IMAGEN } from "../servicios/adjuntos.js";
 import { actualizarConfig, obtenerConfig, plantillasDe, renderizar } from "../servicios/configuracion.js";
 import { listarRango } from "./rangos.js";
 import { rangoHoy, rangoManana, rangoSemana, textoListado, textoTodos } from "../servicios/listados.js";
@@ -47,27 +47,7 @@ import { ErrorAudio, transcribir } from "../servicios/audio.js";
 import { actualizarNota, borrarNota, crearNota, obtenerNota, relacionadas, todasLasNotas } from "../servicios/notas.js";
 import { obtenerAdjunto } from "../servicios/adjuntos.js";
 import { normalizar } from "../lib/textos.js";
-import {
-  encuestaPorWaId,
-  marcarRespondida,
-  OPCIONES_COMPROBANTE,
-  opcionElegida,
-  opcionesAviso,
-  OPCIONES_PROPUESTA,
-  registrarEncuesta,
-} from "../servicios/encuestas.js";
-import { textoResumen, tituloComprobante, type Comprobante } from "../lib/comprobantes.js";
-import {
-  comprobanteEnCorreccion,
-  comprobantePorMensaje,
-  confirmarComprobante,
-  descartarComprobante,
-  empezarCorreccion,
-  esGrupoCompras,
-  fijarMensaje,
-  obtenerComprobante,
-} from "../servicios/compras.js";
-import { corregirConTexto, leerYGuardar, textoRepetido } from "../servicios/lectura-compras.js";
+import { encuestaPorWaId, marcarRespondida, opcionElegida, OPCIONES_PROPUESTA, registrarEncuesta } from "../servicios/encuestas.js";
 import { cuandoBonito, textoPrevios } from "./formato.js";
 import { frases, sinFormato } from "./frases.js";
 
@@ -81,7 +61,7 @@ export interface CanalBot {
   /** Opciones votadas (como hash), o null si no se pudo descifrar. */
   descifrarVoto(msg: WAMessage, secreto: string): Uint8Array[] | null;
   descargarMedia(msg: WAMessage): Promise<Buffer>;
-  /** Reacción con un emoji (ej. 👀 al recibir un comprobante). */
+  /** Reacción con un emoji (ej. ✅ al confirmar). */
   reaccionar(msg: WAMessage, emoji: string): Promise<void>;
 }
 
@@ -93,13 +73,11 @@ type Contexto = OrigenMensaje & { msg: WAMessage; compras: boolean };
 const contexto = new AsyncLocalStorage<Contexto>();
 const chat = (): string | null => contexto.getStore()?.grupo?.jid ?? null;
 const enGrupo = () => !!contexto.getStore()?.grupo;
-/** Grupo de compras: solo comprobantes, sin recordatorios. */
+/** El que era el grupo de compras: la primera foto o PDF recibe el aviso de que las facturas ahora van al ERP. */
 const enCompras = () => !!contexto.getStore()?.compras;
 
-/** En privado, una foto con "factura", "remito"… en el pie va directo a compras. */
-const PIDE_COMPRA = /\b(factura|facturas|remito|remitos|comprobante|comprobantes|ticket|nota de credito|nota de debito)\b/;
-
-type ArchivoLote = { adjuntoId: number; nombre: string; mime: string };
+/** Las facturas de proveedores ya no se leen acá: se cargan en el ERP. */
+const AVISO_FACTURAS = "🧾 Las facturas ahora se cargan en el ERP de Coffit: https://tiendacoffit.saboryaroma.com";
 
 function documentoDe(msg: WAMessage) {
   const m = msg.message;
@@ -264,7 +242,8 @@ export class Procesador {
   }
 
   async procesar(msg: WAMessage, origen: OrigenMensaje = { grupo: null, autor: null }): Promise<void> {
-    const compras = await esGrupoCompras(origen.grupo?.jid ?? null);
+    const [g] = origen.grupo ? await db.select({ compras: grupo.compras }).from(grupo).where(eq(grupo.jid, origen.grupo.jid)) : [];
+    const compras = !!g?.compras;
     return contexto.run({ ...origen, msg, compras }, () => this.procesarAqui(msg));
   }
 
@@ -273,7 +252,7 @@ export class Procesador {
     if (!m) return;
     if (m.reactionMessage) return this.reaccion(msg);
     if (m.pollUpdateMessage) return this.voto(msg);
-    if (enCompras()) return this.mensajeCompras(msg);
+    if (enCompras() && (m.imageMessage || documentoDe(msg))) return this.avisarFacturasEnErp(msg);
     if (m.imageMessage) return this.foto(msg);
     if (documentoDe(msg)) return this.documento(msg);
     if (m.audioMessage) return this.audio(msg);
@@ -324,8 +303,6 @@ export class Procesador {
     const emoji = r.text ?? "";
     await registrarAqui({ direccion: "entrante", tipo: "reaccion", texto: emoji, waMessageId: msg.key.id });
     if (!EMOJIS_CONFIRMACION.includes(emoji) || !r.key?.id) return;
-    const comp = await comprobantePorMensaje(r.key.id, chat());
-    if (comp) return this.confirmarCompra(comp.id);
     const original = await mensajePorWaId(r.key.id);
     // Su propia reacción ya muestra que quedó hecho: no se contesta.
     if (original?.ocurrenciaId) await confirmarOcurrencia(original.ocurrenciaId);
@@ -373,190 +350,30 @@ export class Procesador {
         const interp = { ...(a.interpretacion as unknown as Interpretacion), recordatorio_ids: [recId] };
         return this.ejecutarSeguro(interp, { ocCitada: null, borrador: await borradorActivo(), msg: encuesta });
       }
-      case "comprobante":
-        if (elegida === 0) return this.confirmarCompra(a.comprobanteId);
-        if (elegida === 2) return this.descartarCompra(a.comprobanteId);
-        return this.pedirCorreccion(a.comprobanteId);
     }
   }
 
-  // ───────────── Compras (comprobantes de proveedores) ─────────────
-
-  private lotes = new Map<string, { archivos: ArchivoLote[]; timer?: NodeJS.Timeout; ctx: Contexto }>();
-  private leyendo = new Set<Promise<void>>();
-
-  /** En el grupo de compras: fotos y PDF son comprobantes; el texto solo cuenta si responde a uno. */
-  private async mensajeCompras(msg: WAMessage) {
-    const m = msg.message!;
-    if (m.imageMessage || documentoDe(msg)) return this.archivoCompra(msg);
-    const texto = textoMensaje(msg)?.trim();
-    if (!texto) return void (await registrarAqui({ direccion: "entrante", tipo: m.audioMessage ? "audio" : "otro", texto: null, waMessageId: msg.key.id }));
-    const entrante = await registrarAqui({ direccion: "entrante", texto, waMessageId: msg.key.id });
-    const respondio = await this.respuestaCompra(msg, texto);
-    await db.update(mensaje).set({ intencionDetectada: respondio ? "comprobante" : "ignorar" }).where(eq(mensaje.id, entrante.id));
+  /**
+   * El que era el grupo de compras: a la primera foto o PDF se le avisa que las facturas ahora se cargan en el ERP,
+   * y pasa a ser un grupo normal (solo responde si le piden algo).
+   */
+  private async avisarFacturasEnErp(msg: WAMessage) {
+    await registrarAqui({ direccion: "entrante", tipo: msg.message!.imageMessage ? "imagen" : "otro", texto: null, waMessageId: msg.key.id });
+    await db.update(grupo).set({ compras: false }).where(eq(grupo.jid, chat()!));
+    return this.decir(AVISO_FACTURAS);
   }
 
-  /** Documento en privado: un PDF es un comprobante. En el grupo de la familia no se usan. */
+  /** Documento: en privado, un PDF suele ser una factura (ahora van al ERP). En grupos no se usan. */
   private async documento(msg: WAMessage) {
-    if (enGrupo()) return void (await registrarAqui({ direccion: "entrante", tipo: "otro", texto: null, waMessageId: msg.key.id }));
-    return this.archivoCompra(msg);
-  }
-
-  /** Guarda la foto o el PDF y lo junta con los que lleguen enseguida (varias hojas del mismo comprobante). */
-  private async archivoCompra(msg: WAMessage) {
-    const img = msg.message!.imageMessage;
-    const doc = documentoDe(msg);
-    const cfg = await obtenerConfig();
-    const mime = (img?.mimetype ?? doc?.mimetype ?? "").split(";")[0];
-    const texto = img?.caption ?? doc?.caption ?? null;
-    const registrarEntrante = (adjuntoId: number | null = null) =>
-      registrarAqui({ direccion: "entrante", tipo: img ? "imagen" : "otro", texto, waMessageId: msg.key.id, adjuntoId, intencionDetectada: "comprobante" });
-    if (!img && mime !== "application/pdf" && !MIMES_IMAGEN.includes(mime)) {
-      await registrarEntrante();
-      return this.decir("Ese archivo no lo puedo leer 😕. Mandame una foto o un PDF del comprobante.");
-    }
-    if (Number(img?.fileLength ?? doc?.fileLength ?? 0) > cfg.fotoMaxMb * 1024 * 1024) {
-      await registrarEntrante();
-      return this.decir(`Ese archivo es muy pesado (máximo ${cfg.fotoMaxMb} MB). ¿Me lo mandás más liviano?`);
-    }
-    let datos: Buffer;
-    try {
-      datos = await this.canal.descargarMedia(msg);
-    } catch (err) {
-      await registrarEntrante();
-      await registrar("error", "compras", "No se pudo descargar el comprobante", err);
-      return this.decir("No pude bajar el archivo 😕. ¿Me lo mandás de nuevo?");
-    }
-    const tipo = img && !MIMES_IMAGEN.includes(mime) ? "image/jpeg" : mime;
-    const adj = await guardarArchivo(datos, tipo);
-    await registrarEntrante(adj.id);
-    await this.canal.reaccionar(msg, "👀").catch(() => {});
-    const nombre = doc?.fileName?.trim() || `${tipo === "application/pdf" ? "documento" : "foto"}-${adj.id}.${tipo === "application/pdf" ? "pdf" : "jpg"}`;
-    this.encolarCompra({ adjuntoId: adj.id, nombre, mime: tipo }, cfg.comprasEsperaSeg);
-  }
-
-  private encolarCompra(archivo: ArchivoLote, esperaSeg: number) {
-    const ctx = contexto.getStore()!;
-    const clave = `${chat() ?? ""}|${ctx.autor ?? ""}`;
-    const lote = this.lotes.get(clave) ?? { archivos: [], ctx };
-    clearTimeout(lote.timer);
-    lote.archivos.push(archivo);
-    lote.ctx = ctx; // Se responde citando el último archivo.
-    lote.timer = setTimeout(() => this.cerrarLote(clave), Math.max(0, esperaSeg) * 1000);
-    this.lotes.set(clave, lote);
-  }
-
-  private cerrarLote(clave: string) {
-    const lote = this.lotes.get(clave);
-    if (!lote) return;
-    clearTimeout(lote.timer);
-    this.lotes.delete(clave);
-    const p: Promise<void> = contexto
-      .run(lote.ctx, () => this.leerLote(lote.archivos))
-      .catch((err) => void registrar("error", "compras", "Falló la lectura de un comprobante", err))
-      .finally(() => this.leyendo.delete(p));
-    this.leyendo.add(p);
-  }
-
-  /** Lee ya lo que está esperando y espera a que termine (para pruebas y para apagar prolijo). */
-  async terminarCompras() {
-    for (const clave of [...this.lotes.keys()]) this.cerrarLote(clave);
-    await Promise.all([...this.leyendo]);
-  }
-
-  private async leerLote(archivos: ArchivoLote[]) {
-    let resultados: Awaited<ReturnType<typeof leerYGuardar>>;
-    try {
-      resultados = await leerYGuardar(archivos, { chat: chat(), autor: contexto.getStore()?.autor ?? null, origen: "whatsapp" });
-    } catch (err) {
-      if (err instanceof ErrorIA && /API key/i.test(err.message))
-        return this.decir("Me falta la clave de Claude para leer comprobantes. Cargala en el panel (Configuración → IA).");
-      return this.decir("No pude leer el comprobante 😕. ¿Me lo mandás de nuevo? Que se vea entero, derecho y con buena luz.", { intencion: "error_ia" });
-    }
-    if (!resultados.length) return this.decir("No encontré ningún comprobante en eso 🤔. Mandame la foto o el PDF de la factura, remito o ticket.");
-    for (const r of resultados) {
-      if (r.tipo === "repetido") await this.decir(`⚠️ Ese comprobante ya estaba cargado: ${textoRepetido(r)}. No lo cargo de nuevo.`, { intencion: "comprobante_repetido" });
-      else await this.mostrarComprobante(r.fila, r.datos);
-    }
-  }
-
-  /** Resumen del comprobante y la encuesta para confirmarlo. */
-  private async mostrarComprobante(fila: FilaComprobante, datos: Comprobante) {
-    const cfg = await obtenerConfig();
-    const ayuda = "Respondé a este mensaje con *confirmar*, *descartar* o lo que haya que corregir.";
-    const resumen = textoResumen(datos, fila.cierra);
-    const id = await this.decirConId(cfg.usarEncuestas ? resumen : `${resumen}\n\n_${ayuda}_`, { intencion: "comprobante" });
-    await fijarMensaje(fila.id, id);
-    if (!cfg.usarEncuestas) return;
-    const conEncuesta = await this.encuesta(`${tituloComprobante(datos)}: ¿lo confirmo?`, OPCIONES_COMPROBANTE, { tipo: "comprobante", comprobanteId: fila.id });
-    if (!conEncuesta) await this.decir(ayuda);
-  }
-
-  private async confirmarCompra(id: number) {
-    const r = await confirmarComprobante(id);
-    if (!r) return this.decir(frases.yaCerrado());
-    const ojo = r.fila.cierra ? "" : " (ojo: las cuentas no cerraban)";
-    if (r.envio?.ok) return this.decir(`✅ Confirmado y enviado al ERP${ojo}.`, { intencion: "comprobante_confirmado" });
-    if (r.envio) return this.decir(`✅ Confirmado${ojo}, pero no lo pude mandar al ERP (${r.envio.mensaje}). Reintentalo desde el panel.`);
-    const cfg = await obtenerConfig();
-    return this.decir(`✅ Confirmado${ojo}. ${cfg.erpUrl ? "Mandalo al ERP desde el panel cuando quieras." : "Queda en el panel, en Compras."}`, {
-      intencion: "comprobante_confirmado",
-    });
-  }
-
-  private async descartarCompra(id: number) {
-    if (!(await descartarComprobante(id))) return this.decir(frases.yaCerrado());
-    return this.decir("🗑️ Listo, lo descarté.", { intencion: "comprobante_descartado" });
-  }
-
-  private async pedirCorreccion(id: number) {
-    const c = await obtenerComprobante(id);
-    if (!c || c.fila.estado === "confirmado" || c.fila.estado === "descartado") return this.decir(frases.yaCerrado());
-    await empezarCorreccion(id);
-    return this.decir("✏️ Dale, decime qué corrijo. Por ejemplo: _el renglón 3 son 12 unidades_ o _el total es 15.300,50_. También lo podés editar en el panel.");
-  }
-
-  /** Respuesta a un comprobante (citando el resumen, o después de tocar "Corregir"). Devuelve false si no era eso. */
-  private async respuestaCompra(msg: WAMessage, texto: string): Promise<boolean> {
-    const citado = idCitado(msg);
-    let fila = citado ? await comprobantePorMensaje(citado, chat()) : null;
-    const corrigiendo = fila ? null : await comprobanteEnCorreccion(chat());
-    fila ??= corrigiendo;
-    if (!fila) return false;
-    const t = normalizar(texto);
-    if (!corrigiendo) {
-      if (esAfirmativo(texto) || /^(confirmar|confirmo|confirmalo|confirmado)$/.test(t)) {
-        await this.confirmarCompra(fila.id);
-        return true;
-      }
-      if (/^(descartar|descartalo|descartala|borrar|borralo|anular|anulalo)$/.test(t)) {
-        await this.descartarCompra(fila.id);
-        return true;
-      }
-    }
-    if (fila.estado === "confirmado" || fila.estado === "descartado") {
-      await this.decir(fila.estado === "confirmado" ? "Ese ya está confirmado. Si hay que cambiarlo, hacelo en el ERP." : "Ese ya está descartado. Si te sirve, mandalo de nuevo.");
-      return true;
-    }
-    await this.corregirCompra(fila, texto);
-    return true;
-  }
-
-  private async corregirCompra(fila: FilaComprobante, correccion: string) {
-    let r: Awaited<ReturnType<typeof corregirConTexto>>;
-    try {
-      r = await corregirConTexto(fila, correccion);
-    } catch {
-      return this.decir(frases.errorTecnico());
-    }
-    await this.mostrarComprobante(r.fila, r.datos);
+    await registrarAqui({ direccion: "entrante", tipo: "otro", texto: null, waMessageId: msg.key.id });
+    if (enGrupo()) return;
+    return this.decir(AVISO_FACTURAS);
   }
 
   private async foto(msg: WAMessage) {
     const img = msg.message!.imageMessage!;
     const cfg = await obtenerConfig();
     const epigrafe = img.caption?.trim() || null;
-    if (!enGrupo() && epigrafe && PIDE_COMPRA.test(normalizar(epigrafe))) return this.archivoCompra(msg);
     // En el grupo, solo las fotos que le piden al bot ("recordanos esto").
     if (enGrupo() && !(epigrafe && PIDE_BOT.test(normalizar(epigrafe)))) {
       await registrarAqui({ direccion: "entrante", tipo: "imagen", texto: epigrafe, waMessageId: msg.key.id });
@@ -589,8 +406,6 @@ export class Procesador {
       const liviana = await imagenParaIa(datos);
       const a = await analizarFoto(cfg, liviana.datos, liviana.mime, epigrafe);
       await db.update(adjunto).set({ descripcionIa: a.descripcion, datosExtraidos: a }).where(eq(adjunto.id, adj.id));
-      // Un comprobante de un proveedor va a compras (en privado).
-      if (a.tipo === "compra" && !enGrupo()) return this.encolarCompra({ adjuntoId: adj.id, nombre: `foto-${adj.id}.jpg`, mime: mimeFoto }, 0);
       const fecha = fechaDe(a.propuesta_fecha_hora);
       datosBorrador = {
         adjuntoId: adj.id,
@@ -655,9 +470,6 @@ export class Procesador {
         entrante.creadoEn.getTime() - ultimaDelBot.creadoEn.getTime() <= MINUTOS_RESPUESTA_A_PREGUNTA * 60_000);
     const anotar = (intencion: string) =>
       db.update(mensaje).set({ intencionDetectada: intencion }).where(eq(mensaje.id, entrante.id));
-
-    // 0) Respuesta a un comprobante de compra.
-    if (await this.respuestaCompra(msg, texto)) return void (await anotar("comprobante"));
 
     // 1) Links: se leen y se analizan.
     const urls = extraerUrls(texto);

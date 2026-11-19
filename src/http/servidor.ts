@@ -13,9 +13,6 @@ import { entorno } from "../entorno.js";
 import { ErrorUsuario } from "../servicios/recordatorios.js";
 import { versionSesionActual } from "./rutas/auth.js";
 import { rutasAuth } from "./rutas/auth.js";
-import { rutasCompras } from "./rutas/compras.js";
-import { rutasPanelCompras } from "./rutas/panel-compras.js";
-import { obtenerConfig } from "../servicios/configuracion.js";
 import { rutasConfiguracion } from "./rutas/configuracion.js";
 import { rutasEventos } from "./rutas/eventos.js";
 import { rutasNotas } from "./rutas/notas.js";
@@ -28,9 +25,8 @@ export const COOKIE_SESION = "memolucas_sesion";
 
 declare module "@fastify/jwt" {
   interface FastifyJWT {
-    // tipo "compras": sesión del panel de compras (u = la persona). El panel principal no la acepta.
-    payload: { v: number; tipo?: "compras"; u?: number };
-    user: { v: number; tipo?: "compras"; u?: number };
+    payload: { v: number };
+    user: { v: number };
   }
 }
 
@@ -65,8 +61,7 @@ export async function crearServidor() {
 
   app.decorate("autenticar", async (req: FastifyRequest, reply: FastifyReply) => {
     try {
-      const datos = await req.jwtVerify<{ v: number; tipo?: string }>();
-      if (datos.tipo === "compras") throw new Error("sesión del panel de compras");
+      const datos = await req.jwtVerify<{ v: number }>();
       if (datos.v !== (await versionSesionActual())) throw new Error("sesión vieja");
     } catch {
       return reply.code(401).send({ error: "Tenés que ingresar con tu PIN" });
@@ -82,14 +77,7 @@ export async function crearServidor() {
     return reply.code(500).send({ error: "Error interno" });
   });
 
-  // En la dirección del panel de compras solo se sirve ese panel y su API.
-  app.addHook("onRequest", async (req, reply) => {
-    if (!(await esHostCompras(req.hostname))) return;
-    if (req.url.startsWith("/api/") && !req.url.startsWith("/api/c/")) return reply.code(404).send({ error: "No existe" });
-  });
-
   await app.register(rutasSalud);
-  await app.register(rutasPanelCompras, { prefix: "/api/c" });
   await app.register(rutasAuth, { prefix: "/api/auth" });
   await app.register(
     async (privado) => {
@@ -99,7 +87,6 @@ export async function crearServidor() {
       await privado.register(rutasWhatsapp);
       await privado.register(rutasPanel);
       await privado.register(rutasNotas);
-      await privado.register(rutasCompras);
       await privado.register(rutasEventos);
     },
     { prefix: "/api" },
@@ -118,26 +105,13 @@ export async function crearServidor() {
         else res.header("Cache-Control", "no-cache");
       },
     });
-    // El panel de compras lleva la versión del logo en sus íconos: al cambiar el logo, el navegador los vuelve a pedir.
-    const paginaCompras = fs.readFileSync(path.join(web, "compras.html"), "utf8");
     app.get("/*", async (req, reply) => {
       if (req.url.startsWith("/api/")) return reply.code(404).send({ error: "No existe" });
-      reply.header("Cache-Control", "no-cache");
-      if (!(await esHostCompras(req.hostname))) return reply.sendFile("index.html");
-      const version = (await obtenerConfig()).comprasLogoAdjuntoId ?? 0;
-      return reply.type("text/html; charset=utf-8").send(paginaCompras.replace(/(\/api\/c\/(?:icono\/[\w-]+\.png|manifest\.webmanifest))"/g, `$1?v=${version}"`));
+      return reply.header("Cache-Control", "no-cache").sendFile("index.html");
     });
   }
 
   return app;
-}
-
-/** ¿Pidieron la dirección del panel de compras? (también "comprascoff.localhost" para probar). */
-async function esHostCompras(host: string): Promise<boolean> {
-  const dominio = (await obtenerConfig()).comprasDominio.trim().toLowerCase();
-  const h = host.split(":")[0].toLowerCase();
-  if (!dominio) return false;
-  return h === dominio || h.split(".")[0] === dominio.split(".")[0];
 }
 
 declare module "fastify" {
