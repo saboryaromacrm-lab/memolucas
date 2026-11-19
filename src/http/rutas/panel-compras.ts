@@ -17,6 +17,7 @@ import {
 import { obtenerConfig } from "../../servicios/configuracion.js";
 import { borrarCompraManual, EsquemaCompraManual, guardarCompraManual, obtenerCompraManual } from "../../servicios/compras-manuales.js";
 import { actualizarFormaPago, borrarFormaPago, crearFormaPago, listarFormasPago, moverFormaPago } from "../../servicios/formas-pago.js";
+import { exportarCompras } from "../../servicios/exportar-compras.js";
 import { corregirConTexto } from "../../servicios/lectura-compras.js";
 import { metricas, metricasCsv } from "../../servicios/metricas.js";
 import {
@@ -65,6 +66,8 @@ const Id = z.object({ id: z.coerce.number().int().positive() });
 const Periodo = z.string().regex(/^\d{4}-\d{2}(-\d{2})?$/);
 const Fecha = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const ESTADOS = ["pendiente", "revisar", "confirmado", "descartado"] as const;
+/** Desde cuándo se exporta todo (para llevarlo al ERP). */
+const EXPORTAR_DESDE = "2026-11-01";
 
 /** Colores de Coffit: marrón oscuro, naranja y beige. */
 export const COLORES_COFFIT = { cafe: "#3b2416", naranja: "#e07a2c", beige: "#f3e8d8" };
@@ -479,6 +482,14 @@ export const rutasPanelCompras: FastifyPluginAsync = async (app) => {
         .header("Content-Disposition", `attachment; filename="metricas-coffit-${m.periodo.desde}-a-${m.periodo.hasta}.csv"`)
         .send(metricasCsv(m));
     });
+
+    /** Todo lo cargado desde EXPORTAR_DESDE en un .zip: datos para importar, planillas, fotos y PDF. */
+    privado.get("/exportar.zip", conMetricas, async (_req, reply) =>
+      reply
+        .header("Content-Type", "application/zip")
+        .header("Content-Disposition", `attachment; filename="compras-coffit-desde-${EXPORTAR_DESDE}-al-${new Date().toISOString().slice(0, 10)}.zip"`)
+        .send(Buffer.from(await exportarCompras(EXPORTAR_DESDE))),
+    );
 
     // ───── Productos (precios por bulto, unidad y kg o litro de lo que se compró) ─────
     privado.get("/productos", async () => ({ productos: await listarProductos(), alertaPct: (await obtenerConfig()).productosAlertaPct }));
