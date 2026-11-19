@@ -125,6 +125,17 @@ describe("bot", () => {
     expect(await recordatoriosActivos()).toHaveLength(0);
   });
 
+  it("no agenda una hora que ya pasó: pregunta", async () => {
+    interpretar.mockResolvedValue({
+      ...base,
+      intencion: "crear_recordatorio",
+      recordatorios: [{ titulo: "Escribir a Ideas", descripcion: null, fecha_hora: "2026-10-22T06:00:00-03:00", recurrencia: null, avisos_previos_min: [], es_evento: false }],
+    });
+    await bot.procesar(texto("Escribir a Ideas a las 6"));
+    expect(respuestas[0]).toBe("Esa hora ya pasó 🤔 ¿Te lo pongo más tarde o mañana?");
+    expect(await recordatoriosActivos()).toHaveLength(0);
+  });
+
   it("'hoy' contesta la pregunta del bot (¿para qué día?) y no muestra la agenda", async () => {
     const pregunta = { ...base, intencion: "crear_recordatorio" as const, falta_info: "fecha", respuesta: "Dale, ¿para qué día te agendo *ir a buscar la plata de Mariel* a las 16?" };
     const agendado = {
