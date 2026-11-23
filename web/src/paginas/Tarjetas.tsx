@@ -1,10 +1,11 @@
 import { useState, type ReactNode } from "react";
-import { CreditCard, Pencil, Plus, Trash2 } from "lucide-react";
+import { CreditCard, FileText, Pencil, Plus, Trash2 } from "lucide-react";
 import { Boton, Cargando, Encabezado, Modal, Vacio, useAccion } from "../componentes/ui";
 import { del, post, put } from "../lib/api";
 import { aCampo, aNumero, pct, plata } from "../lib/numeros";
 import { useRecordado } from "../lib/recordado";
 import type { CuotaTarjeta, Tarjeta } from "../lib/tipos";
+import { ImportarResumen } from "./ImportarResumen";
 import { colorVencimiento, diasParaVencer, textoDias } from "../lib/vencimientos";
 import { useDatos } from "../lib/vivo";
 
@@ -15,6 +16,7 @@ export function Tarjetas() {
   const { datos } = useDatos<{ tarjetas: Tarjeta[]; diasAviso: number }>("/api/tarjetas", ["tarjetas", "configuracion"]);
   const [elegida, setElegida] = useRecordado("tarjetas-elegida", { id: 0 });
   const [editando, setEditando] = useState<Tarjeta | "nueva" | null>(null);
+  const [importando, setImportando] = useState(false);
   const tarjetas = datos?.tarjetas ?? [];
   const t = tarjetas.find((x) => x.id === elegida.id) ?? tarjetas[0];
 
@@ -35,9 +37,14 @@ export function Tarjetas() {
               </select>
             )}
             {t && (
-              <Boton icono={<Pencil className="size-4" />} onClick={() => setEditando(t)}>
-                Editar
-              </Boton>
+              <>
+                <Boton icono={<FileText className="size-4" />} onClick={() => setImportando(true)}>
+                  Importar resumen
+                </Boton>
+                <Boton icono={<Pencil className="size-4" />} onClick={() => setEditando(t)}>
+                  Editar
+                </Boton>
+              </>
             )}
             <Boton variante="primario" icono={<Plus className="size-4" />} onClick={() => setEditando("nueva")}>
               Nueva tarjeta
@@ -54,6 +61,7 @@ export function Tarjetas() {
       ) : (
         <DetalleTarjeta t={t} diasAviso={datos.diasAviso} />
       )}
+      {importando && t && <ImportarResumen tarjetaId={t.id} onCerrar={() => setImportando(false)} />}
       {editando && (
         <FormTarjeta
           t={editando === "nueva" ? null : editando}
@@ -103,7 +111,8 @@ function DetalleTarjeta({ t, diasAviso }: { t: Tarjeta; diasAviso: number }) {
       <p className="text-sm text-slate-500">
         {t.ultimoResumen
           ? `Último resumen: cierre ${fecha(t.ultimoResumen.cierre)} · vence ${fecha(t.ultimoResumen.vencimiento)} · ${t.cantidadResumenes} ${t.cantidadResumenes === 1 ? "resumen" : "resúmenes"} en el historial.`
-          : "Todavía no hay resúmenes importados: los datos son los que cargaste a mano."}
+          : "Todavía no hay resúmenes importados: los datos son los que cargaste a mano."}{" "}
+        Con <b className="font-medium text-slate-600">Importar resumen</b> elegís el PDF del banco (se lee en tu navegador) o pegás el texto: la IA lo ordena, lo revisás y al guardar se actualizan los saldos, las cuotas y los consumos. Reimportar el mismo resumen no duplica nada.
       </p>
 
       <Seccion titulo="Estado de cuenta">

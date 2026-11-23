@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { obtenerConfig } from "../../servicios/configuracion.js";
+import { guardarResumen, leerResumen } from "../../servicios/importar-resumen.js";
 import {
   actualizarCuota,
   actualizarTarjeta,
@@ -34,6 +35,18 @@ const DatosCuota = z.object({
   cuotaActual: z.number().int().min(0).max(120),
   cuotaTotal: z.number().int().min(1).max(120),
 });
+/** Lo revisado en el panel después de leer el resumen. El saldo puede ser negativo (a favor). */
+const ResumenRevisado = z.object({
+  cierre: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Falta la fecha de cierre"),
+  vencimiento: Fecha,
+  saldo: z.number().min(-1_000_000_000_000).max(1_000_000_000_000),
+  pagoMinimo: Plata,
+  disponibleCompra: Plata,
+  disponibleCuotas: Plata,
+  cuotas: z.array(DatosCuota.refine((c) => c.cuotaActual <= c.cuotaTotal, "Hay una cuota mayor que su total")).max(300),
+  consumos: z.array(z.object({ nombre: z.string().trim().min(1).max(120), monto: z.number().min(0).max(1_000_000_000) })).max(300),
+  cargos: z.array(z.object({ descripcion: z.string().trim().min(1).max(200), monto: z.number().min(-1_000_000_000).max(1_000_000_000) })).max(300),
+});
 
 export const rutasTarjetas: FastifyPluginAsync = async (app) => {
   /** diasAviso: con cuántos días de anticipación avisa el bot el vencimiento del resumen. */
@@ -62,6 +75,11 @@ export const rutasTarjetas: FastifyPluginAsync = async (app) => {
     await borrarCuota(Id.parse(req.params).id);
     return { ok: true };
   });
+
+  /** Claude lee el texto del resumen (sacado del PDF en el navegador, o pegado). No guarda nada. */
+  app.post("/tarjetas/leer-resumen", async (req) => leerResumen(z.object({ texto: z.string().trim().min(50, "Pegá el texto completo del resumen").max(200_000) }).parse(req.body).texto));
+
+  app.post("/tarjetas/:id/resumenes", async (req) => guardarResumen(Id.parse(req.params).id, ResumenRevisado.parse(req.body)));
 
   app.delete("/tarjetas/consumos/:id", async (req) => {
     await borrarConsumo(Id.parse(req.params).id);
