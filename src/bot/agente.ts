@@ -13,7 +13,7 @@ import { borrarLink, buscarLinks, crearLink, listarLinks, urlValida } from "../s
 import { borrarSuscripcion, crearSuscripcion, listarSuscripciones, renovarSuscripcion } from "../servicios/suscripciones.js";
 import { listarTarjetas } from "../servicios/tarjetas.js";
 import { diasParaVencer } from "../servicios/vencimientos.js";
-import { buscarMensajesWa, cancelarProgramadoWa, confirmarEnvioWa, DIAS_GUARDADO, leerChatWa, listarChatsWa, prepararEnvioWa, programadosWa, type MensajeLeido } from "../servicios/wa-personal.js";
+import { buscarMensajesWa, cancelarProgramadoWa, DIAS_GUARDADO, enviarWa, fijarAliasWa, leerChatWa, listarChatsWa, programadosWa, type MensajeLeido } from "../servicios/wa-personal.js";
 import { personal } from "../whatsapp/personal.js";
 import { cliente, ErrorIA, gastoDelMes, registrarUso } from "./ia.js";
 
@@ -198,21 +198,21 @@ function herramientas(origen: "whatsapp" | "panel") {
         }),
     }),
     betaZodTool({
-      name: "wa_preparar_envio",
+      name: "wa_alias",
+      description: 'Guarda cómo le dice el usuario a un contacto ("Maca" = Macarena Oviedo): desde ahí, wa_chats con ese alias devuelve solo ese chat.',
+      inputSchema: z.object({ chat_jid: z.string(), alias: z.string() }),
+      run: ({ chat_jid, alias }) => conTuWhatsapp(() => fijarAliasWa(chat_jid, alias)),
+    }),
+    betaZodTool({
+      name: "wa_enviar",
       description:
-        "Prepara un mensaje para mandar desde su WhatsApp, ahora o programado. NO lo manda: devuelve un código. Después mostrale el texto exacto y para quién, y preguntale si lo mandás.",
+        "Manda (o programa) un mensaje desde su WhatsApp. Solo sale si tu mensaje anterior le mostraba para quién y el texto exacto, y el usuario contestó que sí; si no, no manda y te dice qué mostrarle.",
       inputSchema: z.object({
         chat_jid: z.string().describe("De wa_chats; o un número con código de país + @s.whatsapp.net"),
         texto: z.string().describe("El mensaje tal cual se va a mandar, escrito como lo escribiría el usuario"),
-        enviar_en: Fecha.optional().describe("Para programarlo; sin esto se manda apenas confirma"),
+        enviar_en: Fecha.optional().describe("Para programarlo; sin esto se manda ya"),
       }),
-      run: ({ chat_jid, texto, enviar_en }) => conTuWhatsapp(() => prepararEnvioWa(chat_jid, texto, enviar_en ? fecha(enviar_en) : null)),
-    }),
-    betaZodTool({
-      name: "wa_confirmar_envio",
-      description: "Manda (o programa) un mensaje preparado. Solo después de que el usuario dijo que sí en un mensaje suyo, al texto exacto que le mostraste.",
-      inputSchema: z.object({ codigo: z.string() }),
-      run: ({ codigo }) => conTuWhatsapp(() => confirmarEnvioWa(codigo, personal)),
+      run: ({ chat_jid, texto, enviar_en }) => conTuWhatsapp(() => enviarWa(chat_jid, texto, enviar_en ? fecha(enviar_en) : null, personal)),
     }),
     betaZodTool({
       name: "wa_programados",
@@ -242,7 +242,7 @@ Tenés herramientas sobre sus cosas: agenda y recordatorios, notas, suscripcione
 - Respondé con sus datos reales usando las herramientas; no inventes. Si algo no está, decilo.
 - Si un pedido es claro, hacelo directo. Si falta algo clave (por ejemplo la fecha), preguntá.
 - Para borrar: primero preguntá "¿Lo borro?" y recién cuando conteste que sí, llamá a borrar con confirmado=true.
-- Su WhatsApp: podés leer, resumir y buscar sus chats (últimos ${DIAS_GUARDADO} días; si no encontrás algo, decí que no está en esos días y ofrecé buscar más atrás), y mandar o programar mensajes en su nombre. Para mandar: buscá el chat con wa_chats (si hay varios parecidos, preguntá cuál), prepará con wa_preparar_envio, mostrale *para quién* y el *texto exacto*, y preguntá "¿Lo mando?". Recién cuando diga que sí, wa_confirmar_envio. Si cambia el texto, prepará de nuevo y volvé a preguntar. Nunca contestes a nadie por tu cuenta.
+- Su WhatsApp: podés leer, resumir y buscar sus chats (últimos ${DIAS_GUARDADO} días; si no encontrás algo, decí que no está en esos días y ofrecé buscar más atrás), y mandar o programar mensajes en su nombre. Para mandar: buscá el chat con wa_chats (si hay varios parecidos, preguntá cuál) y llamá a wa_enviar: la primera vez no manda y te dice qué mostrarle; mostralo tal cual y preguntá "¿Lo mando?". Cuando diga que sí, llamá de nuevo a wa_enviar con el mismo chat y el mismo texto. Nunca digas que algo se mandó o se guardó sin que la herramienta lo haya confirmado. Si te dice cómo le dice a alguien ("Maca es Macarena"), guardalo con wa_alias. Nunca contestes a nadie por tu cuenta.
 - Las tarjetas no se cambian desde acá: los datos se actualizan importando el resumen en el panel.
 - Plata como en Argentina: $ 1.234,56 (US$ si es en dólares).
 - Al principio de cada mensaje del usuario va la fecha y hora actual: usala para calcular fechas.

@@ -134,6 +134,13 @@
       "when": 1795458797907,
       "tag": "0018_wa_personal",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1795460925123,
+      "tag": "0019_wa_alias",
+      "breakpoints": true
     }
   ]
 }
