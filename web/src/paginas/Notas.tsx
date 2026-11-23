@@ -3,12 +3,11 @@ import { Camera, Copy, ImageOff, Lock, Plus, Search, StickyNote, Trash2 } from "
 import { Boton, Cargando, Encabezado, Modal, Vacio, useAccion, useAviso } from "../componentes/ui";
 import { api, del, post, put } from "../lib/api";
 import { fechaHora } from "../lib/fechas";
+import { sinTildes } from "../lib/textos";
 import type { Nota } from "../lib/tipos";
 import { useDatos } from "../lib/vivo";
 
 type Respuesta = { notas: Nota[]; categorias: string[] };
-
-const sinTildes = (s: string) => s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
 
 export function Notas() {
   const { datos, recargar } = useDatos<Respuesta>("/api/notas", ["notas"]);

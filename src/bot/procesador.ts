@@ -40,12 +40,13 @@ import {
   ultimaOcurrenciaEnviada,
   type DatosRecordatorio,
 } from "../servicios/recordatorios.js";
-import { EMOJIS_CONFIRMACION, TEXTO_AYUDA, detectarComando, esAfirmativo, esNegativo, respuestaASuscripcion } from "./comandos.js";
+import { EMOJIS_CONFIRMACION, TEXTO_AYUDA, detectarComando, esAfirmativo, esNegativo, pedidoDeLinks, respuestaASuscripcion, type PedidoDeLinks } from "./comandos.js";
 import { extraerUrls, leerEnlace, textoSinUrls, type VistaPreviaWa } from "../servicios/enlaces.js";
 import { analizarEnlace, analizarFoto, ErrorIA, interpretar, responderConNotas, type Interpretacion } from "./ia.js";
 import { ErrorAudio, transcribir } from "../servicios/audio.js";
 import { actualizarNota, borrarNota, crearNota, obtenerNota, relacionadas, todasLasNotas } from "../servicios/notas.js";
 import { obtenerAdjunto } from "../servicios/adjuntos.js";
+import { buscarLinks, crearLink, listarLinks, type Link } from "../servicios/links.js";
 import { recordarSuscripcionManana, renovarDesdeAviso } from "../servicios/suscripciones.js";
 import { normalizar } from "../lib/textos.js";
 import { encuestaPorWaId, marcarRespondida, opcionElegida, OPCIONES_PROPUESTA, registrarEncuesta } from "../servicios/encuestas.js";
@@ -490,8 +491,12 @@ export class Procesador {
       return this.contestarSuscripcion(suscripcionId, accionSuscripcion);
     }
 
-    // 1) Links: se leen y se analizan.
+    // 1) "Mis links" (en privado): guardar uno o buscarlo. Va antes que el análisis de links.
     const urls = extraerUrls(texto);
+    const pedido = enGrupo() ? null : pedidoDeLinks(textoSinUrls(texto), urls.length > 0);
+    if (pedido && (await this.misLinks(pedido, urls[0]))) return void (await anotar("links"));
+
+    // 2) Links: se leen y se analizan.
     if (urls.length) {
       // En el grupo, un link compartido sin pedirle nada al bot es charla.
       if (enGrupo() && !PIDE_BOT.test(normalizar(textoSinUrls(texto)))) return void (await anotar("ignorar"));
@@ -499,7 +504,7 @@ export class Procesador {
       return this.enlace(msg, urls[0], textoSinUrls(texto) || null);
     }
 
-    // 2) Respuesta rápida a una propuesta (foto o link).
+    // 3) Respuesta rápida a una propuesta (foto o link).
     const borrador = await borradorActivo();
     if (borrador?.datos.propuesta && esAfirmativo(texto)) {
       await anotar("aceptar_propuesta");
@@ -510,7 +515,7 @@ export class Procesador {
       return this.rechazarBorrador(borrador.id, borrador.datos);
     }
 
-    // 3) Comandos rápidos sin IA. Si responde a un aviso ("mañana", "en 2 horas"), lo interpreta la IA como posponer;
+    // 4) Comandos rápidos sin IA. Si responde a un aviso ("mañana", "en 2 horas"), lo interpreta la IA como posponer;
     // si contesta una pregunta del bot ("¿para qué día?" → "hoy"), la IA lo toma como la respuesta.
     const comando = detectarComando(texto);
     // En el grupo, "hoy", "lista", etc. pueden ser charla: los interpreta la IA. "listo" confirma solo si hay un aviso esperando.
@@ -555,7 +560,7 @@ export class Procesador {
       }
     }
 
-    // 4) IA.
+    // 5) IA.
     const cfg = await obtenerConfig();
     let interp: Interpretacion;
     try {
@@ -725,6 +730,31 @@ export class Procesador {
     if (!ns.length) return "Todavía no tenés notas. Probá: _anotá que la clave del wifi es…_ 🗒️";
     const lineas = ns.slice(0, 40).map((n) => `• ${n.titulo} _(${n.categoria})_${n.adjuntoId ? " 📎" : ""}`);
     return `🗒️ Tus notas (${ns.length}):\n${lineas.join("\n")}${ns.length > 40 ? "\n…y más en el panel." : ""}\n\nPreguntame: _¿cuál era la clave del wifi?_`;
+  }
+
+  /** Guarda o busca en "Mis links". Devuelve false si la búsqueda no encontró nada (puede ser otra cosa: sigue el flujo normal). */
+  private async misLinks(p: PedidoDeLinks, url: string | undefined): Promise<boolean> {
+    const mostrar = (l: Link) => `🔗 *${l.concepto}*\n${l.url}`;
+    if (p.tipo === "guardar") {
+      const concepto = p.concepto || new URL(url!).hostname.replace(/^www\./, "");
+      await crearLink({ concepto, url: url! });
+      await this.decir(`Guardado en tus links 👌\n${mostrar({ id: 0, concepto, url: url! })}`, { intencion: "link_guardado" });
+      return true;
+    }
+    if (p.tipo === "todos") {
+      const todos = await listarLinks();
+      await this.decir(
+        todos.length
+          ? `🔗 Tus links (${todos.length}):\n${todos.slice(0, 30).map((l) => `• *${l.concepto}*: ${l.url}`).join("\n")}${todos.length > 30 ? "\n…y más en el panel." : ""}`
+          : "Todavía no guardaste links. Probá: _guardá en mis links el home banking: https://…_",
+        { intencion: "links" },
+      );
+      return true;
+    }
+    const encontrados = await buscarLinks(p.consulta);
+    if (!encontrados.length) return false;
+    await this.decir(encontrados.slice(0, 5).map(mostrar).join("\n\n"), { intencion: "links" });
+    return true;
   }
 
   /** "Renovada" o "Recordame mañana" sobre el aviso de vencimiento de una suscripción. */

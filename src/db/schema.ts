@@ -129,6 +129,15 @@ export const nota = pgTable("nota", {
   actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
 });
 
+/** "Mis links": los accesos que más usás, en el orden que elegís. Concepto y URL van cifrados. */
+export const linkGuardado = pgTable("link_guardado", {
+  id: serial("id").primaryKey(),
+  datosCifrados: text("datos_cifrados").notNull(),
+  orden: integer("orden").notNull().default(0),
+  creadoEn: creadoEn(),
+  actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
+});
+
 /** Notas de las calculadoras (ej. la de Bavosi), una por clave, cifradas. */
 export const notaCalculadora = pgTable("nota_calculadora", {
   clave: text("clave").primaryKey(),
