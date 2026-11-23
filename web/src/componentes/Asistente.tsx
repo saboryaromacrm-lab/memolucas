@@ -8,6 +8,9 @@ import { useDatos } from "../lib/vivo";
 
 type Mensaje = { id: number; direccion: "entrante" | "saliente"; texto: string; creadoEn: string };
 
+/** Cuando el asistente solo confirma lo que hizo, contesta con un emoji (en WhatsApp va como reacción). */
+const SOLO_EMOJI = /^\p{Extended_Pictographic}\uFE0F?$/u;
+
 const SE_PUEDE_GRABAR = typeof MediaRecorder !== "undefined" && !!navigator.mediaDevices?.getUserMedia;
 
 /** Grabar con el micrófono: empieza al tocar y termina al volver a tocar. */
@@ -114,14 +117,20 @@ export function Asistente({ onCerrar }: { onCerrar: () => void }) {
             Preguntame lo que quieras: <i>¿cuánto debo de la Visa?</i>, <i>¿qué vence esta semana?</i>, <i>¿cuánto está el dólar?</i>…
           </p>
         )}
-        {visibles.map((m) => (
-          <div key={m.id} className={`flex ${m.direccion === "entrante" ? "justify-end" : "justify-start"}`}>
-            <div className={`burbuja max-w-[85%] whitespace-pre-wrap ${m.direccion === "entrante" ? "bg-[#d9fdd3]" : "bg-white"}`}>
-              <TextoWhatsapp texto={m.texto} />
-              <div className="mt-0.5 text-right text-[10px] text-slate-400">{hora(m.creadoEn)}</div>
+        {visibles.map((m) =>
+          m.direccion === "saliente" && SOLO_EMOJI.test(m.texto.trim()) ? (
+            <div key={m.id} className="text-xs text-slate-500">
+              {m.texto} Hecho · {hora(m.creadoEn)}
             </div>
-          </div>
-        ))}
+          ) : (
+            <div key={m.id} className={`flex ${m.direccion === "entrante" ? "justify-end" : "justify-start"}`}>
+              <div className={`burbuja max-w-[85%] whitespace-pre-wrap ${m.direccion === "entrante" ? "bg-[#d9fdd3]" : "bg-white"}`}>
+                <TextoWhatsapp texto={m.texto} />
+                <div className="mt-0.5 text-right text-[10px] text-slate-400">{hora(m.creadoEn)}</div>
+              </div>
+            </div>
+          ),
+        )}
         {enviando && (
           <>
             {/* Lo que se mandó, mientras el asistente piensa (después llega guardado con la respuesta). */}

@@ -71,7 +71,7 @@ describe("suscripciones", () => {
       responderEncuesta: async () => ({ id: null, secreto: "" }),
       descifrarVoto: (m: WAMessage) => [hashOpcion(Buffer.from(m.message!.pollUpdateMessage!.vote!.encPayload!).toString())],
       descargarMedia: async () => Buffer.alloc(0),
-      reaccionar: async () => {},
+      reaccionar: async (_m: WAMessage, e: string) => void respuestas.push(`(reacción ${e})`),
     });
     await app.inject({ method: "POST", url: "/api/suscripciones", headers, payload: NETFLIX });
     // Cargada cuando ya pasó el momento de su aviso previo: ese aviso no sale.
@@ -104,7 +104,8 @@ describe("suscripciones", () => {
 
     // "renovada" sin citar, justo después del aviso: suma un mes al vencimiento.
     await bot.procesar(texto("renovada"));
-    expect(respuestas.at(-1)).toBe("🔄 Listo: *Netflix* renovada. Ahora vence el miércoles 23/12/2026.");
+    expect(respuestas.at(-1)).toBe("(reacción 🔄)");
+    expect((await listarSuscripciones()).find((x) => x.nombre === "Netflix")!.fechaVto).toBe("2026-12-23");
     // Citando un aviso viejo no la renueva dos veces.
     await bot.procesar(citando(wa.enviados.at(-1)!.id, "ya la renové"));
     expect(respuestas.at(-1)).toBe("*Netflix* ya estaba renovada: vence el miércoles 23/12/2026.");

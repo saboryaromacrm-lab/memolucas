@@ -69,15 +69,15 @@ describe("mis links", () => {
       responderEncuesta: async () => ({ id: null, secreto: "" }),
       descifrarVoto: () => null,
       descargarMedia: async () => Buffer.alloc(0),
-      reaccionar: async () => {},
+      reaccionar: async (_m: WAMessage, e: string) => void respuestas.push(`(reacción ${e})`),
     });
     let n = 0;
     const texto = (t: string): WAMessage => ({ key: { id: `IN${++n}`, remoteJid: "5491112345678@s.whatsapp.net" }, message: { conversation: t } });
 
     await bot.procesar(texto("guardá en mis links el home banking: https://home.banco.com/login"));
-    expect(respuestas.at(-1)).toBe("Guardado en tus links 👌\n🔗 *Home banking*\nhttps://home.banco.com/login");
+    expect(respuestas.at(-1)).toBe("(reacción 🔗)");
     await bot.procesar(texto("agregá a mis links https://www.afip.gob.ar"));
-    expect(respuestas.at(-1)).toContain("🔗 *afip.gob.ar*");
+    expect((await listarLinks()).map((l) => l.concepto)).toEqual(["Home banking", "afip.gob.ar"]);
     await bot.procesar(texto("¿cuál era el link del home banking?"));
     expect(respuestas.at(-1)).toBe("🔗 *Home banking*\nhttps://home.banco.com/login");
     await bot.procesar(texto("mis links"));
