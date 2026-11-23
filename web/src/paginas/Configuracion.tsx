@@ -55,6 +55,7 @@ const EDITABLES = [
   "audioMaxSegundos",
   "usarEncuestas",
   "suscripcionesDiasAviso",
+  "tarjetasDiasAviso",
 ] as const;
 type Editable = Pick<Cfg, (typeof EDITABLES)[number]>;
 
@@ -207,9 +208,12 @@ export function Configuracion() {
                   ayuda="✅ Hecho · ⏰ En 15 min · ⏰ En 1 h · 📅 Mañana"
                 />
               </Tarjeta>
-              <Tarjeta titulo="Vencimientos de suscripciones" texto="El bot avisa el día que vence a la hora por defecto y, además, unos días antes (0 = solo el día).">
-                <Campo etiqueta="Avisar antes (días)">
+              <Tarjeta titulo="Vencimientos" texto="El bot avisa a la hora por defecto. Suscripciones: el día que vence y, además, unos días antes (0 = solo el día). Tarjetas: unos días antes del vencimiento del resumen, con el saldo y el pago mínimo.">
+                <Campo etiqueta="Suscripciones: avisar antes (días)">
                   <Numero valor={form.suscripcionesDiasAviso} min={0} onChange={(v) => set("suscripcionesDiasAviso", v)} />
+                </Campo>
+                <Campo etiqueta="Tarjetas: avisar antes (días)">
+                  <Numero valor={form.tarjetasDiasAviso} min={0} onChange={(v) => set("tarjetasDiasAviso", v)} />
                 </Campo>
               </Tarjeta>
               <Tarjeta
