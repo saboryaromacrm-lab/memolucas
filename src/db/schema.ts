@@ -315,6 +315,8 @@ export const ocurrencia = pgTable(
   ],
 );
 
+export type Canal = "whatsapp" | "panel";
+
 export const mensaje = pgTable(
   "mensaje",
   {
@@ -331,6 +333,8 @@ export const mensaje = pgTable(
     suscripcionId: integer("suscripcion_id").references(() => suscripcion.id, { onDelete: "set null" }),
     // Grupo (null = privado) y quién lo escribió en el grupo.
     chat: text("chat"),
+    /** Dónde fue la charla: WhatsApp o el Asistente del panel (son conversaciones separadas). */
+    canal: text("canal").$type<Canal>().notNull().default("whatsapp"),
     autor: text("autor"),
     creadoEn: creadoEn(),
   },

@@ -123,6 +123,31 @@ describe("asistente", () => {
     expect((await app.inject({ method: "POST", url: "/api/agente" })).statusCode).toBe(401);
   });
 
+  it("el panel y WhatsApp son conversaciones separadas: cada una con su historial y su memoria", async () => {
+    guion.mockReturnValueOnce({ llamadas: [], responder: () => "Hola desde el panel" });
+    await preguntar("hola panel");
+    const bot = new Procesador({
+      responder: async () => "OUT",
+      responderImagen: async () => null,
+      responderEncuesta: async () => ({ id: null, secreto: "" }),
+      descifrarVoto: () => null,
+      descargarMedia: async () => Buffer.alloc(0),
+      reaccionar: async () => {},
+    });
+    interpretar.mockResolvedValue({ intencion: "consulta" } as Interpretacion);
+    guion.mockReturnValueOnce({ llamadas: [], responder: () => "Hola desde WhatsApp" });
+    await bot.procesar({ key: { id: "W9", remoteJid: "5491112345678@s.whatsapp.net" }, message: { conversation: "hola whatsapp" } });
+
+    // WhatsApp no recuerda lo del panel, y el panel no muestra lo de WhatsApp (ni el historial de WhatsApp lo del panel).
+    expect(guion.mock.calls[1][0].messages.map((m) => m.content.split("\n").at(-1))).toEqual(["hola whatsapp"]);
+    expect((await app.inject({ url: "/api/agente", headers })).json().map((m: { texto: string }) => m.texto)).toEqual(["hola panel", "Hola desde el panel"]);
+    expect((await app.inject({ url: "/api/historial", headers })).json().map((m: { texto: string }) => m.texto)).toEqual(["Hola desde WhatsApp", "hola whatsapp"]);
+    // Y el panel recuerda solo lo suyo.
+    guion.mockReturnValueOnce({ llamadas: [], responder: () => "¡Dale!" });
+    await preguntar("seguimos");
+    expect(guion.mock.calls[2][0].messages.map((m) => m.content.split("\n").at(-1))).toEqual(["hola panel", "Hola desde el panel", "seguimos"]);
+  });
+
   it("por WhatsApp, lo que el intérprete marca como consulta lo responde el asistente (en el grupo no)", async () => {
     const respuestas: string[] = [];
     const bot = new Procesador({

@@ -49,7 +49,8 @@ export const rutasPanel: FastifyPluginAsync = async (app) => {
     const q = z
       .object({ desde: z.string().optional(), hasta: z.string().optional(), texto: z.string().optional(), antesDe: z.coerce.number().optional() })
       .parse(req.query);
-    const cond: SQL[] = [];
+    // El historial es el de WhatsApp: la charla con el Asistente del panel va aparte.
+    const cond: SQL[] = [eq(mensaje.canal, "whatsapp")];
     if (q.desde) cond.push(gte(mensaje.creadoEn, new Date(q.desde)));
     if (q.hasta) cond.push(lte(mensaje.creadoEn, new Date(q.hasta)));
     if (q.texto?.trim()) cond.push(ilike(mensaje.texto, `%${q.texto.trim()}%`));
@@ -58,7 +59,7 @@ export const rutasPanel: FastifyPluginAsync = async (app) => {
       .select({ mensaje, titulo: recordatorio.titulo })
       .from(mensaje)
       .leftJoin(recordatorio, eq(mensaje.recordatorioId, recordatorio.id))
-      .where(cond.length ? and(...cond) : undefined)
+      .where(and(...cond))
       .orderBy(desc(mensaje.id))
       .limit(200);
     return filas.map((f) => ({ ...f.mensaje, recordatorioTitulo: f.titulo, adjuntoUrl: f.mensaje.adjuntoId ? `/api/adjuntos/${f.mensaje.adjuntoId}` : null }));
