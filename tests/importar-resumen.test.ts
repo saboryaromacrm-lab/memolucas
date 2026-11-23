@@ -19,9 +19,12 @@ const NOVIEMBRE: Lectura = {
   vencimiento: "2026-11-25",
   saldo: 386540.75,
   pagoMinimo: 38654,
+  limiteCompra: 2_000_000,
+  limiteCuotas: 0,
   disponibleCompra: 420000,
   disponibleCuotas: 0,
-  no_encontrado: ["disponibleCuotas"],
+  ultimos4: "1376",
+  no_encontrado: ["limiteCuotas", "disponibleCuotas"],
   cuotas: [
     { comercio: "GARBARINO", fechaCompra: "2026-07-20", cuotaActual: 4, cuotaTotal: 12, montoCuota: 45999.9 },
     { comercio: "MERCADOLIBRE", fechaCompra: "", cuotaActual: 2, cuotaTotal: 3, montoCuota: 12500 },
@@ -44,7 +47,7 @@ describe("importar el resumen de la tarjeta", () => {
     pedir.mockReset();
     reloj(local("2026-11-20T08:00"));
     ({ app, headers } = await panelConSesion());
-    const base = { nombre: "VISA Banco Formosa", ultimos4: "1376", cierre: null, vencimiento: null, limiteCompra: 1_500_000, limiteCuotas: 1_500_000, disponibleCompra: 0, disponibleCuotas: 0, saldo: 0, pagoMinimo: 0 };
+    const base = { nombre: "VISA Banco Formosa", ultimos4: "", cierre: null, vencimiento: null, limiteCompra: 1_500_000, limiteCuotas: 1_500_000, disponibleCompra: 0, disponibleCuotas: 0, saldo: 0, pagoMinimo: 0 };
     id = (await app.inject({ method: "POST", url: "/api/tarjetas", headers, payload: base })).json().id;
   });
   afterEach(async () => {
@@ -62,20 +65,23 @@ describe("importar el resumen de la tarjeta", () => {
   it("lee, se guarda y reimportar no duplica; el mes siguiente actualiza cuotas y consumos; uno viejo no pisa nada", async () => {
     // Leer: dice qué falta y deja solo los consumos que se repiten cada mes.
     const leido = await leer(NOVIEMBRE);
-    expect(leido.faltan).toEqual(["disponibleCuotas"]);
+    expect(leido.faltan).toEqual(["limiteCuotas", "disponibleCuotas"]);
+    expect(leido.ultimos4).toBe("1376");
     expect(leido.consumos).toEqual([{ nombre: "NETFLIX.COM", monto: 4599 }]);
     expect(leido.cuotas[1].fechaCompra).toBeNull();
     expect(String((pedir.mock.calls[0][3] as { content: string }[])[0].content)).toBe(TEXTO);
     expect((await app.inject({ method: "POST", url: "/api/tarjetas/leer-resumen", headers, payload: { texto: "corto" } })).statusCode).toBe(400);
 
     const { faltan: _, ...revisado } = leido;
-    const r = await guardar({ ...revisado, disponibleCuotas: 600_000 });
+    // El límite de cuotas no figuraba: queda el que tenía la tarjeta (null).
+    const r = await guardar({ ...revisado, limiteCuotas: null, disponibleCuotas: 600_000 });
     expect(r.json()).toEqual({ masNuevo: true, cuotasNuevas: 3, cuotasActualizadas: 0, consumos: 1 });
     // Reimportar el mismo resumen: un solo resumen, las mismas cuotas (las dos de Mercado Libre siguen siendo dos).
-    expect((await guardar({ ...revisado, disponibleCuotas: 600_000 })).json()).toMatchObject({ cuotasNuevas: 0, cuotasActualizadas: 3 });
+    expect((await guardar({ ...revisado, limiteCuotas: null, disponibleCuotas: 600_000 })).json()).toMatchObject({ cuotasNuevas: 0, cuotasActualizadas: 3 });
     expect(await db.select().from(tarjetaResumen)).toHaveLength(1);
     let t = await vista();
-    expect(t).toMatchObject({ cierre: "2026-11-16", vencimiento: "2026-11-25", saldo: 386540.75, disponibleCuotas: 600_000, limiteCompra: 1_500_000, cantidadResumenes: 1 });
+    // Se actualizan todos los datos de arriba: el límite de compra del resumen, el de cuotas que ya tenía y los últimos 4 que faltaban.
+    expect(t).toMatchObject({ ultimos4: "1376", cierre: "2026-11-16", vencimiento: "2026-11-25", saldo: 386540.75, disponibleCuotas: 600_000, limiteCompra: 2_000_000, limiteCuotas: 1_500_000, cantidadResumenes: 1 });
     expect(t.ultimoResumen).toEqual({ cierre: "2026-11-16", vencimiento: "2026-11-25" });
     expect(t.cuotas).toHaveLength(3);
     expect(t.consumos).toEqual([{ id: expect.any(Number), nombre: "NETFLIX.COM", periodo: "2026-11", monto: 4599, anterior: null, variacion: null }]);
