@@ -49,6 +49,7 @@ const Cambios = z
     audioMaxSegundos: z.number().int().min(10).max(600),
     usarEncuestas: z.boolean(),
     suscripcionesDiasAviso: z.number().int().min(0).max(30),
+    tarjetasDiasAviso: z.number().int().min(0).max(30),
   })
   .partial();
 

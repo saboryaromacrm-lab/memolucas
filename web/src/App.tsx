@@ -16,6 +16,7 @@ import { Logs } from "./paginas/Logs";
 import { Notas } from "./paginas/Notas";
 import { Recordatorios } from "./paginas/Recordatorios";
 import { Suscripciones } from "./paginas/Suscripciones";
+import { Tarjetas } from "./paginas/Tarjetas";
 import { WhatsApp } from "./paginas/WhatsApp";
 
 export function App() {
@@ -54,6 +55,7 @@ export function App() {
                 <Route path="/notas" element={<Notas />} />
                 <Route path="/calculadoras" element={<Calculadoras />} />
                 <Route path="/suscripciones" element={<Suscripciones />} />
+                <Route path="/tarjetas" element={<Tarjetas />} />
                 <Route path="/whatsapp" element={<WhatsApp />} />
                 <Route path="/historial" element={<Historial />} />
                 <Route path="/configuracion" element={<Configuracion />} />

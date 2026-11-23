@@ -92,6 +92,8 @@ export const configuracion = pgTable("configuracion", {
 
   /** Cuántos días antes del vencimiento de una suscripción avisa el bot (además del día que vence). */
   suscripcionesDiasAviso: integer("suscripciones_dias_aviso").notNull().default(3),
+  /** Cuántos días antes del vencimiento del resumen de una tarjeta avisa el bot (con el saldo y el pago mínimo). */
+  tarjetasDiasAviso: integer("tarjetas_dias_aviso").notNull().default(2),
 
   actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
 });
@@ -158,6 +160,82 @@ export const suscripcion = pgTable(
     actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
   },
   (t) => [index("suscripcion_vto_idx").on(t.fechaVto)],
+);
+
+// ───────────── Tarjetas de crédito ─────────────
+// Los importes y los comercios van cifrados (un JSON por fila, en "datosCifrados"); a la vista quedan solo las fechas
+// y los números de cuota que hacen falta para calcular.
+
+/** Una tarjeta, con los datos del último resumen (o cargados a mano). */
+export const tarjeta = pgTable("tarjeta", {
+  id: serial("id").primaryKey(),
+  nombre: text("nombre").notNull(),
+  ultimos4: text("ultimos4").notNull().default(""),
+  /** Último cierre y su vencimiento. */
+  cierre: date("cierre"),
+  vencimiento: date("vencimiento"),
+  /** Vencimiento del que ya se mandó el aviso por WhatsApp. */
+  avisoVtoPara: date("aviso_vto_para"),
+  /** Límites, disponibles, saldo y pago mínimo. */
+  datosCifrados: text("datos_cifrados").notNull(),
+  creadoEn: creadoEn(),
+  actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
+});
+
+/** Historial de resúmenes importados: uno por tarjeta y fecha de cierre (reimportar lo reemplaza). */
+export const tarjetaResumen = pgTable(
+  "tarjeta_resumen",
+  {
+    id: serial("id").primaryKey(),
+    tarjetaId: integer("tarjeta_id")
+      .notNull()
+      .references(() => tarjeta.id, { onDelete: "cascade" }),
+    cierre: date("cierre").notNull(),
+    vencimiento: date("vencimiento"),
+    /** Saldo, pago mínimo, disponibles y cargos del banco (intereses, IVA, comisiones, percepciones). */
+    datosCifrados: text("datos_cifrados").notNull(),
+    creadoEn: creadoEn(),
+  },
+  (t) => [uniqueIndex("tarjeta_resumen_cierre_idx").on(t.tarjetaId, t.cierre)],
+);
+
+/**
+ * Compras en cuotas. cuotaActual es la que se cobró en el cierre "cierreBase"; en cada cierre siguiente avanza sola
+ * una más (se calcula, no se guarda), hasta que un resumen nuevo trae el dato real.
+ */
+export const tarjetaCuota = pgTable(
+  "tarjeta_cuota",
+  {
+    id: serial("id").primaryKey(),
+    tarjetaId: integer("tarjeta_id")
+      .notNull()
+      .references(() => tarjeta.id, { onDelete: "cascade" }),
+    fechaCompra: date("fecha_compra"),
+    cuotaActual: integer("cuota_actual").notNull(),
+    cuotaTotal: integer("cuota_total").notNull(),
+    cierreBase: date("cierre_base").notNull(),
+    /** Comercio y monto de cada cuota. */
+    datosCifrados: text("datos_cifrados").notNull(),
+    creadoEn: creadoEn(),
+    actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
+  },
+  (t) => [index("tarjeta_cuota_tarjeta_idx").on(t.tarjetaId)],
+);
+
+/** Consumos de un solo pago que se repiten cada mes (Netflix en la tarjeta, por ejemplo), detectados al importar. */
+export const tarjetaConsumo = pgTable(
+  "tarjeta_consumo",
+  {
+    id: serial("id").primaryKey(),
+    tarjetaId: integer("tarjeta_id")
+      .notNull()
+      .references(() => tarjeta.id, { onDelete: "cascade" }),
+    /** Nombre y monto de cada período ({ "2026-11": 4599 }): un monto por período, sin repetidos. */
+    datosCifrados: text("datos_cifrados").notNull(),
+    creadoEn: creadoEn(),
+    actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
+  },
+  (t) => [index("tarjeta_consumo_tarjeta_idx").on(t.tarjetaId)],
 );
 
 export type EstadoRecordatorio = "activo" | "pausado" | "cumplido" | "no_confirmado" | "borrado";
@@ -309,3 +387,5 @@ export type Adjunto = typeof adjunto.$inferSelect;
 export type Nota = typeof nota.$inferSelect;
 export type Grupo = typeof grupo.$inferSelect;
 export type Suscripcion = typeof suscripcion.$inferSelect;
+export type Tarjeta = typeof tarjeta.$inferSelect;
+export type TarjetaCuota = typeof tarjetaCuota.$inferSelect;

@@ -3,6 +3,7 @@ import { NavLink, useLocation } from "react-router";
 import {
   Bell,
   Calculator,
+  CreditCard,
   CalendarDays,
   History,
   LayoutDashboard,
@@ -31,6 +32,7 @@ const SECCIONES = [
   { a: "/calendario", texto: "Calendario", icono: CalendarDays },
   { a: "/calculadoras", texto: "Calculadoras", icono: Calculator },
   { a: "/suscripciones", texto: "Suscripciones", icono: Repeat },
+  { a: "/tarjetas", texto: "Tarjetas", icono: CreditCard },
   { a: "/whatsapp", texto: "WhatsApp", icono: MessageCircle },
   { a: "/historial", texto: "Historial", icono: History },
   { a: "/configuracion", texto: "Configuración", icono: Settings },

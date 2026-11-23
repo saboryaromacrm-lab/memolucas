@@ -6,7 +6,8 @@ import { Boton, Cargando, useAccion } from "../componentes/ui";
 import { post, put } from "../lib/api";
 import { ahora, cuandoCorto, hora, haceCuanto } from "../lib/fechas";
 import { plata } from "../lib/numeros";
-import { colorVencimiento, diasParaVencer, textoDias, useSuscripciones } from "../lib/suscripciones";
+import { useSuscripciones } from "../lib/suscripciones";
+import { colorVencimiento, diasParaVencer, textoDias } from "../lib/vencimientos";
 import type { EstadoPanel, Evento } from "../lib/tipos";
 import { useDatos } from "../lib/vivo";
 

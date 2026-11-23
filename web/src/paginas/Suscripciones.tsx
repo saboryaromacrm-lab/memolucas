@@ -3,8 +3,9 @@ import { ExternalLink, Pencil, Plus, RefreshCw, Repeat, Trash2 } from "lucide-re
 import { Boton, Cargando, Encabezado, Modal, Vacio, useAccion } from "../componentes/ui";
 import { del, post, put } from "../lib/api";
 import { ahora } from "../lib/fechas";
-import { aNumero, plata } from "../lib/numeros";
-import { FRECUENCIAS, colorVencimiento, diasParaVencer, textoDias, useSuscripciones } from "../lib/suscripciones";
+import { aCampo, aNumero, plata } from "../lib/numeros";
+import { FRECUENCIAS, useSuscripciones } from "../lib/suscripciones";
+import { colorVencimiento, diasParaVencer, textoDias } from "../lib/vencimientos";
 import type { FrecuenciaSuscripcion, Suscripcion } from "../lib/tipos";
 
 const fechaLarga = (iso: string) => iso.split("-").reverse().join("/");
@@ -87,7 +88,7 @@ function FormSuscripcion({ s, onCerrar }: { s: Suscripcion | null; onCerrar: () 
     url: s?.url ?? "",
     fechaInicio: s?.fechaInicio ?? "",
     fechaVto: s?.fechaVto ?? ahora().plus({ months: 1 }).toISODate()!,
-    monto: s ? String(s.monto).replace(".", ",") : "",
+    monto: s ? aCampo(s.monto) : "",
     moneda: s?.moneda ?? "ARS",
     frecuencia: s?.frecuencia ?? ("mensual" as FrecuenciaSuscripcion),
     observacion: s?.observacion ?? "",

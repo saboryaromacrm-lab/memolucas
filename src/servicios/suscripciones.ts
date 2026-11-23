@@ -4,15 +4,16 @@ import { db } from "../db/index.js";
 import { suscripcion, type Configuracion, type FrecuenciaSuscripcion, type Suscripcion } from "../db/schema.js";
 import { sinFormato } from "../bot/frases.js";
 import { bus } from "../lib/eventos.js";
-import { ahora, parseHora, zona } from "../lib/fechas.js";
+import { ahora, parseHora } from "../lib/fechas.js";
 import { registrar } from "../lib/log.js";
 import { plata } from "../lib/textos.js";
 import { obtenerConfig } from "./configuracion.js";
-import { enFila, postergarPorSilencio } from "./disparador.js";
+import { enFila } from "./disparador.js";
 import { registrarEncuesta } from "./encuestas.js";
 import { enviador } from "./enviador.js";
 import { registrarMensaje } from "./mensajes.js";
 import { ErrorUsuario } from "./recordatorios.js";
+import { cuandoVence, momentoAviso, sePuedeAvisar } from "./vencimientos.js";
 
 export type DatosSuscripcion = Pick<Suscripcion, "nombre" | "url" | "fechaInicio" | "fechaVto" | "monto" | "moneda" | "frecuencia" | "observacion">;
 
@@ -21,16 +22,8 @@ const PERIODOS: Record<FrecuenciaSuscripcion, DurationLikeObject> = { "7dias": {
 /** Renovar suma un período a la fecha de vencimiento (no a la de hoy). */
 export const sumarPeriodo = (fecha: string, f: FrecuenciaSuscripcion) => DateTime.fromISO(fecha).plus(PERIODOS[f]).toISODate()!;
 
-const diaDe = (fecha: string) => DateTime.fromISO(fecha, { zone: zona() }).setLocale("es");
-
-/** Días que faltan para el vencimiento: 0 = hoy, negativo = venció. */
-export const diasParaVencer = (fecha: string) => Math.round(diaDe(fecha).diff(ahora().startOf("day"), "days").days);
-
 /** Los dos avisos de un vencimiento: X días antes y el mismo día, a la hora por defecto. */
-function momentosAviso(fechaVto: string, cfg: Configuracion) {
-  const dia = diaDe(fechaVto).set({ ...parseHora(cfg.horaDefecto), second: 0, millisecond: 0 });
-  return { previo: dia.minus({ days: cfg.suscripcionesDiasAviso }).toJSDate(), dia: dia.toJSDate() };
-}
+const momentosAviso = (fechaVto: string, cfg: Configuracion) => ({ previo: momentoAviso(fechaVto, cfg.suscripcionesDiasAviso, cfg), dia: momentoAviso(fechaVto, 0, cfg) });
 
 /** Con una fecha nueva, los avisos vuelven a empezar; los que ya deberían haber salido no se mandan (se ven en el panel). */
 async function avisosDesde(fechaVto: string) {
@@ -110,20 +103,11 @@ export async function recordarSuscripcionManana(id: number): Promise<{ s: Suscri
 
 export const OPCIONES_SUSCRIPCION = ["🔄 Renovada", "⏰ Recordame mañana"];
 
-/** "vence en 3 días (vie 28/11)", "vence hoy", "venció hace 2 días". */
-export function cuandoVence(fechaVto: string): string {
-  const dias = diasParaVencer(fechaVto);
-  if (dias > 1) return `vence en ${dias} días (${diaDe(fechaVto).toFormat("ccc dd/MM")})`;
-  if (dias === 1) return "vence mañana";
-  if (dias === 0) return "vence hoy";
-  return `venció hace ${-dias} ${dias === -1 ? "día" : "días"}`;
-}
-
 /** Lo llama el barrido cada minuto: manda los avisos que tocan (X días antes, el día y los "recordame mañana"). */
 export async function avisarSuscripciones(): Promise<void> {
   const cfg = await obtenerConfig();
+  if (!sePuedeAvisar(cfg)) return;
   const ya = new Date();
-  if (!enviador().conectado() || postergarPorSilencio(ya, cfg)) return; // Se reintenta en el próximo barrido.
   const filas = await db
     .select()
     .from(suscripcion)

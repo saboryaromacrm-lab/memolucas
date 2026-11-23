@@ -19,3 +19,6 @@ export const plata = (n: number, moneda: "ARS" | "USD" = "ARS") => `${moneda ===
 
 /** "+12,50 %" (con signo si se pide). */
 export const pct = (n: number, conSigno = false) => `${conSigno && n > 0 ? "+" : ""}${porciento.format(n)} %`;
+
+/** Para mostrar un número en un campo que se edita: 1234.5 → "1234,5" (vacío si es 0 y se pide). */
+export const aCampo = (n: number, vacioSiCero = false) => (vacioSiCero && !n ? "" : String(n).replace(".", ","));

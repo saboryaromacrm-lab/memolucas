@@ -113,6 +113,7 @@ export type Configuracion = {
   audioMaxSegundos: number;
   usarEncuestas: boolean;
   suscripcionesDiasAviso: number;
+  tarjetasDiasAviso: number;
   groqKeyPropia: boolean;
   groqKeyEntorno: boolean;
   apiKeyPropia: boolean;
@@ -178,4 +179,40 @@ export type Suscripcion = {
   moneda: "ARS" | "USD";
   frecuencia: FrecuenciaSuscripcion;
   observacion: string;
+};
+
+export type CuotaTarjeta = {
+  id: number;
+  comercio: string;
+  montoCuota: number;
+  montoTotal: number;
+  fechaCompra: string | null;
+  cuotaTotal: number;
+  /** La cuota que ya se cobró (avanza sola en cada cierre). */
+  actual: number;
+  restantes: number;
+  finalizada: boolean;
+  ultimoCierre: string;
+};
+export type Tarjeta = {
+  id: number;
+  nombre: string;
+  ultimos4: string;
+  cierre: string | null;
+  vencimiento: string | null;
+  limiteCompra: number;
+  limiteCuotas: number;
+  disponibleCompra: number;
+  disponibleCuotas: number;
+  saldo: number;
+  pagoMinimo: number;
+  usoLimite: number | null;
+  proximoResumenCuotas: number;
+  totalAdeudado: number;
+  ultimoResumen: { cierre: string; vencimiento: string | null } | null;
+  cantidadResumenes: number;
+  cuotas: CuotaTarjeta[];
+  finalizadas: CuotaTarjeta[];
+  proyeccion: { mes: string; cuotas: number; libera: number; disponible: number; terminan: string[] }[];
+  consumos: { id: number; nombre: string; periodo: string | null; monto: number; anterior: number | null; variacion: number | null }[];
 };
