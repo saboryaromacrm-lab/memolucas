@@ -395,11 +395,15 @@ export const usoIa = pgTable("uso_ia", {
 // Lo lee el asistente: chats y contactos, los mensajes de los últimos 7 días (texto cifrado) y los mensajes que
 // le pediste programar. Al desvincularlo se borra todo.
 
-/** Chats y contactos. nombre: el de tu agenda; apodo: el que se puso la persona en WhatsApp. */
+/**
+ * Chats y contactos. nombre: el de tu agenda; apodo: el que se puso la persona en WhatsApp; alias: como le decís vos
+ * al asistente ("Maca"), siempre ese chat.
+ */
 export const waChat = pgTable("wa_chat", {
   jid: text("jid").primaryKey(),
   nombre: text("nombre"),
   apodo: text("apodo"),
+  alias: text("alias"),
   esGrupo: boolean("es_grupo").notNull().default(false),
   ultimoMensajeEn: ts("ultimo_mensaje_en"),
 });

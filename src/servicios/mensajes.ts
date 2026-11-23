@@ -22,8 +22,7 @@ export async function mensajePorWaId(waId: string) {
   return fila ?? null;
 }
 
-/** El último mensaje recibido; ambito: solo el de ese chat (null = el privado). */
-export async function ultimoEntrante(ambito?: Ambito) {
-  const [fila] = await db.select().from(mensaje).where(and(eq(mensaje.direccion, "entrante"), filtroChat(mensaje.chat, ambito))).orderBy(desc(mensaje.id)).limit(1);
+export async function ultimoEntrante() {
+  const [fila] = await db.select().from(mensaje).where(and(eq(mensaje.direccion, "entrante"))).orderBy(desc(mensaje.id)).limit(1);
   return fila ?? null;
 }

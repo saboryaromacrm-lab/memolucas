@@ -9,17 +9,16 @@ import { registrar } from "../lib/log.js";
 import { normalizar } from "../lib/textos.js";
 import { mostrarNumero } from "../whatsapp/numeros.js";
 import { enviador } from "./enviador.js";
-import { registrarMensaje, ultimoEntrante } from "./mensajes.js";
+import { registrarMensaje, ultimosMensajes } from "./mensajes.js";
 import { ErrorUsuario } from "./recordatorios.js";
 
 // Tu WhatsApp, del lado de los datos: lo que llega se guarda 7 días (cifrado) para que el asistente lo lea, resuma y
-// busque; los envíos siempre pasan por tu confirmación.
+// busque; los envíos siempre pasan por tu confirmación. Tus apodos ("Maca") apuntan siempre al mismo chat.
 
 export const DIAS_GUARDADO = 7;
 const DIA_MS = 86_400_000;
 /** Un programado que no se pudo mandar a tiempo (tu WhatsApp estaba desconectado) ya no se manda pasado este rato. */
 const HORAS_TOLERANCIA_PROGRAMADO = 2;
-const MINUTOS_PENDIENTE = 30;
 
 type DatosMensaje = { texto: string; autor: string | null };
 const ILEGIBLE: DatosMensaje = { texto: "(no se pudo leer)", autor: null };
@@ -46,14 +45,29 @@ export async function guardarChatsWa(chats: DatosChat[]) {
 const nombreDe = (c: { jid: string; nombre: string | null; apodo: string | null; esGrupo: boolean }) =>
   c.nombre || c.apodo || (c.esGrupo ? "Grupo" : mostrarNumero(c.jid.split("@")[0]));
 
-/** Chats y contactos: los que coinciden con la consulta (nombre o número), o los de mensajes más recientes. */
+/**
+ * Chats y contactos: los que coinciden con la consulta (nombre, alias o número), o los de mensajes más recientes.
+ * Si la consulta es uno de tus alias, devuelve solo ese chat.
+ */
 export async function listarChatsWa(consulta?: string, limite = 20) {
   const filas = await db.select().from(waChat).orderBy(sql`${waChat.ultimoMensajeEn} desc nulls last`);
-  const palabras = normalizar(consulta ?? "").split(" ").filter(Boolean);
-  return filas
-    .filter((c) => palabras.every((p) => normalizar(`${c.nombre ?? ""} ${c.apodo ?? ""} ${c.jid.split("@")[0]}`).includes(p)))
+  const buscado = normalizar(consulta ?? "");
+  const porAlias = filas.filter((c) => c.alias && normalizar(c.alias) === buscado);
+  const palabras = buscado.split(" ").filter(Boolean);
+  return (porAlias.length ? porAlias : filas.filter((c) => palabras.every((p) => normalizar(`${c.nombre ?? ""} ${c.apodo ?? ""} ${c.alias ?? ""} ${c.jid.split("@")[0]}`).includes(p))))
     .slice(0, limite)
-    .map((c) => ({ jid: c.jid, nombre: nombreDe(c), esGrupo: c.esGrupo, ultimoMensaje: c.ultimoMensajeEn }));
+    .map((c) => ({ jid: c.jid, nombre: nombreDe(c), alias: c.alias, esGrupo: c.esGrupo, ultimoMensaje: c.ultimoMensajeEn }));
+}
+
+/** "Cuando digo Maca es Macarena Oviedo": el alias queda en ese chat (y deja de estar en cualquier otro). */
+export async function fijarAliasWa(chatJid: string, alias: string) {
+  const a = alias.trim();
+  if (!a) throw new ErrorUsuario("El apodo está vacío.");
+  const conEse = (await db.select().from(waChat)).filter((c) => c.alias && normalizar(c.alias) === normalizar(a));
+  if (conEse.length) await db.update(waChat).set({ alias: null }).where(inArray(waChat.jid, conEse.map((c) => c.jid)));
+  const [fila] = await db.update(waChat).set({ alias: a }).where(eq(waChat.jid, chatJid)).returning();
+  if (!fila) throw new ErrorUsuario("Ese chat no está entre tus contactos.");
+  return `Listo: "${a}" es siempre ${nombreDe(fila)}.`;
 }
 
 async function chatsPorJid(jids: string[]) {
@@ -185,7 +199,6 @@ export async function purgarWa() {
 
 /** Al desvincular tu WhatsApp: no queda nada. */
 export async function borrarTodoWa() {
-  pendientes.clear();
   await db.delete(waMensaje);
   await db.delete(waProgramado);
   await db.delete(waChat);
@@ -197,38 +210,50 @@ export async function borrarTodoWa() {
 /** Lo que se necesita de tu WhatsApp para mandar. */
 export type CanalPersonal = { conectado(): boolean; enviar(jid: string, texto: string): Promise<unknown> };
 
-type Pendiente = { chatJid: string; para: string; texto: string; enviarEn: Date | null; ultimoEntranteId: number; vence: number };
-const pendientes = new Map<string, Pendiente>();
+/** Para comparar lo que el asistente te mostró con lo que se va a mandar: sin formato, comillas ni espacios de más. */
+const comparable = (t: string) =>
+  t
+    .toLowerCase()
+    .replace(/[*_~"“”'‘’«»]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 
 /**
- * Prepara un envío y devuelve su código. Se manda recién con confirmarEnvioWa, y solo si después de prepararlo llegó
- * un mensaje tuyo (tu "sí"): así el asistente no puede mandar nada por su cuenta.
+ * ¿Ya te lo mostró y le contestaste? Tu último mensaje tiene que ser la respuesta directa a un mensaje del asistente
+ * que mostraba para quién y el texto exacto. Así no depende de que el asistente recuerde nada entre mensajes, y no
+ * puede mandar algo que no viste.
  */
-export async function prepararEnvioWa(chatJid: string, texto: string, enviarEn: Date | null) {
+async function loViste(para: string, texto: string): Promise<boolean> {
+  const recientes = await ultimosMensajes(10, null);
+  const tuyo = recientes.findLastIndex((m) => m.direccion === "entrante");
+  const anterior = recientes.slice(0, Math.max(tuyo, 0)).findLast((m) => m.texto && (m.direccion === "entrante" || m.intencionDetectada === "agente"));
+  if (tuyo < 0 || !anterior || anterior.direccion !== "saliente") return false;
+  const mostrado = comparable(anterior.texto!);
+  return mostrado.includes(comparable(texto)) && mostrado.includes(comparable(para.replace(/\s*\(.*?\)/g, "")));
+}
+
+/**
+ * Manda (o programa) un mensaje desde tu WhatsApp, solo si ya te lo mostró y contestaste. Si no, no manda y le dice al
+ * asistente qué mostrarte.
+ */
+export async function enviarWa(chatJid: string, texto: string, enviarEn: Date | null, canal: CanalPersonal): Promise<string> {
   if (!texto.trim()) throw new ErrorUsuario("El mensaje está vacío.");
   if (enviarEn && enviarEn.getTime() < Date.now() - 60_000) throw new ErrorUsuario("Esa hora ya pasó.");
   const para = await nombreDeChatWa(chatJid);
-  const codigo = Math.random().toString(36).slice(2, 8);
-  const ultimo = await ultimoEntrante(null);
-  pendientes.set(codigo, { chatJid, para, texto, enviarEn, ultimoEntranteId: ultimo?.id ?? 0, vence: Date.now() + MINUTOS_PENDIENTE * 60_000 });
-  return { codigo, para, texto, cuando: enviarEn ? formatearCuando(enviarEn) : "ahora" };
-}
-
-export async function confirmarEnvioWa(codigo: string, canal: CanalPersonal): Promise<string> {
-  const p = pendientes.get(codigo);
-  if (!p || p.vence < Date.now()) throw new ErrorUsuario("Ese envío ya no está preparado: preparalo de nuevo y volvé a preguntar.");
-  const ultimo = await ultimoEntrante(null);
-  if (!ultimo || ultimo.id <= p.ultimoEntranteId) return "Todavía no se mandó: mostrale el mensaje y esperá que te diga que sí en un mensaje suyo.";
-  pendientes.delete(codigo);
-  if (p.enviarEn && p.enviarEn.getTime() > Date.now() + 60_000) {
-    await db.insert(waProgramado).values({ chatJid: p.chatJid, datosCifrados: sellar({ texto: p.texto, para: p.para }), enviarEn: p.enviarEn });
+  const programado = enviarEn && enviarEn.getTime() > Date.now() + 60_000 ? enviarEn : null;
+  if (!(await loViste(para, texto)))
+    return `No se mandó todavía. Mostrale esto tal cual y preguntale "¿Lo mando?":\n📤 *Para:* ${para}\n💬 *Texto:* "${texto}"${
+      programado ? `\n🕐 *Cuándo:* ${formatearCuando(programado)}` : ""
+    }\nSi contesta que sí, volvé a llamar a wa_enviar con el mismo chat y el mismo texto.`;
+  if (programado) {
+    await db.insert(waProgramado).values({ chatJid, datosCifrados: sellar({ texto, para }), enviarEn: programado });
     bus.avisar("whatsapp");
-    return `Programado: le llega a ${p.para} ${formatearCuando(p.enviarEn)}.`;
+    return `Programado: le llega a ${para} ${formatearCuando(programado)}.`;
   }
   if (!canal.conectado()) throw new ErrorUsuario("Tu WhatsApp no está conectado ahora: revisalo en el panel.");
-  await canal.enviar(p.chatJid, p.texto);
-  await registrar("info", "whatsapp", `Tu WhatsApp: mensaje enviado a ${p.para} (pedido al asistente)`);
-  return `Enviado a ${p.para}.`;
+  await canal.enviar(chatJid, texto);
+  await registrar("info", "whatsapp", `Tu WhatsApp: mensaje enviado a ${para} (pedido al asistente)`);
+  return `Enviado a ${para}.`;
 }
 
 type DatosProgramado = { texto: string; para: string };

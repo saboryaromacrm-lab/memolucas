@@ -1,0 +1,1 @@
+ALTER TABLE "wa_chat" ADD COLUMN "alias" text;
