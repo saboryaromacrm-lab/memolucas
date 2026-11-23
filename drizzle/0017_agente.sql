@@ -1,0 +1,1 @@
+ALTER TABLE "configuracion" ADD COLUMN "agente_tope_usd" integer DEFAULT 10 NOT NULL;

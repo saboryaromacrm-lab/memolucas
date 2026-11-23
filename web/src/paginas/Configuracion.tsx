@@ -56,6 +56,7 @@ const EDITABLES = [
   "usarEncuestas",
   "suscripcionesDiasAviso",
   "tarjetasDiasAviso",
+  "agenteTopeUsd",
 ] as const;
 type Editable = Pick<Cfg, (typeof EDITABLES)[number]>;
 
@@ -436,6 +437,15 @@ function SeccionIA({
           )}
         </div>
         <p className="text-xs text-slate-500">Probá con el modelo guardado: si cambiaste el modelo, guardá antes de probar.</p>
+      </Tarjeta>
+
+      <Tarjeta
+        titulo="Asistente"
+        texto="Responde lo que no es un pedido simple (tarjetas, suscripciones, cuentas, internet…) por WhatsApp y en el botón Asistente, con Claude Sonnet. Cada consulta cuesta centavos de dólar."
+      >
+        <Campo etiqueta="Tope de gasto de IA por mes (US$)" ayuda="Al llegar, el asistente se pausa hasta el mes que viene y sigue lo básico. 0 = apagado.">
+          <Numero valor={form.agenteTopeUsd} min={0} onChange={(v) => set("agenteTopeUsd", v)} />
+        </Campo>
       </Tarjeta>
 
       <Tarjeta titulo="API key de Claude">

@@ -1,0 +1,59 @@
+import type { FastifyPluginAsync } from "fastify";
+import { and, desc, isNotNull, isNull } from "drizzle-orm";
+import { z } from "zod";
+import { db } from "../../db/index.js";
+import { mensaje } from "../../db/schema.js";
+import { preguntarAlAgente, textoTope } from "../../bot/agente.js";
+import { ErrorIA } from "../../bot/ia.js";
+import { ErrorAudio, transcribir } from "../../servicios/audio.js";
+import { obtenerConfig } from "../../servicios/configuracion.js";
+import { registrarMensaje } from "../../servicios/mensajes.js";
+import { ErrorUsuario } from "../../servicios/recordatorios.js";
+
+/** Lo que se le dice al asistente desde el panel: queda en la misma conversación que el chat privado de WhatsApp. */
+async function conversar(texto: string, tipo: "texto" | "audio") {
+  const entrante = await registrarMensaje({ direccion: "entrante", texto, tipo, chat: null, intencionDetectada: "agente" });
+  let r: Awaited<ReturnType<typeof preguntarAlAgente>>;
+  try {
+    r = await preguntarAlAgente(texto, "panel", entrante.id);
+  } catch (err) {
+    if (err instanceof ErrorIA && /clave|API key/i.test(err.message)) throw new ErrorUsuario("Falta la clave de Claude: cargala en Configuración → IA.");
+    throw err;
+  }
+  const respuesta = "tope" in r ? textoTope(r.tope) : r.texto;
+  await registrarMensaje({ direccion: "saliente", texto: respuesta, chat: null, intencionDetectada: "tope" in r ? "agente_tope" : "agente" });
+  return respuesta;
+}
+
+export const rutasAgente: FastifyPluginAsync = async (app) => {
+  /** Los últimos mensajes del chat privado (de WhatsApp y del panel), del más viejo al más nuevo. */
+  app.get("/agente", async () => {
+    const filas = await db
+      .select({ id: mensaje.id, direccion: mensaje.direccion, texto: mensaje.texto, tipo: mensaje.tipo, creadoEn: mensaje.creadoEn })
+      .from(mensaje)
+      .where(and(isNull(mensaje.chat), isNotNull(mensaje.texto)))
+      .orderBy(desc(mensaje.id))
+      .limit(40);
+    return filas.reverse();
+  });
+
+  app.post("/agente", async (req) => {
+    const { texto } = z.object({ texto: z.string().trim().min(1).max(4000) }).parse(req.body);
+    return { respuesta: await conversar(texto, "texto") };
+  });
+
+  /** Un audio grabado en el panel: se transcribe (como los audios de WhatsApp) y se le pregunta al asistente. */
+  app.post("/agente/audio", async (req) => {
+    const archivo = await req.file();
+    if (!archivo) throw new ErrorUsuario("No llegó el audio.");
+    let texto: string;
+    try {
+      texto = await transcribir(await obtenerConfig(), await archivo.toBuffer(), archivo.mimetype);
+    } catch (err) {
+      if (err instanceof ErrorAudio) throw new ErrorUsuario(/falta/i.test(err.message) ? "Para hablarle falta la clave de Groq (Configuración → Audios)." : "No pude entender el audio.");
+      throw err;
+    }
+    if (!texto.trim()) throw new ErrorUsuario("No escuché nada en el audio.");
+    return { transcripcion: texto, respuesta: await conversar(texto, "audio") };
+  });
+};

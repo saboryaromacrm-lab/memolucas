@@ -25,7 +25,7 @@ export function claveApi(cfg: Configuracion): string {
   const propia = cfg.iaApiKeyCifrada ? descifrar(cfg.iaApiKeyCifrada) : null;
   return (propia || entorno.anthropicApiKey).trim();
 }
-function cliente(cfg: Configuracion): Anthropic {
+export function cliente(cfg: Configuracion): Anthropic {
   const clave = claveApi(cfg);
   if (!clave) throw new ErrorIA("No hay API key de Claude configurada");
   // Una clave copiada a medias trae caracteres como "•" que rompen la conexión.
@@ -38,10 +38,23 @@ function cliente(cfg: Configuracion): Anthropic {
   return c;
 }
 
-async function registrarUso(modelo: string, entrada: number, salida: number) {
+type Uso = {
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens?: number | null;
+  cache_read_input_tokens?: number | null;
+  server_tool_use?: { web_search_requests?: number | null } | null;
+};
+const USD_POR_BUSQUEDA = 0.01;
+
+/** Lo que costó una respuesta, para el gasto del mes: entrada (escribir la caché cuesta 1,25×, leerla 0,1×), salida y búsquedas web. */
+export async function registrarUso(modelo: string, u: Uso) {
   const precio = MODELOS.find((m) => m.id === modelo) ?? MODELOS[0];
-  const costo = (entrada * precio.entrada + salida * precio.salida) / 1_000_000;
-  await db.insert(usoIa).values({ modelo, tokensEntrada: entrada, tokensSalida: salida, costoUsd: costo.toFixed(6) });
+  const escrita = u.cache_creation_input_tokens ?? 0;
+  const leida = u.cache_read_input_tokens ?? 0;
+  const entrada = u.input_tokens + escrita * 1.25 + leida * 0.1;
+  const costo = (entrada * precio.entrada + u.output_tokens * precio.salida) / 1_000_000 + (u.server_tool_use?.web_search_requests ?? 0) * USD_POR_BUSQUEDA;
+  await db.insert(usoIa).values({ modelo, tokensEntrada: u.input_tokens + escrita + leida, tokensSalida: u.output_tokens, costoUsd: costo.toFixed(6) });
 }
 
 export async function gastoDelMes() {
@@ -82,7 +95,7 @@ async function pedirUnaVez<T extends z.ZodType>(
     },
     op.timeoutMs ? { timeout: op.timeoutMs } : undefined,
   );
-  await registrarUso(modelo, r.usage.input_tokens, r.usage.output_tokens);
+  await registrarUso(modelo, r.usage);
   if (r.stop_reason === "refusal") throw new ErrorIA("El modelo rechazó el pedido");
   if (r.stop_reason === "max_tokens") throw new ErrorIA("La respuesta del modelo quedó cortada");
   if (!r.parsed_output) throw new ErrorIA("La respuesta del modelo no tiene el formato esperado");
@@ -152,6 +165,7 @@ export const EsquemaInterpretacion = z.object({
     "nota_consultar",
     "nota_editar",
     "nota_borrar",
+    "consulta",
     "ayuda",
     "charla",
     "desconocido",
@@ -289,6 +303,7 @@ Reglas:
   - "¿cuál era la clave del wifi?", "¿qué anoté del auto?" → nota_consultar con consulta.
   - "cambiá la nota del wifi: ahora es Y" → nota_editar con nota_ids y nota (contenido nuevo completo). "borrá la nota del wifi" → nota_borrar con nota_ids.
   - Si hay una foto pendiente y dice "guardala como nota" → nota_guardar (la foto se adjunta).
+- consulta: preguntas o pedidos sobre sus suscripciones, tarjetas de crédito, cuotas, gastos o links guardados; cuentas y porcentajes; información general o de actualidad (dólar, clima, noticias, "¿qué es…?"); y pedidos de varios pasos o que no encajan en las otras intenciones. Lo resuelve otro asistente: dejá "respuesta" vacía.
 - Para charla ("gracias", "jaja", "buen día") contestá corto y natural en "respuesta" (ej. "¡De nada! 🙌"). Para ayuda o si no entendés, en "respuesta" decí qué entendiste y qué podés hacer, en una o dos líneas.
 - confianza entre 0 y 1.
 
@@ -463,7 +478,7 @@ export async function probarConexion(cfg: Configuracion): Promise<{ ok: boolean;
       output_config: { effort: "low" },
       messages: [{ role: "user", content: "Respondé solo: OK" }],
     });
-    await registrarUso(cfg.iaModelo, r.usage.input_tokens, r.usage.output_tokens);
+    await registrarUso(cfg.iaModelo, r.usage);
     const texto = r.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("").trim();
     return { ok: true, mensaje: `Respondió "${texto.slice(0, 40)}" con ${cfg.iaModelo}`, ms: Date.now() - inicio };
   } catch (err) {
