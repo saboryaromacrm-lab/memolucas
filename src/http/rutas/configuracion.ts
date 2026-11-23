@@ -48,6 +48,7 @@ const Cambios = z
     audioModelo: z.string().trim().min(3).max(80),
     audioMaxSegundos: z.number().int().min(10).max(600),
     usarEncuestas: z.boolean(),
+    suscripcionesDiasAviso: z.number().int().min(0).max(30),
   })
   .partial();
 

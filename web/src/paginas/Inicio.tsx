@@ -5,6 +5,8 @@ import { useEditor } from "../componentes/Editor";
 import { Boton, Cargando, useAccion } from "../componentes/ui";
 import { post, put } from "../lib/api";
 import { ahora, cuandoCorto, hora, haceCuanto } from "../lib/fechas";
+import { plata } from "../lib/numeros";
+import { colorVencimiento, diasParaVencer, textoDias, useSuscripciones } from "../lib/suscripciones";
 import type { EstadoPanel, Evento } from "../lib/tipos";
 import { useDatos } from "../lib/vivo";
 
@@ -57,6 +59,7 @@ export function Inicio() {
         </div>
         <div className="space-y-6">
           <TarjetaWhatsapp estado={datos.whatsapp} />
+          <VencenPronto />
           <section className="tarjeta">
             <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
               <h2 className="text-sm font-semibold text-slate-800">Sin confirmar</h2>
@@ -140,6 +143,36 @@ function Bloque({ titulo, eventos, vacio }: { titulo: string; eventos: Evento[];
       ) : (
         <p className="px-4 py-8 text-center text-sm text-slate-500">{vacio}</p>
       )}
+    </section>
+  );
+}
+
+/** Suscripciones vencidas o que vencen pronto (solo si hay). */
+function VencenPronto() {
+  const { datos, porVencer } = useSuscripciones();
+  if (!datos || !porVencer.length) return null;
+  return (
+    <section className="tarjeta">
+      <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+        <h2 className="text-sm font-semibold text-slate-800">Vencen pronto</h2>
+        <Link to="/suscripciones" className="text-xs font-medium text-marca-oscuro hover:underline">
+          Ver suscripciones
+        </Link>
+      </div>
+      <ul className="divide-y divide-slate-100">
+        {porVencer.map((s) => {
+          const dias = diasParaVencer(s.fechaVto);
+          return (
+            <li key={s.id} className="flex items-center justify-between gap-3 px-4 py-3">
+              <div className="min-w-0">
+                <div className="truncate text-sm font-medium text-slate-800">{s.nombre}</div>
+                <span className={`inline-block rounded-full px-2 py-0.5 text-[11px] font-medium ${colorVencimiento(dias, datos.diasAviso)}`}>{textoDias(dias)}</span>
+              </div>
+              <span className="shrink-0 text-sm tabular-nums text-slate-700">{plata(s.monto, s.moneda)}</span>
+            </li>
+          );
+        })}
+      </ul>
     </section>
   );
 }

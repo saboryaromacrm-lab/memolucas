@@ -40,6 +40,14 @@ export const esNegativo = (texto: string) => /^(no|nop|nah|cancelar|cancela|canc
 
 export const EMOJIS_CONFIRMACION = EMOJIS_OK;
 
+/** Respuesta a un aviso de vencimiento de una suscripción: "renovada" o "recordame mañana" (null si es otra cosa). */
+export function respuestaASuscripcion(texto: string): "renovar" | "recordar" | null {
+  const t = normalizar(texto);
+  if (/^(ya )?(la |lo )?(renove|renovada|renovado|renovala|renovalo|pague|pagada|pagado)( ya)?$/.test(t) || esAfirmativo(texto) || /^(listo|hecho|ya)$/.test(t)) return "renovar";
+  if (/^(recordame |avisame )?(manana|despues|mas tarde)$/.test(t)) return "recordar";
+  return null;
+}
+
 export const TEXTO_AYUDA = `👋 Soy *Memolucas*, tu bot de recordatorios. Escribime como le hablarías a alguien:
 
 • _Recordame mañana a las 10 pagar la luz_

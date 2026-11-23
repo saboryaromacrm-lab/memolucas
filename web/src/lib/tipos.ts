@@ -112,6 +112,7 @@ export type Configuracion = {
   audioModelo: string;
   audioMaxSegundos: number;
   usarEncuestas: boolean;
+  suscripcionesDiasAviso: number;
   groqKeyPropia: boolean;
   groqKeyEntorno: boolean;
   apiKeyPropia: boolean;
@@ -164,4 +165,17 @@ export type Nota = {
   adjuntoUrl: string | null;
   creadoEn: string;
   actualizadoEn: string;
+};
+
+export type FrecuenciaSuscripcion = "7dias" | "quincenal" | "mensual" | "anual";
+export type Suscripcion = {
+  id: number;
+  nombre: string;
+  url: string;
+  fechaInicio: string | null;
+  fechaVto: string;
+  monto: number;
+  moneda: "ARS" | "USD";
+  frecuencia: FrecuenciaSuscripcion;
+  observacion: string;
 };

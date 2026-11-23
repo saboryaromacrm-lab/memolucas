@@ -1,5 +1,6 @@
 import {
   boolean,
+  date,
   index,
   integer,
   jsonb,
@@ -89,6 +90,9 @@ export const configuracion = pgTable("configuracion", {
   // Opciones para tocar (encuestas de WhatsApp) en avisos y propuestas.
   usarEncuestas: boolean("usar_encuestas").notNull().default(true),
 
+  /** Cuántos días antes del vencimiento de una suscripción avisa el bot (además del día que vence). */
+  suscripcionesDiasAviso: integer("suscripciones_dias_aviso").notNull().default(3),
+
   actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
 });
 
@@ -129,6 +133,32 @@ export const notaCalculadora = pgTable("nota_calculadora", {
   textoCifrado: text("texto_cifrado").notNull(),
   actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
 });
+
+export type FrecuenciaSuscripcion = "7dias" | "quincenal" | "mensual" | "anual";
+
+/** Servicios que se pagan cada tanto (Netflix, hosting, dominios…) y vencen. */
+export const suscripcion = pgTable(
+  "suscripcion",
+  {
+    id: serial("id").primaryKey(),
+    nombre: text("nombre").notNull(),
+    url: text("url").notNull().default(""),
+    fechaInicio: date("fecha_inicio"),
+    fechaVto: date("fecha_vto").notNull(),
+    monto: numeric("monto", { precision: 14, scale: 2, mode: "number" }).notNull().default(0),
+    moneda: text("moneda").$type<"ARS" | "USD">().notNull().default("ARS"),
+    frecuencia: text("frecuencia").$type<FrecuenciaSuscripcion>().notNull(),
+    observacion: text("observacion").notNull().default(""),
+    /** Avisos de este vencimiento ya enviados por WhatsApp (se reinician al renovar o cambiar la fecha). */
+    avisoPrevioEnviado: boolean("aviso_previo_enviado").notNull().default(false),
+    avisoDiaEnviado: boolean("aviso_dia_enviado").notNull().default(false),
+    /** "Recordame mañana": cuándo vuelve a avisar. */
+    recordarEn: ts("recordar_en"),
+    creadoEn: creadoEn(),
+    actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
+  },
+  (t) => [index("suscripcion_vto_idx").on(t.fechaVto)],
+);
 
 export type EstadoRecordatorio = "activo" | "pausado" | "cumplido" | "no_confirmado" | "borrado";
 export type ModoInsistencia = "global" | "propia" | "off";
@@ -208,6 +238,8 @@ export const mensaje = pgTable(
     recordatorioId: integer("recordatorio_id").references(() => recordatorio.id, { onDelete: "set null" }),
     ocurrenciaId: integer("ocurrencia_id").references(() => ocurrencia.id, { onDelete: "set null" }),
     adjuntoId: integer("adjunto_id").references(() => adjunto.id, { onDelete: "set null" }),
+    /** Aviso de vencimiento de una suscripción (para contestarle "renovada" citándolo). */
+    suscripcionId: integer("suscripcion_id").references(() => suscripcion.id, { onDelete: "set null" }),
     // Grupo (null = privado) y quién lo escribió en el grupo.
     chat: text("chat"),
     autor: text("autor"),
@@ -229,7 +261,8 @@ export const borradorPendiente = pgTable("borrador_pendiente", {
 export type AccionEncuesta =
   | { tipo: "aviso"; ocurrenciaId: number }
   | { tipo: "propuesta"; borradorId: number }
-  | { tipo: "elegir"; ids: number[]; interpretacion: Record<string, unknown> };
+  | { tipo: "elegir"; ids: number[]; interpretacion: Record<string, unknown> }
+  | { tipo: "suscripcion"; suscripcionId: number };
 
 /** Encuestas que manda el bot: la clave para descifrar los votos y qué hacer con cada opción. */
 export const encuesta = pgTable(
@@ -275,3 +308,4 @@ export type Configuracion = typeof configuracion.$inferSelect;
 export type Adjunto = typeof adjunto.$inferSelect;
 export type Nota = typeof nota.$inferSelect;
 export type Grupo = typeof grupo.$inferSelect;
+export type Suscripcion = typeof suscripcion.$inferSelect;

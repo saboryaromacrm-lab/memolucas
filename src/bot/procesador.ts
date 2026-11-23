@@ -40,12 +40,13 @@ import {
   ultimaOcurrenciaEnviada,
   type DatosRecordatorio,
 } from "../servicios/recordatorios.js";
-import { EMOJIS_CONFIRMACION, TEXTO_AYUDA, detectarComando, esAfirmativo, esNegativo } from "./comandos.js";
+import { EMOJIS_CONFIRMACION, TEXTO_AYUDA, detectarComando, esAfirmativo, esNegativo, respuestaASuscripcion } from "./comandos.js";
 import { extraerUrls, leerEnlace, textoSinUrls, type VistaPreviaWa } from "../servicios/enlaces.js";
 import { analizarEnlace, analizarFoto, ErrorIA, interpretar, responderConNotas, type Interpretacion } from "./ia.js";
 import { ErrorAudio, transcribir } from "../servicios/audio.js";
 import { actualizarNota, borrarNota, crearNota, obtenerNota, relacionadas, todasLasNotas } from "../servicios/notas.js";
 import { obtenerAdjunto } from "../servicios/adjuntos.js";
+import { recordarSuscripcionManana, renovarDesdeAviso } from "../servicios/suscripciones.js";
 import { normalizar } from "../lib/textos.js";
 import { encuestaPorWaId, marcarRespondida, opcionElegida, OPCIONES_PROPUESTA, registrarEncuesta } from "../servicios/encuestas.js";
 import { cuandoBonito, textoPrevios } from "./formato.js";
@@ -84,6 +85,9 @@ function documentoDe(msg: WAMessage) {
   return m?.documentMessage ?? m?.documentWithCaptionMessage?.message?.documentMessage ?? null;
 }
 
+
+/** Hasta cuánto después del aviso de una suscripción un "renovada" sin citarlo es la respuesta. */
+const HORAS_RESPUESTA_A_SUSCRIPCION = 24;
 
 /** En grupos, fotos y links solo se procesan si se lo piden al bot. */
 const PIDE_BOT = /\b(recorda|recordame|recordanos|recuerden|avisa|avisame|avisanos|anota|nota|agrega|guarda|guardalo|guardala|memo|memolucas|bot)\b/;
@@ -304,6 +308,7 @@ export class Procesador {
     await registrarAqui({ direccion: "entrante", tipo: "reaccion", texto: emoji, waMessageId: msg.key.id });
     if (!EMOJIS_CONFIRMACION.includes(emoji) || !r.key?.id) return;
     const original = await mensajePorWaId(r.key.id);
+    if (original?.suscripcionId) return this.contestarSuscripcion(original.suscripcionId, "renovar");
     // Su propia reacción ya muestra que quedó hecho: no se contesta.
     if (original?.ocurrenciaId) await confirmarOcurrencia(original.ocurrenciaId);
   }
@@ -350,6 +355,8 @@ export class Procesador {
         const interp = { ...(a.interpretacion as unknown as Interpretacion), recordatorio_ids: [recId] };
         return this.ejecutarSeguro(interp, { ocCitada: null, borrador: await borradorActivo(), msg: encuesta });
       }
+      case "suscripcion":
+        return this.contestarSuscripcion(a.suscripcionId, elegida === 0 ? "renovar" : "recordar");
     }
   }
 
@@ -470,6 +477,18 @@ export class Procesador {
         entrante.creadoEn.getTime() - ultimaDelBot.creadoEn.getTime() <= MINUTOS_RESPUESTA_A_PREGUNTA * 60_000);
     const anotar = (intencion: string) =>
       db.update(mensaje).set({ intencionDetectada: intencion }).where(eq(mensaje.id, entrante.id));
+
+    // 0) Respuesta al aviso de una suscripción ("renovada", "mañana"): citándolo, o si fue lo último que mandó el bot.
+    const suscripcionId =
+      citadoFila?.suscripcionId ??
+      (!citadoFila && ultimaDelBot?.suscripcionId && entrante.creadoEn.getTime() - ultimaDelBot.creadoEn.getTime() <= HORAS_RESPUESTA_A_SUSCRIPCION * 3_600_000
+        ? ultimaDelBot.suscripcionId
+        : null);
+    const accionSuscripcion = suscripcionId ? respuestaASuscripcion(texto) : null;
+    if (suscripcionId && accionSuscripcion) {
+      await anotar(accionSuscripcion === "renovar" ? "renovar_suscripcion" : "recordar_suscripcion");
+      return this.contestarSuscripcion(suscripcionId, accionSuscripcion);
+    }
 
     // 1) Links: se leen y se analizan.
     const urls = extraerUrls(texto);
@@ -706,6 +725,24 @@ export class Procesador {
     if (!ns.length) return "Todavía no tenés notas. Probá: _anotá que la clave del wifi es…_ 🗒️";
     const lineas = ns.slice(0, 40).map((n) => `• ${n.titulo} _(${n.categoria})_${n.adjuntoId ? " 📎" : ""}`);
     return `🗒️ Tus notas (${ns.length}):\n${lineas.join("\n")}${ns.length > 40 ? "\n…y más en el panel." : ""}\n\nPreguntame: _¿cuál era la clave del wifi?_`;
+  }
+
+  /** "Renovada" o "Recordame mañana" sobre el aviso de vencimiento de una suscripción. */
+  private async contestarSuscripcion(id: number, accion: "renovar" | "recordar") {
+    try {
+      if (accion === "recordar") {
+        const { s, cuando } = await recordarSuscripcionManana(id);
+        return this.decir(`⏰ Dale, te recuerdo *${s.nombre}* mañana a las ${cuando.toFormat("H:mm")}.`, { intencion: "recordar_suscripcion" });
+      }
+      const { renovada, s } = await renovarDesdeAviso(id);
+      const vence = DateTime.fromISO(s.fechaVto).setLocale("es").toFormat("cccc dd/MM/yyyy");
+      return this.decir(renovada ? `🔄 Listo: *${s.nombre}* renovada. Ahora vence el ${vence}.` : `*${s.nombre}* ya estaba renovada: vence el ${vence}.`, {
+        intencion: "renovar_suscripcion",
+      });
+    } catch (err) {
+      if (err instanceof ErrorUsuario) return this.decir(err.message);
+      throw err;
+    }
   }
 
   /** Marca el aviso como hecho en silencio: sin mensaje, solo una reacción ✅ (queda en el historial). */

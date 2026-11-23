@@ -21,3 +21,7 @@ export function normalizar(texto: string): string {
     .replace(/\s+/g, " ")
     .trim();
 }
+
+const pesos = new Intl.NumberFormat("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+/** "$ 1.234,56" (US$ en dólares). */
+export const plata = (n: number, moneda: "ARS" | "USD" = "ARS") => `${moneda === "USD" ? "US$" : "$"} ${pesos.format(n)}`;
