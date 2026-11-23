@@ -21,6 +21,7 @@ import { rutasPanel } from "./rutas/panel.js";
 import { rutasRecordatorios } from "./rutas/recordatorios.js";
 import { rutasWhatsapp } from "./rutas/whatsapp.js";
 import { rutasSalud } from "./rutas/salud.js";
+import { rutasSuscripciones } from "./rutas/suscripciones.js";
 
 export const COOKIE_SESION = "memolucas_sesion";
 
@@ -89,6 +90,7 @@ export async function crearServidor() {
       await privado.register(rutasPanel);
       await privado.register(rutasNotas);
       await privado.register(rutasCalculadoras);
+      await privado.register(rutasSuscripciones);
       await privado.register(rutasEventos);
     },
     { prefix: "/api" },

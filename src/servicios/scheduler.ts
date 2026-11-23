@@ -10,6 +10,7 @@ import { obtenerConfig } from "./configuracion.js";
 import { fijarReagendador, ocurrenciasVencidas, procesarOcurrencia } from "./disparador.js";
 import { avanzarRecurrente, fijarAgendador, recurrentesParaAvanzar } from "./recordatorios.js";
 import { revisarResumenDiario } from "./resumen.js";
+import { avisarSuscripciones } from "./suscripciones.js";
 
 const COLA_DISPARO = "disparo";
 const COLA_BARRIDO = "barrido";
@@ -34,6 +35,7 @@ export async function barrer(): Promise<void> {
     for (const id of await ocurrenciasVencidas()) await procesarOcurrencia(id);
     for (const rec of await recurrentesParaAvanzar()) await avanzarRecurrente(rec);
     await revisarResumenDiario();
+    await avisarSuscripciones();
     await db.delete(borradorPendiente).where(lt(borradorPendiente.expiraEn, new Date()));
     ultimoBarrido = new Date();
   } catch (err) {

@@ -54,6 +54,7 @@ const EDITABLES = [
   "audioModelo",
   "audioMaxSegundos",
   "usarEncuestas",
+  "suscripcionesDiasAviso",
 ] as const;
 type Editable = Pick<Cfg, (typeof EDITABLES)[number]>;
 
@@ -205,6 +206,11 @@ export function Configuracion() {
                   etiqueta="Mandar opciones para tocar"
                   ayuda="✅ Hecho · ⏰ En 15 min · ⏰ En 1 h · 📅 Mañana"
                 />
+              </Tarjeta>
+              <Tarjeta titulo="Vencimientos de suscripciones" texto="El bot avisa el día que vence a la hora por defecto y, además, unos días antes (0 = solo el día).">
+                <Campo etiqueta="Avisar antes (días)">
+                  <Numero valor={form.suscripcionesDiasAviso} min={0} onChange={(v) => set("suscripcionesDiasAviso", v)} />
+                </Campo>
               </Tarjeta>
               <Tarjeta
                 titulo="Mensajes del bot"

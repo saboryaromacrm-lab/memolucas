@@ -11,12 +11,14 @@ import {
   Menu,
   MessageCircle,
   Plus,
+  Repeat,
   ScrollText,
   Settings,
   StickyNote,
   X,
 } from "lucide-react";
 import { post } from "../lib/api";
+import { useSuscripciones } from "../lib/suscripciones";
 import { useConexionVivo, useDatos } from "../lib/vivo";
 import type { InfoWhatsapp } from "../lib/tipos";
 import { useEditor } from "./Editor";
@@ -28,6 +30,7 @@ const SECCIONES = [
   { a: "/notas", texto: "Notas", icono: StickyNote },
   { a: "/calendario", texto: "Calendario", icono: CalendarDays },
   { a: "/calculadoras", texto: "Calculadoras", icono: Calculator },
+  { a: "/suscripciones", texto: "Suscripciones", icono: Repeat },
   { a: "/whatsapp", texto: "WhatsApp", icono: MessageCircle },
   { a: "/historial", texto: "Historial", icono: History },
   { a: "/configuracion", texto: "Configuración", icono: Settings },
@@ -87,6 +90,10 @@ export function Layout({ children }: { children: ReactNode }) {
   const editor = useEditor();
   const [menu, setMenu] = useState(false);
   const loc = useLocation();
+  // Numerito en el menú: lo que hay que mirar (por ahora, las suscripciones que vencen pronto).
+  const { porVencer } = useSuscripciones();
+  const avisos: Partial<Record<string, number>> = { "/suscripciones": porVencer.length };
+  const hayAvisos = Object.values(avisos).some(Boolean);
 
   const enlace = (s: (typeof SECCIONES)[number], onClick?: () => void) => (
     <NavLink
@@ -102,6 +109,7 @@ export function Layout({ children }: { children: ReactNode }) {
     >
       <s.icono className="size-[18px]" />
       {s.texto}
+      {!!avisos[s.a] && <span className="ml-auto min-w-5 rounded-full bg-amber-400 px-1.5 text-center text-[11px] font-bold leading-5 text-white">{avisos[s.a]}</span>}
     </NavLink>
   );
 
@@ -140,8 +148,9 @@ export function Layout({ children }: { children: ReactNode }) {
         <Marca />
         <div className="flex items-center gap-2">
           <ChipWhatsapp info={wa} compacto />
-          <button onClick={() => setMenu(true)} className="rounded-lg p-1.5 text-slate-600 hover:bg-slate-100" aria-label="Menú">
+          <button onClick={() => setMenu(true)} className="relative rounded-lg p-1.5 text-slate-600 hover:bg-slate-100" aria-label="Menú">
             <Menu className="size-5" />
+            {hayAvisos && <span className="absolute right-0.5 top-0.5 size-2.5 rounded-full bg-amber-400 ring-2 ring-white" />}
           </button>
         </div>
       </header>
