@@ -94,6 +94,8 @@ export const configuracion = pgTable("configuracion", {
   suscripcionesDiasAviso: integer("suscripciones_dias_aviso").notNull().default(3),
   /** Cuántos días antes del vencimiento del resumen de una tarjeta avisa el bot (con el saldo y el pago mínimo). */
   tarjetasDiasAviso: integer("tarjetas_dias_aviso").notNull().default(2),
+  /** Tope de gasto de IA por mes (US$): al llegar, el asistente deja de usarse y queda lo básico. */
+  agenteTopeUsd: integer("agente_tope_usd").notNull().default(10),
 
   actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
 });

@@ -46,6 +46,7 @@ import { analizarEnlace, analizarFoto, ErrorIA, interpretar, responderConNotas, 
 import { ErrorAudio, transcribir } from "../servicios/audio.js";
 import { actualizarNota, borrarNota, crearNota, obtenerNota, relacionadas, todasLasNotas } from "../servicios/notas.js";
 import { obtenerAdjunto } from "../servicios/adjuntos.js";
+import { preguntarAlAgente, textoTope } from "./agente.js";
 import { buscarLinks, crearLink, listarLinks, type Link } from "../servicios/links.js";
 import { recordarSuscripcionManana, renovarDesdeAviso } from "../servicios/suscripciones.js";
 import { normalizar } from "../lib/textos.js";
@@ -577,7 +578,21 @@ export class Procesador {
       interp = { ...interp, intencion: "desconocido" }; // En privado siempre se contesta.
     }
     if (eco) await this.decir(eco, { intencion: "transcripcion" });
+    // Lo que no es un pedido simple lo resuelve el asistente (solo en privado: en el grupo no ve tus cosas).
+    if (interp.intencion === "consulta" && !enGrupo()) return this.consultarAgente(texto, entrante.id);
     return this.ejecutarSeguro(interp, { ocCitada, borrador, msg });
+  }
+
+  private async consultarAgente(texto: string, entranteId: number) {
+    try {
+      const r = await preguntarAlAgente(texto, "whatsapp", entranteId);
+      return this.decir("tope" in r ? textoTope(r.tope) : r.texto, { intencion: "tope" in r ? "agente_tope" : "agente" });
+    } catch (err) {
+      await registrar("error", "agente", "Falló el asistente", err);
+      if (err instanceof ErrorIA && /clave|API key/i.test(err.message))
+        return this.decir("Me falta la clave de Claude para responderte. Cargala en el panel (Configuración → IA).", { intencion: "error_ia" });
+      return this.decir(frases.errorTecnico(), { intencion: "error_ia" });
+    }
   }
 
   private async ejecutarSeguro(interp: Interpretacion, ctx: Ctx) {

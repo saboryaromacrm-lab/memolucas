@@ -50,6 +50,7 @@ const Cambios = z
     usarEncuestas: z.boolean(),
     suscripcionesDiasAviso: z.number().int().min(0).max(30),
     tarjetasDiasAviso: z.number().int().min(0).max(30),
+    agenteTopeUsd: z.number().int().min(0).max(1000),
   })
   .partial();
 

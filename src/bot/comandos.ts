@@ -87,6 +87,7 @@ export const TEXTO_AYUDA = `👋 Soy *Memolucas*, tu bot de recordatorios. Escri
 
 🗒️ *Notas*: _anotá que la clave del wifi es…_ · _anotá comprar leche y pan_ · _¿cuál era la clave del wifi?_ · foto + _guardala como nota_
 🔗 *Links*: _guardá en mis links el home banking: https://…_ · _¿cuál era el link del home banking?_ · *mis links*
+🤖 *Preguntame lo que quieras*: _¿cuánto debo de la Visa?_ · _¿qué vence esta semana?_ · _¿cuánto gasto en suscripciones?_ · _¿cuánto está el dólar?_
 
 Comandos rápidos:
 • *hoy* / *mañana* / *semana* / *lista* (recordatorios) · *notas*

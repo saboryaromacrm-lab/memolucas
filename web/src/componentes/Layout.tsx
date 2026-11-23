@@ -16,6 +16,7 @@ import {
   Repeat,
   ScrollText,
   Settings,
+  Sparkles,
   StickyNote,
   X,
 } from "lucide-react";
@@ -24,6 +25,7 @@ import { useSuscripciones } from "../lib/suscripciones";
 import { useConexionVivo, useDatos } from "../lib/vivo";
 import type { InfoWhatsapp } from "../lib/tipos";
 import { useEditor } from "./Editor";
+import { Asistente } from "./Asistente";
 import { Links } from "./Links";
 
 const SECCIONES = [
@@ -92,13 +94,15 @@ export function Layout({ children }: { children: ReactNode }) {
   const { datos: wa } = useDatos<InfoWhatsapp>("/api/whatsapp", ["whatsapp", "mensajes"]);
   const vivo = useConexionVivo();
   const editor = useEditor();
-  // "Mis links": botón siempre a mano y Ctrl+K (⌘K en Mac).
+  // "Mis links" y el asistente: botones siempre a mano, Ctrl+K y Ctrl+J (⌘ en Mac).
   const [links, setLinks] = useState(false);
+  const [asistente, setAsistente] = useState(false);
   useEffect(() => {
     const atajo = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+      const abrir = e.ctrlKey || e.metaKey ? ({ k: setLinks, j: setAsistente } as Record<string, (v: boolean) => void>)[e.key.toLowerCase()] : undefined;
+      if (abrir) {
         e.preventDefault();
-        setLinks(true);
+        abrir(true);
       }
     };
     window.addEventListener("keydown", atajo);
@@ -143,13 +147,23 @@ export function Layout({ children }: { children: ReactNode }) {
           >
             <Plus className="size-4" /> Nuevo recordatorio
           </button>
-          <button
-            onClick={() => setLinks(true)}
-            className="mb-4 -mt-2 flex w-full items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-          >
-            <Link2 className="size-4 text-marca-oscuro" /> Links
-            <kbd className="ml-auto rounded border border-slate-200 px-1.5 text-[10px] font-medium text-slate-400">Ctrl K</kbd>
-          </button>
+          <div className="-mt-2 mb-4 grid gap-1.5">
+            {(
+              [
+                [setAsistente, Sparkles, "Asistente", "Ctrl J"],
+                [setLinks, Link2, "Links", "Ctrl K"],
+              ] as const
+            ).map(([abrir, Icono, texto, atajo]) => (
+              <button
+                key={texto}
+                onClick={() => abrir(true)}
+                className="flex w-full items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                <Icono className="size-4 text-marca-oscuro" /> {texto}
+                <kbd className="ml-auto rounded border border-slate-200 px-1.5 text-[10px] font-medium text-slate-400">{atajo}</kbd>
+              </button>
+            ))}
+          </div>
         </div>
         <nav className="flex flex-1 flex-col gap-0.5 px-3">{SECCIONES.map((s) => enlace(s))}</nav>
         <div className="space-y-3 border-t border-slate-200 p-4">
@@ -171,6 +185,9 @@ export function Layout({ children }: { children: ReactNode }) {
         <Marca />
         <div className="flex items-center gap-2">
           <ChipWhatsapp info={wa} compacto />
+          <button onClick={() => setAsistente(true)} className="rounded-lg p-1.5 text-marca-oscuro hover:bg-slate-100" aria-label="Asistente">
+            <Sparkles className="size-5" />
+          </button>
           <button onClick={() => setLinks(true)} className="rounded-lg p-1.5 text-marca-oscuro hover:bg-slate-100" aria-label="Mis links">
             <Link2 className="size-5" />
           </button>
@@ -226,6 +243,7 @@ export function Layout({ children }: { children: ReactNode }) {
       </nav>
 
       {links && <Links onCerrar={() => setLinks(false)} />}
+      {asistente && <Asistente onCerrar={() => setAsistente(false)} />}
 
       {/* Menú completo (celular) */}
       {menu && (

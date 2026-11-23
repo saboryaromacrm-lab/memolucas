@@ -114,6 +114,7 @@ export type Configuracion = {
   usarEncuestas: boolean;
   suscripcionesDiasAviso: number;
   tarjetasDiasAviso: number;
+  agenteTopeUsd: number;
   groqKeyPropia: boolean;
   groqKeyEntorno: boolean;
   apiKeyPropia: boolean;
