@@ -19,14 +19,14 @@ import { cuandoVence, diaDe, diasParaVencer, momentoAviso, sePuedeAvisar } from 
 export type Saldos = { limiteCompra: number; limiteCuotas: number; disponibleCompra: number; disponibleCuotas: number; saldo: number; pagoMinimo: number };
 export type DatosTarjeta = Saldos & { nombre: string; ultimos4: string; cierre: string | null; vencimiento: string | null };
 export type DatosCuota = { comercio: string; montoCuota: number; fechaCompra: string | null; cuotaActual: number; cuotaTotal: number };
-type DatosConsumo = { nombre: string; montos: Record<string, number> };
+export type DatosConsumo = { nombre: string; montos: Record<string, number> };
 
-const SIN_SALDOS: Saldos = { limiteCompra: 0, limiteCuotas: 0, disponibleCompra: 0, disponibleCuotas: 0, saldo: 0, pagoMinimo: 0 };
+export const SIN_SALDOS: Saldos = { limiteCompra: 0, limiteCuotas: 0, disponibleCompra: 0, disponibleCuotas: 0, saldo: 0, pagoMinimo: 0 };
 const ILEGIBLE = "(no se pudo descifrar)";
 
-const sellar = (datos: object) => cifrar(JSON.stringify(datos));
+export const sellar = (datos: object) => cifrar(JSON.stringify(datos));
 /** Lo cifrado de una fila; si no se puede descifrar (¿cambió el APP_SECRET?), "vacio". */
-function abrir<T>(cifrado: string, vacio: T): T {
+export function abrir<T>(cifrado: string, vacio: T): T {
   const texto = descifrar(cifrado);
   return texto ? (JSON.parse(texto) as T) : vacio;
 }
@@ -146,7 +146,7 @@ async function obtener(id: number): Promise<Tarjeta> {
 }
 
 /** Un vencimiento cuyo aviso ya debería haber salido no se avisa de golpe (se ve en el panel). */
-async function avisoVtoPara(vencimiento: string | null) {
+export async function avisoVtoPara(vencimiento: string | null) {
   if (!vencimiento) return null;
   const cfg = await obtenerConfig();
   return momentoAviso(vencimiento, cfg.tarjetasDiasAviso, cfg) <= new Date() ? vencimiento : null;
