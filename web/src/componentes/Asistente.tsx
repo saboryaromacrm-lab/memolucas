@@ -6,7 +6,7 @@ import { api, post } from "../lib/api";
 import { hora } from "../lib/fechas";
 import { useDatos } from "../lib/vivo";
 
-type Mensaje = { id: number; direccion: "entrante" | "saliente"; texto: string; tipo: string; creadoEn: string };
+type Mensaje = { id: number; direccion: "entrante" | "saliente"; texto: string; creadoEn: string };
 
 const SE_PUEDE_GRABAR = typeof MediaRecorder !== "undefined" && !!navigator.mediaDevices?.getUserMedia;
 
@@ -33,10 +33,7 @@ function useGrabador(onAudio: (audio: Blob) => void) {
   return { grabando, alternar };
 }
 
-/**
- * El asistente en el panel: la misma conversación que el chat privado de WhatsApp (se ve lo de los dos lados y se
- * actualiza solo). Se escribe o se habla.
- */
+/** El asistente en el panel: su propia conversación, aparte del chat de WhatsApp. Se escribe o se habla. */
 export function Asistente({ onCerrar }: { onCerrar: () => void }) {
   const { datos: mensajes } = useDatos<Mensaje[]>("/api/agente", ["mensajes"]);
   const [texto, setTexto] = useState("");
@@ -45,7 +42,7 @@ export function Asistente({ onCerrar }: { onCerrar: () => void }) {
   const avisar = useAviso();
   const final = useRef<HTMLDivElement>(null);
 
-  const visibles = (mensajes ?? []).filter((m) => m.tipo !== "reaccion");
+  const visibles = mensajes ?? [];
   useEffect(() => {
     final.current?.scrollIntoView({ block: "end" });
   }, [visibles.length, enviando]);

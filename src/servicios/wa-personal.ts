@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, inArray, lt, lte, ne, sql } from "drizzle-orm";
 import { isJidGroup, normalizeMessageContent, proto, type WAMessage } from "baileys";
 import { db } from "../db/index.js";
-import { waChat, waMensaje, waProgramado } from "../db/schema.js";
+import { waChat, waMensaje, waProgramado, type Canal } from "../db/schema.js";
 import { abrir, sellar } from "../lib/cifrado.js";
 import { bus } from "../lib/eventos.js";
 import { formatearCuando } from "../lib/fechas.js";
@@ -222,12 +222,12 @@ const comparable = (t: string) =>
     .trim();
 
 /**
- * ¿Ya te lo mostró y le contestaste? Tu último mensaje tiene que ser la respuesta directa a un mensaje del asistente
- * que mostraba para quién y el texto exacto. Así no depende de que el asistente recuerde nada entre mensajes, y no
+ * ¿Ya te lo mostró y le contestaste? En la misma conversación (WhatsApp o el panel), tu último mensaje tiene que ser
+ * la respuesta directa a un mensaje del asistente que mostraba para quién y el texto exacto. Así no depende de que el asistente recuerde nada entre mensajes, y no
  * puede mandar algo que no viste.
  */
-async function loViste(para: string, texto: string): Promise<boolean> {
-  const recientes = await ultimosMensajes(10, null);
+async function loViste(para: string, texto: string, conversacion: Canal): Promise<boolean> {
+  const recientes = await ultimosMensajes(10, null, conversacion);
   const tuyo = recientes.findLastIndex((m) => m.direccion === "entrante");
   const anterior = recientes.slice(0, Math.max(tuyo, 0)).findLast((m) => m.texto && (m.direccion === "entrante" || m.intencionDetectada === "agente"));
   if (tuyo < 0 || !anterior || anterior.direccion !== "saliente") return false;
@@ -239,12 +239,12 @@ async function loViste(para: string, texto: string): Promise<boolean> {
  * Manda (o programa) un mensaje desde tu WhatsApp, solo si ya te lo mostró y contestaste. Si no, no manda y le dice al
  * asistente qué mostrarte.
  */
-export async function enviarWa(chatJid: string, texto: string, enviarEn: Date | null, canal: CanalPersonal): Promise<string> {
+export async function enviarWa(chatJid: string, texto: string, enviarEn: Date | null, canal: CanalPersonal, conversacion: Canal): Promise<string> {
   if (!texto.trim()) throw new ErrorUsuario("El mensaje está vacío.");
   if (enviarEn && enviarEn.getTime() < Date.now() - 60_000) throw new ErrorUsuario("Esa hora ya pasó.");
   const para = await nombreDeChatWa(chatJid);
   const programado = enviarEn && enviarEn.getTime() > Date.now() + 60_000 ? enviarEn : null;
-  if (!(await loViste(para, texto)))
+  if (!(await loViste(para, texto, conversacion)))
     return `No se mandó todavía. Mostrale esto tal cual y preguntale "¿Lo mando?":\n📤 *Para:* ${para}\n💬 *Texto:* "${texto}"${
       programado ? `\n🕐 *Cuándo:* ${formatearCuando(programado)}` : ""
     }\nSi contesta que sí, volvé a llamar a wa_enviar con el mismo chat y el mismo texto.`;
