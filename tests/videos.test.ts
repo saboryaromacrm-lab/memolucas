@@ -4,6 +4,7 @@ import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WAMessage } from "baileys";
 import { Procesador } from "../src/bot/procesador.js";
+import { interpretar, type Interpretacion } from "../src/bot/ia.js";
 import { binarios } from "../src/entorno.js";
 import { obtenerConfig } from "../src/servicios/configuracion.js";
 import { transcribir } from "../src/servicios/audio.js";
@@ -11,11 +12,13 @@ import { listarLinks } from "../src/servicios/links.js";
 import { todasLasNotas } from "../src/servicios/notas.js";
 import { esLinkDeVideo, leerVideo, type Video } from "../src/servicios/videos.js";
 import type { ResumenVideo } from "../src/bot/resumir-video.js";
-import { baseLimpia } from "./ayuda.js";
+import { baseLimpia, panelConSesion } from "./ayuda.js";
 
-// Claude simulado: llama a dar_resumen con lo que diga cada prueba.
+// Claude simulado. El que resume llama a dar_resumen con lo que diga cada prueba; el asistente llama a las
+// herramientas que diga "asistente" y contesta con lo que devuelven.
 type Params = { tools: { name: string; run?: (i: unknown) => Promise<string> }[]; messages: { content: { type: string; text?: string }[] }[] };
 const resumen = vi.fn<(p: Params) => ResumenVideo>();
+const asistente = vi.fn<() => { llamadas: { name: string; input: unknown }[]; responder: (r: string[]) => string }>();
 vi.mock("../src/bot/ia.js", async (orig) => ({
   ...(await orig<object>()),
   cliente: () => ({
@@ -23,13 +26,22 @@ vi.mock("../src/bot/ia.js", async (orig) => ({
       messages: {
         toolRunner: (p: Params) => ({
           async *[Symbol.asyncIterator]() {
-            await p.tools.find((t) => t.name === "dar_resumen")!.run!(resumen(p));
-            yield { usage: { input_tokens: 10, output_tokens: 10 }, stop_reason: "end_turn", content: [] };
+            const dar = p.tools.find((t) => t.name === "dar_resumen");
+            let texto = "";
+            if (dar) await dar.run!(resumen(p));
+            else {
+              const { llamadas, responder } = asistente();
+              const resultados: string[] = [];
+              for (const l of llamadas) resultados.push(await p.tools.find((t) => t.name === l.name)!.run!(l.input));
+              texto = responder(resultados);
+            }
+            yield { usage: { input_tokens: 10, output_tokens: 10 }, stop_reason: "end_turn", content: [{ type: "text", text: texto }] };
           },
         }),
       },
     },
   }),
+  interpretar: vi.fn(),
 }));
 vi.mock("../src/servicios/audio.js", async (orig) => ({ ...(await orig<object>()), transcribir: vi.fn(async () => "Hoy te traigo tres páginas: Canva, Notion y Remove.bg") }));
 
@@ -75,6 +87,7 @@ describe("videos", () => {
   beforeEach(async () => {
     await baseLimpia();
     resumen.mockReset();
+    asistente.mockReset();
     vi.mocked(transcribir).mockClear();
   });
 
@@ -105,6 +118,17 @@ describe("videos", () => {
     expect(mudo).toMatchObject({ transcripcion: null, descripcion: "mirá esto", autor: null });
     expect(mudo.cuadros.length).toBeGreaterThan(0);
     expect(transcribir).toHaveBeenCalledTimes(1);
+  });
+
+  it("en el panel, el asistente lo resume con su herramienta", async () => {
+    const { app, headers } = await panelConSesion();
+    resumen.mockReturnValueOnce(RECURSOS);
+    asistente.mockReturnValueOnce({ llamadas: [{ name: "resumir_video", input: { url: "https://vt.tiktok.com/ZSsLtax8R/" } }], responder: ([r]) => r });
+    const r = JSON.parse((await app.inject({ method: "POST", url: "/api/agente", headers, payload: { texto: "https://vt.tiktok.com/ZSsLtax8R/" } })).json().respuesta);
+    expect(r).toMatchObject({ cuenta: "@agustin", titulo: "3 páginas para ahorrar horas", escucho_el_audio: true, recursos: [{ nombre: "Canva" }, { nombre: "Notion" }, {}] });
+    asistente.mockReturnValueOnce({ llamadas: [{ name: "resumir_video", input: { url: "https://www.instagram.com/reel/login/" } }], responder: ([r]) => r });
+    expect((await app.inject({ method: "POST", url: "/api/agente", headers, payload: { texto: "y este?" } })).json().respuesta).toContain("Instagram pide iniciar sesión");
+    await app.close();
   });
 
   describe("por WhatsApp", () => {
@@ -153,6 +177,16 @@ describe("videos", () => {
         ["Canva", "https://www.canva.com/"],
         ["Notion", "https://notion.so/"],
       ]);
+    });
+
+    it("un link de video justo después de una pregunta del asistente se resume (no es la respuesta)", async () => {
+      vi.mocked(interpretar).mockResolvedValue({ intencion: "consulta" } as Interpretacion);
+      asistente.mockReturnValueOnce({ llamadas: [], responder: () => "¿Lo mando?" });
+      await texto("mandale a maca que la quiero");
+      resumen.mockReturnValueOnce(RECURSOS);
+      await texto("https://vt.tiktok.com/ZSsLtax8R/");
+      expect(asistente).toHaveBeenCalledTimes(1);
+      expect(respuestas.at(-1)).toContain("🎬 *3 páginas para ahorrar horas*");
     });
 
     it("un video mandado como archivo: receta que ofrece guardar como nota", async () => {

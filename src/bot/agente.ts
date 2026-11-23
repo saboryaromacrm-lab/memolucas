@@ -14,7 +14,9 @@ import { borrarSuscripcion, crearSuscripcion, listarSuscripciones, renovarSuscri
 import { listarTarjetas } from "../servicios/tarjetas.js";
 import { diasParaVencer } from "../servicios/vencimientos.js";
 import { buscarMensajesWa, cancelarProgramadoWa, DIAS_GUARDADO, enviarWa, fijarAliasWa, leerChatWa, listarChatsWa, programadosWa, type MensajeLeido } from "../servicios/wa-personal.js";
+import { ErrorVideo, esLinkDeVideo, leerVideo, textoErrorVideo } from "../servicios/videos.js";
 import { personal } from "../whatsapp/personal.js";
+import { resumirVideo } from "./resumir-video.js";
 import { cliente, ErrorIA, gastoDelMes, registrarUso } from "./ia.js";
 
 // El asistente: Claude con herramientas sobre los datos de la app (agenda, notas, suscripciones, tarjetas, links)
@@ -50,6 +52,21 @@ const fecha = (iso: string) => {
   if (Number.isNaN(d.getTime())) throw new ErrorUsuario(`Fecha inválida: ${iso}`);
   return d;
 };
+
+/** Un reel o TikTok resumido (lo mismo que cuando se manda el link suelto al bot). */
+async function videoResumido(url: string) {
+  if (!esLinkDeVideo(url)) return "Error: no es un link de video de TikTok, Instagram (reel), YouTube o Facebook.";
+  const cfg = await obtenerConfig();
+  try {
+    const v = await leerVideo(cfg, { url });
+    const r = await resumirVideo(cfg, v);
+    if ("tope" in r) return `Error: ${textoTope(r.tope)}`;
+    return { cuenta: v.autor, ...r.resumen, escucho_el_audio: !!v.transcripcion };
+  } catch (err) {
+    if (err instanceof ErrorVideo) return `Error: ${textoErrorVideo(err.motivo)}`;
+    throw err;
+  }
+}
 
 function herramientas(origen: "whatsapp" | "panel") {
   return [
@@ -221,6 +238,13 @@ function herramientas(origen: "whatsapp" | "panel") {
       run: () => seguro(programadosWa),
     }),
     betaZodTool({
+      name: "resumir_video",
+      description:
+        "Mira y resume un video de TikTok, reel de Instagram, YouTube o Facebook: de qué trata, y las páginas o herramientas que nombra con sus links. Mostralo con una lista numerada y ofrecé guardar los links (guardar_link) o la nota (guardar_nota).",
+      inputSchema: z.object({ url: z.string() }),
+      run: ({ url }) => seguro(() => videoResumido(url)),
+    }),
+    betaZodTool({
       name: "borrar",
       description:
         "Borra un recordatorio, nota, suscripción o link, o cancela un mensaje programado de WhatsApp. Solo con confirmado=true, después de que el usuario dijo que sí en un mensaje suyo.",
@@ -238,7 +262,7 @@ function herramientas(origen: "whatsapp" | "panel") {
 const sistema = (nombre: string) => `Sos Memolucas, el asistente personal de ${nombre}: le hablás por WhatsApp y en su panel.
 Español rioplatense con voseo, cercano y práctico, frases cortas. Escribís para WhatsApp: *negrita* con un asterisco, _cursiva_, listas con •; sin tablas ni títulos con #.
 
-Tenés herramientas sobre sus cosas: agenda y recordatorios, notas, suscripciones, tarjetas de crédito (solo lectura), links guardados, su WhatsApp personal (si lo vinculó) y búsqueda en internet para información general o de actualidad.
+Tenés herramientas sobre sus cosas: agenda y recordatorios, notas, suscripciones, tarjetas de crédito (solo lectura), links guardados, su WhatsApp personal (si lo vinculó), resumir videos (TikTok, reels, YouTube) y búsqueda en internet para información general o de actualidad.
 - Respondé con sus datos reales usando las herramientas; no inventes. Si algo no está, decilo.
 - Si un pedido es claro, hacelo directo. Si falta algo clave (por ejemplo la fecha), preguntá.
 - Para borrar: primero preguntá "¿Lo borro?" y recién cuando conteste que sí, llamá a borrar con confirmado=true.

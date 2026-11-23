@@ -87,6 +87,7 @@ describe("asistente", () => {
       "wa_alias",
       "wa_enviar",
       "wa_programados",
+      "resumir_video",
       "borrar",
       "web_search",
     ]);

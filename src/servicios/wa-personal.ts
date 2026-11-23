@@ -210,11 +210,14 @@ export async function borrarTodoWa() {
 /** Lo que se necesita de tu WhatsApp para mandar. */
 export type CanalPersonal = { conectado(): boolean; enviar(jid: string, texto: string): Promise<unknown> };
 
-/** Para comparar lo que el asistente te mostró con lo que se va a mandar: sin formato, comillas ni espacios de más. */
+/**
+ * Para comparar lo que el asistente te mostró con lo que se va a mandar: sin formato, comillas, espacios de más ni las
+ * variantes invisibles de los emojis (❤ y ❤️ son el mismo corazón).
+ */
 const comparable = (t: string) =>
   t
     .toLowerCase()
-    .replace(/[*_~"“”'‘’«»]/g, "")
+    .replace(/[*_~"“”'‘’«»\uFE0F\u200D]/g, "")
     .replace(/\s+/g, " ")
     .trim();
 
