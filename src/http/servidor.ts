@@ -14,6 +14,7 @@ import { ErrorUsuario } from "../servicios/recordatorios.js";
 import { versionSesionActual } from "./rutas/auth.js";
 import { rutasAuth } from "./rutas/auth.js";
 import { rutasCalculadoras } from "./rutas/calculadoras.js";
+import { rutasLinks } from "./rutas/links.js";
 import { rutasConfiguracion } from "./rutas/configuracion.js";
 import { rutasEventos } from "./rutas/eventos.js";
 import { rutasNotas } from "./rutas/notas.js";
@@ -91,6 +92,7 @@ export async function crearServidor() {
       await privado.register(rutasPanel);
       await privado.register(rutasNotas);
       await privado.register(rutasCalculadoras);
+      await privado.register(rutasLinks);
       await privado.register(rutasSuscripciones);
       await privado.register(rutasTarjetas);
       await privado.register(rutasEventos);

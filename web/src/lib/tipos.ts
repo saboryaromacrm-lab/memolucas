@@ -216,3 +216,5 @@ export type Tarjeta = {
   proyeccion: { mes: string; cuotas: number; libera: number; disponible: number; terminan: string[] }[];
   consumos: { id: number; nombre: string; periodo: string | null; monto: number; anterior: number | null; variacion: number | null }[];
 };
+
+export type Link = { id: number; concepto: string; url: string };

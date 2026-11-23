@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { NavLink, useLocation } from "react-router";
 import {
   Bell,
@@ -7,6 +7,7 @@ import {
   CalendarDays,
   History,
   LayoutDashboard,
+  Link2,
   ListChecks,
   LogOut,
   Menu,
@@ -23,6 +24,7 @@ import { useSuscripciones } from "../lib/suscripciones";
 import { useConexionVivo, useDatos } from "../lib/vivo";
 import type { InfoWhatsapp } from "../lib/tipos";
 import { useEditor } from "./Editor";
+import { Links } from "./Links";
 
 const SECCIONES = [
   { a: "/", texto: "Inicio", icono: LayoutDashboard },
@@ -90,6 +92,18 @@ export function Layout({ children }: { children: ReactNode }) {
   const { datos: wa } = useDatos<InfoWhatsapp>("/api/whatsapp", ["whatsapp", "mensajes"]);
   const vivo = useConexionVivo();
   const editor = useEditor();
+  // "Mis links": botón siempre a mano y Ctrl+K (⌘K en Mac).
+  const [links, setLinks] = useState(false);
+  useEffect(() => {
+    const atajo = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setLinks(true);
+      }
+    };
+    window.addEventListener("keydown", atajo);
+    return () => window.removeEventListener("keydown", atajo);
+  }, []);
   const [menu, setMenu] = useState(false);
   const loc = useLocation();
   // Numerito en el menú: lo que hay que mirar (por ahora, las suscripciones que vencen pronto).
@@ -129,6 +143,13 @@ export function Layout({ children }: { children: ReactNode }) {
           >
             <Plus className="size-4" /> Nuevo recordatorio
           </button>
+          <button
+            onClick={() => setLinks(true)}
+            className="mb-4 -mt-2 flex w-full items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+          >
+            <Link2 className="size-4 text-marca-oscuro" /> Links
+            <kbd className="ml-auto rounded border border-slate-200 px-1.5 text-[10px] font-medium text-slate-400">Ctrl K</kbd>
+          </button>
         </div>
         <nav className="flex flex-1 flex-col gap-0.5 px-3">{SECCIONES.map((s) => enlace(s))}</nav>
         <div className="space-y-3 border-t border-slate-200 p-4">
@@ -150,6 +171,9 @@ export function Layout({ children }: { children: ReactNode }) {
         <Marca />
         <div className="flex items-center gap-2">
           <ChipWhatsapp info={wa} compacto />
+          <button onClick={() => setLinks(true)} className="rounded-lg p-1.5 text-marca-oscuro hover:bg-slate-100" aria-label="Mis links">
+            <Link2 className="size-5" />
+          </button>
           <button onClick={() => setMenu(true)} className="relative rounded-lg p-1.5 text-slate-600 hover:bg-slate-100" aria-label="Menú">
             <Menu className="size-5" />
             {hayAvisos && <span className="absolute right-0.5 top-0.5 size-2.5 rounded-full bg-amber-400 ring-2 ring-white" />}
@@ -200,6 +224,8 @@ export function Layout({ children }: { children: ReactNode }) {
           </NavLink>
         ))}
       </nav>
+
+      {links && <Links onCerrar={() => setLinks(false)} />}
 
       {/* Menú completo (celular) */}
       {menu && (

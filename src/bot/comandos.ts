@@ -48,6 +48,33 @@ export function respuestaASuscripcion(texto: string): "renovar" | "recordar" | n
   return null;
 }
 
+export type PedidoDeLinks = { tipo: "guardar"; concepto: string } | { tipo: "buscar"; consulta: string } | { tipo: "todos" };
+
+/** Separa palabras de comando del resto (sirve con y sin tilde: "guardá", "guarda"). */
+const palabra = (re: string) => new RegExp(`(^|\\s)(${re})(?=[\\s:,.!?]|$)`, "gi");
+const SOBRAN = [palabra("guard[aá]|guard[aá]me|guard[aá]lo|agreg[aá]|agreg[aá]me|agreg[aá]lo|anot[aá]|anot[aá]me|anot[aá]lo|sum[aá]|sum[aá]me|sum[aá]lo"), palabra("(en|a) (mis )?links?"), palabra("(el |la )?links?( del| de la| de)?"), palabra("por favor|porfa")];
+
+/**
+ * "Mis links" por WhatsApp: "guardá en mis links el home banking: https://…" (textoSinUrl ya viene sin el link),
+ * "¿cuál era el link del home banking?" o "mis links". null si no es eso.
+ */
+export function pedidoDeLinks(textoSinUrl: string, conUrl: boolean): PedidoDeLinks | null {
+  const t = normalizar(textoSinUrl);
+  if (!/\blinks?\b/.test(t)) return null;
+  if (conUrl) {
+    if (!/\b(guarda|guardame|guardalo|agrega|agregame|agregalo|anota|anotame|anotalo|suma|sumame|sumalo)\b/.test(t)) return null;
+    const concepto = SOBRAN.reduce((c, re) => c.replace(re, " "), textoSinUrl)
+      .replace(/[:,.!¡¿?-]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/^(el|la|los|las|del|de|un|una) /i, "");
+    return { tipo: "guardar", concepto: concepto.charAt(0).toUpperCase() + concepto.slice(1) };
+  }
+  if (/^((mostrame|pasame|ver) )?(mis )?links$/.test(t)) return { tipo: "todos" };
+  if (/\b(cual|pasame|mandame|dame|tenes|buscame|donde)\b/.test(t) || textoSinUrl.trim().endsWith("?")) return { tipo: "buscar", consulta: t };
+  return null;
+}
+
 export const TEXTO_AYUDA = `👋 Soy *Memolucas*, tu bot de recordatorios. Escribime como le hablarías a alguien:
 
 • _Recordame mañana a las 10 pagar la luz_
@@ -59,6 +86,7 @@ export const TEXTO_AYUDA = `👋 Soy *Memolucas*, tu bot de recordatorios. Escri
 • Mandame un *link* (Instagram, TikTok, YouTube, entradas, recetas, notas…): te digo de qué se trata y te propongo cuándo recordártelo.
 
 🗒️ *Notas*: _anotá que la clave del wifi es…_ · _anotá comprar leche y pan_ · _¿cuál era la clave del wifi?_ · foto + _guardala como nota_
+🔗 *Links*: _guardá en mis links el home banking: https://…_ · _¿cuál era el link del home banking?_ · *mis links*
 
 Comandos rápidos:
 • *hoy* / *mañana* / *semana* / *lista* (recordatorios) · *notas*
