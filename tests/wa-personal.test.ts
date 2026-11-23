@@ -145,6 +145,14 @@ describe("tu WhatsApp", () => {
       expect(personal.enviar).toHaveBeenCalledWith(MACA, "¿Estás durmiendo?");
     });
 
+    it("como en la segunda captura: nombre sin paréntesis y el corazón escrito de otra forma, igual sale", async () => {
+      await guardarChatsWa([{ jid: MACA, nombre: "Macarena Oviedo (Cliente Mayorista)" }]);
+      guion.mockReturnValueOnce({ llamadas: [], responder: () => '📤 *Para:* Macarena Oviedo Cliente Mayorista\n💬 *Texto:* "Te amo ❤"\n\n¿Lo mando?' });
+      await preguntar("mandale a maca te amo");
+      enviar({ chat_jid: MACA, texto: "Te amo ❤️" });
+      expect(await preguntar("si mandalo")).toBe("Enviado a Macarena Oviedo (Cliente Mayorista).");
+    });
+
     it("no manda lo que no viste: otro texto, otra persona o algo que no te mostró justo antes", async () => {
       await guardarChatsWa([{ jid: MACA, nombre: "Macarena Oviedo" }]);
       enviar({ chat_jid: JUAN, texto: "Llego 10 min tarde" });

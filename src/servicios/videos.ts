@@ -22,6 +22,14 @@ export class ErrorVideo extends Error {
   }
 }
 
+const ERRORES: Record<MotivoErrorVideo, string> = {
+  login: "No pude bajar ese video: Instagram pide iniciar sesión para verlo 😕\nGuardalo desde la app y mandámelo acá como *video*, y te lo resumo.",
+  no_disponible: "No pude bajar ese video 😕 (puede ser privado o que la página haya cambiado).\nGuardalo desde la app y mandámelo acá como *video*, y te lo resumo.",
+  largo: `Ese video dura más de ${MAX_SEGUNDOS_VIDEO / 60} minutos: es muy largo para resumirlo por acá.`,
+};
+/** Qué decirte cuando un video no se puede resumir. */
+export const textoErrorVideo = (motivo: MotivoErrorVideo) => ERRORES[motivo];
+
 /** ¿Es un video de TikTok, Instagram, YouTube o Facebook? */
 export function esLinkDeVideo(url: string): boolean {
   let u: URL;

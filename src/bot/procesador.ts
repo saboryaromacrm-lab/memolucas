@@ -48,7 +48,7 @@ import { actualizarNota, borrarNota, crearNota, obtenerNota, relacionadas, todas
 import { obtenerAdjunto } from "../servicios/adjuntos.js";
 import { preguntarAlAgente, textoTope } from "./agente.js";
 import { resumirVideo } from "./resumir-video.js";
-import { ErrorVideo, esLinkDeVideo, leerVideo, MAX_SEGUNDOS_VIDEO, type FuenteVideo, type MotivoErrorVideo } from "../servicios/videos.js";
+import { ErrorVideo, esLinkDeVideo, leerVideo, MAX_SEGUNDOS_VIDEO, textoErrorVideo, type FuenteVideo } from "../servicios/videos.js";
 import { buscarLinks, crearLink, listarLinks, urlValida, type Link } from "../servicios/links.js";
 import { recordarSuscripcionManana, renovarDesdeAviso } from "../servicios/suscripciones.js";
 import { normalizar } from "../lib/textos.js";
@@ -103,11 +103,6 @@ const MINUTOS_RESPUESTA_AL_ASISTENTE = 30;
 /** Un link de video con esto ("recordame ver esto el finde") va como link para agendar, no para resumir. */
 const PIDE_RECORDAR = /\b(recorda|recordame|recordamelo|avisame|agenda|agendame|agendalo)\b/;
 const PIDE_TEXTO_COMPLETO = /^(el |todo el )?(texto completo|transcripcion|texto|todo el texto|que dice)$/;
-const ERRORES_VIDEO: Record<MotivoErrorVideo, string> = {
-  login: "No pude bajar ese video: Instagram pide iniciar sesión para verlo 😕\nGuardalo desde la app y mandámelo acá como *video*, y te lo resumo.",
-  no_disponible: "No pude bajar ese video 😕 (puede ser privado o que la página haya cambiado).\nGuardalo desde la app y mandámelo acá como *video*, y te lo resumo.",
-  largo: `Ese video dura más de ${MAX_SEGUNDOS_VIDEO / 60} minutos: es muy largo para resumirlo por acá.`,
-};
 const TERMINA_EN_PREGUNTA = /\?[\s\p{Extended_Pictographic}\uFE0F\u200D]*$/u;
 
 /** Registra un mensaje con el chat y el autor del contexto actual. */
@@ -520,10 +515,12 @@ export class Procesador {
     }
 
     // 1) Respuesta a una pregunta del asistente ("¿Lo mando?" → "sí"): sigue la charla con él, sin pasar por los
-    // comandos. Si fue lo último que dijo el bot y hace poco (o citándola).
+    // comandos. Si fue lo último que dijo el bot y hace poco (o citándola). Un link de video no es una respuesta: se resume.
+    const urls = extraerUrls(texto);
     const delAsistente = citadoFila ?? ultimaDelBot;
     if (
       !enGrupo() &&
+      !(urls.length && esLinkDeVideo(urls[0])) &&
       delAsistente?.direccion === "saliente" &&
       delAsistente.intencionDetectada === "agente" &&
       TERMINA_EN_PREGUNTA.test(delAsistente.texto ?? "") &&
@@ -535,7 +532,6 @@ export class Procesador {
     }
 
     // 2) "Mis links" (en privado): guardar uno o buscarlo. Va antes que el análisis de links.
-    const urls = extraerUrls(texto);
     const pedido = enGrupo() ? null : pedidoDeLinks(textoSinUrls(texto), urls.length > 0);
     if (pedido && (await this.misLinks(pedido, urls[0]))) return void (await anotar("links"));
 
@@ -892,7 +888,7 @@ export class Procesador {
   private async videoArchivo(msg: WAMessage) {
     const v = msg.message!.videoMessage!;
     await registrarAqui({ direccion: "entrante", tipo: "otro", texto: v.caption ? `🎬 ${v.caption}` : "🎬 Video", waMessageId: msg.key.id, intencionDetectada: "video" });
-    if (Number(v.seconds ?? 0) > MAX_SEGUNDOS_VIDEO) return this.decir(ERRORES_VIDEO.largo, { intencion: "video_error" });
+    if (Number(v.seconds ?? 0) > MAX_SEGUNDOS_VIDEO) return this.decir(textoErrorVideo("largo"), { intencion: "video_error" });
     let datos: Buffer;
     try {
       datos = await this.canal.descargarMedia(msg);
@@ -936,7 +932,7 @@ export class Procesador {
       return this.decir(texto, { intencion: "resumen_video" });
     } catch (err) {
       await reaccion("😕");
-      if (err instanceof ErrorVideo) return this.decir(ERRORES_VIDEO[err.motivo], { intencion: "video_error" });
+      if (err instanceof ErrorVideo) return this.decir(textoErrorVideo(err.motivo), { intencion: "video_error" });
       await registrar("error", "videos", "No se pudo resumir un video", err);
       if (err instanceof ErrorIA && /clave|API key/i.test(err.message))
         return this.decir("Me falta la clave de Claude para resumir videos. Cargala en el panel (Configuración → IA).", { intencion: "error_ia" });
