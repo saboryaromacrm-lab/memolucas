@@ -9,7 +9,10 @@ RUN npm run build
 FROM node:22-alpine
 WORKDIR /app
 ENV NODE_ENV=production TZ=America/Argentina/Buenos_Aires DATA_DIR=/app/data PORT=3000 HOST=0.0.0.0
-RUN apk add --no-cache tzdata wget
+# ffmpeg y yt-dlp: para resumir videos (yt-dlp se actualiza solo al arrancar y una vez por día).
+RUN apk add --no-cache tzdata wget ffmpeg python3 \
+  && wget -qO /usr/local/bin/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
+  && chmod +x /usr/local/bin/yt-dlp
 COPY package*.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/dist ./dist

@@ -47,7 +47,9 @@ import { ErrorAudio, transcribir } from "../servicios/audio.js";
 import { actualizarNota, borrarNota, crearNota, obtenerNota, relacionadas, todasLasNotas } from "../servicios/notas.js";
 import { obtenerAdjunto } from "../servicios/adjuntos.js";
 import { preguntarAlAgente, textoTope } from "./agente.js";
-import { buscarLinks, crearLink, listarLinks, type Link } from "../servicios/links.js";
+import { resumirVideo } from "./resumir-video.js";
+import { ErrorVideo, esLinkDeVideo, leerVideo, MAX_SEGUNDOS_VIDEO, type FuenteVideo, type MotivoErrorVideo } from "../servicios/videos.js";
+import { buscarLinks, crearLink, listarLinks, urlValida, type Link } from "../servicios/links.js";
 import { recordarSuscripcionManana, renovarDesdeAviso } from "../servicios/suscripciones.js";
 import { normalizar } from "../lib/textos.js";
 import { encuestaPorWaId, marcarRespondida, opcionElegida, OPCIONES_PROPUESTA, registrarEncuesta } from "../servicios/encuestas.js";
@@ -98,6 +100,14 @@ const MINUTOS_BORRADOR_GRUPO = 30;
 const MINUTOS_RESPUESTA_A_PREGUNTA = 30;
 /** Si el asistente terminó con una pregunta, lo que se conteste en este rato es para él. */
 const MINUTOS_RESPUESTA_AL_ASISTENTE = 30;
+/** Un link de video con esto ("recordame ver esto el finde") va como link para agendar, no para resumir. */
+const PIDE_RECORDAR = /\b(recorda|recordame|recordamelo|avisame|agenda|agendame|agendalo)\b/;
+const PIDE_TEXTO_COMPLETO = /^(el |todo el )?(texto completo|transcripcion|texto|todo el texto|que dice)$/;
+const ERRORES_VIDEO: Record<MotivoErrorVideo, string> = {
+  login: "No pude bajar ese video: Instagram pide iniciar sesión para verlo 😕\nGuardalo desde la app y mandámelo acá como *video*, y te lo resumo.",
+  no_disponible: "No pude bajar ese video 😕 (puede ser privado o que la página haya cambiado).\nGuardalo desde la app y mandámelo acá como *video*, y te lo resumo.",
+  largo: `Ese video dura más de ${MAX_SEGUNDOS_VIDEO / 60} minutos: es muy largo para resumirlo por acá.`,
+};
 const TERMINA_EN_PREGUNTA = /\?[\s\p{Extended_Pictographic}\uFE0F\u200D]*$/u;
 
 /** Registra un mensaje con el chat y el autor del contexto actual. */
@@ -121,7 +131,20 @@ type DatosBorrador = {
   /** El link no se pudo leer y se pidió una captura: la próxima foto lo hereda. */
   esperaCaptura?: boolean;
   propuesta?: { titulo: string; fechaHora: string; avisosPreviosMin: number[]; descripcion: string | null } | null;
+  /** Lo que se ofreció guardar del resumen de un video (los links en Mis links, o una nota). */
+  guardar?: { links: { concepto: string; url: string }[]; nota: { titulo: string; contenido: string; categoria: string } | null };
+  /** Todo lo que se dice en el video resumido (se manda si piden "texto completo"). */
+  transcripcion?: string | null;
 };
+
+/** El link normalizado, o null si no es un link web. */
+function urlSegura(url: string): string | null {
+  try {
+    return urlValida(url);
+  } catch {
+    return null;
+  }
+}
 
 /** Agrega el link al final de la descripción (si no está). */
 function conLink(descripcion: string | null | undefined, url: string | null | undefined): string | null {
@@ -265,11 +288,12 @@ export class Procesador {
     if (m.imageMessage) return this.foto(msg);
     if (documentoDe(msg)) return this.documento(msg);
     if (m.audioMessage) return this.audio(msg);
+    if (m.videoMessage && !enGrupo()) return this.videoArchivo(msg);
     const texto = textoMensaje(msg);
     if (texto?.trim()) return this.texto(msg, texto.trim());
     await registrarAqui({ direccion: "entrante", tipo: "otro", texto: null, waMessageId: msg.key.id });
     if (m.stickerMessage || enGrupo()) return;
-    await this.decir("Por ahora entiendo texto, audios, fotos y links 🙂");
+    await this.decir("Por ahora entiendo texto, audios, fotos, videos y links 🙂");
   }
 
   /** Audio: se transcribe con Groq, se muestra lo entendido y se procesa como texto. */
@@ -519,12 +543,25 @@ export class Procesador {
     if (urls.length) {
       // En el grupo, un link compartido sin pedirle nada al bot es charla.
       if (enGrupo() && !PIDE_BOT.test(normalizar(textoSinUrls(texto)))) return void (await anotar("ignorar"));
+      // Reels, TikTok, Shorts: en privado se resumen (salvo que pida agendarlo).
+      if (!enGrupo() && esLinkDeVideo(urls[0]) && !PIDE_RECORDAR.test(normalizar(textoSinUrls(texto)))) {
+        await anotar("video");
+        return this.video({ url: urls[0] }, msg, urls[0]);
+      }
       await anotar("enlace");
       return this.enlace(msg, urls[0], textoSinUrls(texto) || null);
     }
 
     // 4) Respuesta rápida a una propuesta (foto o link).
     const borrador = await borradorActivo();
+    if (borrador?.datos.transcripcion && PIDE_TEXTO_COMPLETO.test(normalizar(texto))) {
+      await anotar("texto_completo");
+      return this.decir(`📝 *Lo que se dice en el video:*\n${borrador.datos.transcripcion}`, { intencion: "texto_completo" });
+    }
+    if (borrador?.datos.guardar && esAfirmativo(texto)) {
+      await anotar("aceptar_propuesta");
+      return this.guardarDelVideo(borrador.id, borrador.datos.guardar);
+    }
     if (borrador?.datos.propuesta && esAfirmativo(texto)) {
       await anotar("aceptar_propuesta");
       return this.aceptarBorrador(borrador.id, borrador.datos);
@@ -664,6 +701,8 @@ export class Procesador {
       propuesta = `${origen}: ${borrador.descripcion ?? ""}. Propuesta: "${borrador.propuesta.titulo}" el ${aLocal(borrador.propuesta.fechaHora).toFormat("dd/MM HH:mm")}${
         borrador.propuesta.avisosPreviosMin.length ? ` con avisos previos ${borrador.propuesta.avisosPreviosMin.join(", ")} min` : ""
       }. Si el usuario crea un recordatorio ahora, se le adjunta ${adjunta}.`;
+    else if (borrador?.transcripcion !== undefined)
+      propuesta = `${borrador.descripcion} (ya se lo mandaste${borrador.guardar ? " y ofreciste guardarlo" : ""}).`;
     else if (borrador)
       propuesta = `${origen} recibido sin propuesta (${borrador.descripcion ?? "sin datos"}). Si el usuario dice cuándo, crear_recordatorio (usá un título que describa el contenido) y se le adjunta ${adjunta}.`;
     const respondiendoA = citado ? await this.respondiendoA(citado) : null;
@@ -844,7 +883,73 @@ export class Procesador {
   private async rechazarBorrador(id: number, d: DatosBorrador) {
     await cerrarBorrador(id);
     if (d.adjuntoId) await borrarAdjunto(d.adjuntoId);
-    await this.decir(frases.rechazado(), { intencion: "rechazar_propuesta" });
+    await this.decir(d.guardar ? "Ok, no lo guardo 👍" : frases.rechazado(), { intencion: "rechazar_propuesta" });
+  }
+
+  // ───────────── Videos (reels, TikTok, Shorts) ─────────────
+
+  /** Un video que mandaste como archivo (por ejemplo, uno que no se pudo bajar del link). */
+  private async videoArchivo(msg: WAMessage) {
+    const v = msg.message!.videoMessage!;
+    await registrarAqui({ direccion: "entrante", tipo: "otro", texto: v.caption ? `🎬 ${v.caption}` : "🎬 Video", waMessageId: msg.key.id, intencionDetectada: "video" });
+    if (Number(v.seconds ?? 0) > MAX_SEGUNDOS_VIDEO) return this.decir(ERRORES_VIDEO.largo, { intencion: "video_error" });
+    let datos: Buffer;
+    try {
+      datos = await this.canal.descargarMedia(msg);
+    } catch (err) {
+      await registrar("error", "videos", "No se pudo descargar un video de WhatsApp", err);
+      return this.decir("No pude abrir ese video 😕. ¿Me lo mandás de nuevo?", { intencion: "video_error" });
+    }
+    return this.video({ datos, mime: v.mimetype ?? "video/mp4", epigrafe: v.caption }, msg, null);
+  }
+
+  /** Baja el video, lo resume y ofrece guardar lo útil. Mientras trabaja, el mensaje queda con ⏳. */
+  private async video(fuente: FuenteVideo, msg: WAMessage, url: string | null) {
+    const reaccion = (emoji: string) => this.canal.reaccionar(msg, emoji).catch(() => {});
+    await reaccion("⏳");
+    const cfg = await obtenerConfig();
+    try {
+      const v = await leerVideo(cfg, fuente);
+      const r = await resumirVideo(cfg, v);
+      if ("tope" in r) {
+        await reaccion("😕");
+        return this.decir(textoTope(r.tope), { intencion: "agente_tope" });
+      }
+      const { titulo, resumen, nota } = r.resumen;
+      const recursos = r.resumen.recursos.map((x) => ({ ...x, url: x.url ? urlSegura(x.url) : null }));
+      const links = recursos.flatMap((x) => (x.url ? [{ concepto: x.nombre, url: x.url }] : []));
+      const lista = recursos.map((x, i) => `${i + 1}. *${x.nombre}* — ${x.para_que}${x.url ? `\n${x.url}` : ""}`).join("\n");
+      const oferta = links.length ? `¿${links.length > 1 ? "Las guardo" : "La guardo"} en tus links?` : nota ? "¿Lo guardo en tus notas?" : null;
+      const pie = [
+        v.transcripcion && "_Respondé *texto completo* para ver todo lo que se dice._",
+        v.faltaGroq && "_No escuché el audio: falta la clave de Groq (Configuración → Audios)._",
+      ].filter(Boolean);
+      const texto = [`🎬 *${titulo}*${v.autor ? ` · ${v.autor}` : ""}`, resumen, lista, oferta, pie.join("\n")].filter(Boolean).join("\n\n");
+      await guardarBorrador({
+        url,
+        titulo,
+        descripcion: `Resumen de un video: ${titulo}`,
+        guardar: oferta ? { links, nota: links.length ? null : nota } : undefined,
+        transcripcion: v.transcripcion,
+      });
+      await reaccion("✅");
+      return this.decir(texto, { intencion: "resumen_video" });
+    } catch (err) {
+      await reaccion("😕");
+      if (err instanceof ErrorVideo) return this.decir(ERRORES_VIDEO[err.motivo], { intencion: "video_error" });
+      await registrar("error", "videos", "No se pudo resumir un video", err);
+      if (err instanceof ErrorIA && /clave|API key/i.test(err.message))
+        return this.decir("Me falta la clave de Claude para resumir videos. Cargala en el panel (Configuración → IA).", { intencion: "error_ia" });
+      return this.decir(frases.errorTecnico(), { intencion: "video_error" });
+    }
+  }
+
+  private async guardarDelVideo(id: number, g: NonNullable<DatosBorrador["guardar"]>) {
+    await cerrarBorrador(id);
+    for (const l of g.links) await crearLink(l);
+    if (g.links.length) return this.decir(`🔗 Listo, ${g.links.length > 1 ? `guardé las ${g.links.length} en tus links` : "la guardé en tus links"}.`, { intencion: "links" });
+    const n = await crearNota(g.nota!);
+    return this.decir(`🗒️ Guardé la nota *${n.titulo}*.`, { intencion: "nota_guardar" });
   }
 
   /** Si hay uno solo, lo devuelve. Si hay varios, pregunta cuál (encuesta o lista) y devuelve null. */

@@ -19,6 +19,13 @@ export const rutas = {
   media: path.join(entorno.dataDir, "media"),
 };
 
+/** Programas externos para los videos (en el Dockerfile). Se pueden cambiar para probar. */
+export const binarios = {
+  ytDlp: process.env.YTDLP_BIN ?? "yt-dlp",
+  ffmpeg: "ffmpeg",
+  ffprobe: "ffprobe",
+};
+
 /** PIN de ingreso inicial del panel. Se puede cambiar desde Configuración → Seguridad. */
 export const PIN_INICIAL = "1953";
 

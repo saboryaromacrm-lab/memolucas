@@ -7,6 +7,7 @@ import { logger, registrar } from "./lib/log.js";
 import { obtenerConfig } from "./servicios/configuracion.js";
 import { fijarEnviador } from "./servicios/enviador.js";
 import { barrer, detenerScheduler, iniciarScheduler } from "./servicios/scheduler.js";
+import { actualizarYtDlp } from "./servicios/videos.js";
 import { whatsapp } from "./whatsapp/conexion.js";
 import { personal } from "./whatsapp/personal.js";
 
@@ -44,6 +45,7 @@ async function arrancar() {
 
   // 5) Lo que debió dispararse mientras la app estaba apagada.
   void barrer();
+  void actualizarYtDlp();
   await registrar("info", "sistema", "Memolucas arrancó");
 
   let cerrando = false;
