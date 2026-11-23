@@ -192,7 +192,12 @@ export type Suscripcion = {
   moneda: "ARS" | "USD";
   frecuencia: FrecuenciaSuscripcion;
   observacion: string;
+  /** Con qué tarjeta se paga; sinTarjeta: con otro medio. */
+  tarjetaId: number | null;
+  sinTarjeta: boolean;
 };
+/** Con qué tarjeta parece pagarse una suscripción (aparece en sus débitos). */
+export type SugerenciaTarjeta = { tarjetaId: number; tarjeta: string; comoAparece: string };
 
 export type CuotaTarjeta = {
   id: number;
@@ -207,6 +212,27 @@ export type CuotaTarjeta = {
   finalizada: boolean;
   ultimoCierre: string;
 };
+export type LineaResumen = {
+  tipo: "cuota" | "suscripcion" | "debito" | "compra" | "saldo";
+  descripcion: string;
+  detalle: string | null;
+  monto: number;
+  moneda: "ARS" | "USD";
+  id: number | null;
+};
+/** Lo que se estima del próximo resumen (sin impuestos ni intereses). */
+export type ProximoResumen = {
+  cierre: string;
+  vencimiento: string | null;
+  lineas: LineaResumen[];
+  totalArs: number;
+  totalUsd: number;
+  /** Cierre de un resumen que todavía no se importó. */
+  sinImportar: string | null;
+  /** Cierre del último resumen del que no se marcó cuánto se pagó. */
+  faltaPago: string | null;
+  pagado: number | null;
+};
 export type Tarjeta = {
   id: number;
   nombre: string;
@@ -220,7 +246,7 @@ export type Tarjeta = {
   saldo: number;
   pagoMinimo: number;
   usoLimite: number | null;
-  proximoResumenCuotas: number;
+  proximoResumen: ProximoResumen;
   totalAdeudado: number;
   ultimoResumen: { cierre: string; vencimiento: string | null } | null;
   cantidadResumenes: number;

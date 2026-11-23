@@ -22,6 +22,15 @@ export function normalizar(texto: string): string {
     .trim();
 }
 
+/** Un comercio sin signos ni espacios: "Mercado Libre" y "MERCADOLIBRE" dan lo mismo. */
+export const claveComercio = (s: string) => normalizar(s).replace(/[^a-z0-9]/g, "");
+
+/** ¿Hablan del mismo servicio? "Netflix" y "NETFLIX.COM", o "Spotify" y "SPOTIFY P2B3C". */
+export function pareceElMismo(a: string, b: string): boolean {
+  const [x, y] = [claveComercio(a), claveComercio(b)];
+  return x.length >= 4 && y.length >= 4 && (x.includes(y) || y.includes(x));
+}
+
 const pesos = new Intl.NumberFormat("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 /** "$ 1.234,56" (US$ en dólares). */
 export const plata = (n: number, moneda: "ARS" | "USD" = "ARS") => `${moneda === "USD" ? "US$" : "$"} ${pesos.format(n)}`;

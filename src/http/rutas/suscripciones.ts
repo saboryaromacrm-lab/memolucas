@@ -1,7 +1,8 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { obtenerConfig } from "../../servicios/configuracion.js";
-import { actualizarSuscripcion, borrarSuscripcion, crearSuscripcion, listarSuscripciones, renovarSuscripcion } from "../../servicios/suscripciones.js";
+import { sugerirTarjetas } from "../../servicios/tarjetas.js";
+import { actualizarSuscripcion, borrarSuscripcion, crearSuscripcion, listarSuscripciones, pagarSuscripcionCon, renovarSuscripcion } from "../../servicios/suscripciones.js";
 
 const Id = z.object({ id: z.coerce.number().int().positive() });
 const Fecha = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Fecha inválida");
@@ -14,11 +15,19 @@ const Datos = z.object({
   moneda: z.enum(["ARS", "USD"]).default("ARS"),
   frecuencia: z.enum(["7dias", "quincenal", "mensual", "anual"]),
   observacion: z.string().trim().max(1000).default(""),
+  tarjetaId: z.number().int().positive().nullable().default(null),
+  sinTarjeta: z.boolean().default(false),
 });
 
 export const rutasSuscripciones: FastifyPluginAsync = async (app) => {
-  /** diasAviso: con cuántos días de anticipación avisa el bot (el panel lo usa para marcar las que vencen pronto). */
-  app.get("/suscripciones", async () => ({ suscripciones: await listarSuscripciones(), diasAviso: (await obtenerConfig()).suscripcionesDiasAviso }));
+  /**
+   * diasAviso: con cuántos días de anticipación avisa el bot (el panel lo usa para marcar las que vencen pronto).
+   * sugerencias: con qué tarjeta parece pagarse cada una que no lo tiene definido.
+   */
+  app.get("/suscripciones", async () => {
+    const suscripciones = await listarSuscripciones();
+    return { suscripciones, sugerencias: await sugerirTarjetas(suscripciones), diasAviso: (await obtenerConfig()).suscripcionesDiasAviso };
+  });
 
   app.post("/suscripciones", async (req) => crearSuscripcion(Datos.parse(req.body)));
 
@@ -26,6 +35,12 @@ export const rutasSuscripciones: FastifyPluginAsync = async (app) => {
 
   app.delete("/suscripciones/:id", async (req) => {
     await borrarSuscripcion(Id.parse(req.params).id);
+    return { ok: true };
+  });
+
+  /** Con qué tarjeta se paga (null: con otro medio). */
+  app.put("/suscripciones/:id/tarjeta", async (req) => {
+    await pagarSuscripcionCon(Id.parse(req.params).id, z.object({ tarjetaId: z.number().int().positive().nullable() }).parse(req.body).tarjetaId);
     return { ok: true };
   });
 

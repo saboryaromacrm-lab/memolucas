@@ -11,7 +11,7 @@ import { fijarReagendador, ocurrenciasVencidas, procesarOcurrencia } from "./dis
 import { avanzarRecurrente, fijarAgendador, recurrentesParaAvanzar } from "./recordatorios.js";
 import { revisarResumenDiario } from "./resumen.js";
 import { avisarSuscripciones } from "./suscripciones.js";
-import { avisarTarjetas } from "./tarjetas.js";
+import { avisarCierres, avisarTarjetas } from "./tarjetas.js";
 import { actualizarYtDlp } from "./videos.js";
 import { enviarProgramadosWa, purgarWa } from "./wa-personal.js";
 import { personal } from "../whatsapp/personal.js";
@@ -41,6 +41,7 @@ export async function barrer(): Promise<void> {
     await revisarResumenDiario();
     await avisarSuscripciones();
     await avisarTarjetas();
+    await avisarCierres();
     await enviarProgramadosWa(personal);
     await db.delete(borradorPendiente).where(lt(borradorPendiente.expiraEn, new Date()));
     ultimoBarrido = new Date();

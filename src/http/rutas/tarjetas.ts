@@ -5,12 +5,15 @@ import { guardarResumen, leerResumen } from "../../servicios/importar-resumen.js
 import {
   actualizarCuota,
   actualizarTarjeta,
+  borrarCompra,
   borrarConsumo,
   borrarCuota,
   borrarTarjeta,
+  cargarCompra,
   crearCuota,
   crearTarjeta,
   listarTarjetas,
+  marcarPago,
 } from "../../servicios/tarjetas.js";
 
 const Id = z.object({ id: z.coerce.number().int().positive() });
@@ -34,6 +37,14 @@ const DatosCuota = z.object({
   fechaCompra: Fecha,
   cuotaActual: z.number().int().min(0).max(120),
   cuotaTotal: z.number().int().min(1).max(120),
+});
+/** Una compra con la tarjeta (en un pago, o en cuotas si cuotas > 1). */
+const DatosCompra = z.object({
+  descripcion: z.string().trim().min(1, "Falta qué compraste").max(120),
+  monto: Plata.positive("Falta el monto"),
+  moneda: z.enum(["ARS", "USD"]).default("ARS"),
+  fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Fecha inválida"),
+  cuotas: z.number().int().min(1).max(120).default(1),
 });
 /** Lo revisado en el panel después de leer el resumen. El saldo puede ser negativo (a favor). */
 const ResumenRevisado = z.object({
@@ -83,6 +94,19 @@ export const rutasTarjetas: FastifyPluginAsync = async (app) => {
   app.post("/tarjetas/leer-resumen", async (req) => leerResumen(z.object({ texto: z.string().trim().min(50, "Pegá el texto completo del resumen").max(200_000) }).parse(req.body).texto));
 
   app.post("/tarjetas/:id/resumenes", async (req) => guardarResumen(Id.parse(req.params).id, ResumenRevisado.parse(req.body)));
+
+  app.post("/tarjetas/:id/compras", async (req) => cargarCompra(Id.parse(req.params).id, DatosCompra.parse(req.body)));
+
+  app.delete("/tarjetas/compras/:id", async (req) => {
+    await borrarCompra(Id.parse(req.params).id);
+    return { ok: true };
+  });
+
+  /** Cuánto pagaste del último resumen. */
+  app.put("/tarjetas/:id/pago", async (req) => {
+    await marcarPago(Id.parse(req.params).id, z.object({ monto: Plata }).parse(req.body).monto);
+    return { ok: true };
+  });
 
   app.delete("/tarjetas/consumos/:id", async (req) => {
     await borrarConsumo(Id.parse(req.params).id);

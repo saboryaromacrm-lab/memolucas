@@ -15,7 +15,8 @@ import { registrarMensaje } from "./mensajes.js";
 import { ErrorUsuario } from "./recordatorios.js";
 import { cuandoVence, momentoAviso, sePuedeAvisar } from "./vencimientos.js";
 
-export type DatosSuscripcion = Pick<Suscripcion, "nombre" | "url" | "fechaInicio" | "fechaVto" | "monto" | "moneda" | "frecuencia" | "observacion">;
+export type DatosSuscripcion = Pick<Suscripcion, "nombre" | "url" | "fechaInicio" | "fechaVto" | "monto" | "moneda" | "frecuencia" | "observacion"> &
+  Partial<Pick<Suscripcion, "tarjetaId" | "sinTarjeta">>;
 
 const PERIODOS: Record<FrecuenciaSuscripcion, DurationLikeObject> = { "7dias": { days: 7 }, quincenal: { days: 15 }, mensual: { months: 1 }, anual: { years: 1 } };
 
@@ -63,6 +64,16 @@ export async function actualizarSuscripcion(id: number, d: DatosSuscripcion): Pr
 
 export async function borrarSuscripcion(id: number) {
   await db.delete(suscripcion).where(eq(suscripcion.id, id));
+  bus.avisar("suscripciones");
+}
+
+/** Con qué tarjeta se paga (null: con otro medio). */
+export async function pagarSuscripcionCon(id: number, tarjetaId: number | null) {
+  await obtener(id);
+  await db
+    .update(suscripcion)
+    .set({ tarjetaId, sinTarjeta: tarjetaId === null, actualizadoEn: new Date() })
+    .where(eq(suscripcion.id, id));
   bus.avisar("suscripciones");
 }
 
