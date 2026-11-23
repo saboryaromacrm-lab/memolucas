@@ -126,6 +126,28 @@ describe("asistente", () => {
     expect((await app.inject({ method: "POST", url: "/api/agente" })).statusCode).toBe(401);
   });
 
+  it("si el asistente solo confirma lo que hizo, por WhatsApp reacciona en vez de escribir", async () => {
+    const respuestas: string[] = [];
+    const reacciones: string[] = [];
+    const bot = new Procesador({
+      responder: async (t: string) => (respuestas.push(t), "OUT"),
+      responderImagen: async () => null,
+      responderEncuesta: async () => ({ id: null, secreto: "" }),
+      descifrarVoto: () => null,
+      descargarMedia: async () => Buffer.alloc(0),
+      reaccionar: async (_m: WAMessage, e: string) => void reacciones.push(e),
+    });
+    interpretar.mockResolvedValue({ intencion: "consulta" } as Interpretacion);
+    guion.mockReturnValueOnce({ llamadas: [], responder: () => "💳" });
+    await bot.procesar({ key: { id: "W5", remoteJid: "5491112345678@s.whatsapp.net" }, message: { conversation: "gasté 30 mil en el súper con la visa" } });
+    expect([respuestas, reacciones]).toEqual([[], ["💳"]]);
+    expect(guion.mock.calls[0][0].system).toContain("respondé solo con un emoji");
+    // Si tiene algo que contar, contesta con texto.
+    guion.mockReturnValueOnce({ llamadas: [], responder: () => "Anotado 💳, pero ojo: ya vas $ 900.000 este mes." });
+    await bot.procesar({ key: { id: "W6", remoteJid: "5491112345678@s.whatsapp.net" }, message: { conversation: "y 20 mil de nafta" } });
+    expect(respuestas).toEqual(["Anotado 💳, pero ojo: ya vas $ 900.000 este mes."]);
+  });
+
   it("el panel y WhatsApp son conversaciones separadas: cada una con su historial y su memoria", async () => {
     guion.mockReturnValueOnce({ llamadas: [], responder: () => "Hola desde el panel" });
     await preguntar("hola panel");

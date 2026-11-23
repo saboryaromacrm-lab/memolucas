@@ -172,7 +172,7 @@ describe("videos", () => {
       await texto("texto completo");
       expect(respuestas.at(-1)).toBe("📝 *Lo que se dice en el video:*\nHoy te traigo tres páginas: Canva, Notion y Remove.bg");
       await texto("sí");
-      expect(respuestas.at(-1)).toBe("🔗 Listo, guardé las 2 en tus links.");
+      expect(reacciones.at(-1)).toBe("🔗");
       expect((await listarLinks()).map((l) => [l.concepto, l.url])).toEqual([
         ["Canva", "https://www.canva.com/"],
         ["Notion", "https://notion.so/"],
@@ -195,7 +195,7 @@ describe("videos", () => {
       expect(respuestas.at(-1)).toContain("¿Lo guardo en tus notas?");
       expect(resumen.mock.calls[0][0].messages[0].content.at(-1)!.text).toContain("Texto del posteo: para el finde");
       await texto("dale");
-      expect(respuestas.at(-1)).toBe("🗒️ Guardé la nota *Budín de banana*.");
+      expect(reacciones.at(-1)).toBe("🗒️");
       expect((await todasLasNotas()).map((x) => x.titulo)).toEqual(["Budín de banana"]);
     });
 

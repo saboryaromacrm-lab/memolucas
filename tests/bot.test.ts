@@ -362,8 +362,13 @@ describe("bot", () => {
       intencion: "nota_guardar",
       nota: { titulo: "Clave wifi oficina", contenido: "La clave del wifi de la oficina es Mate2026!", categoria: "claves" },
     });
-    await bot.procesar(texto("anotá que la clave del wifi de la oficina es Mate2026!"));
-    expect(respuestas[0]).toContain("Anotado: *Clave wifi oficina*");
+    // Guardar es solo una confirmación: reacciona a tu mensaje (y en el historial queda qué guardó).
+    const pedido = texto("anotá que la clave del wifi de la oficina es Mate2026!");
+    await bot.procesar(pedido);
+    expect(respuestas).toEqual([]);
+    expect(reacciones).toEqual([{ id: pedido.key.id, emoji: "🗒️" }]);
+    const { ultimosMensajes } = await import("../src/servicios/mensajes.js");
+    expect((await ultimosMensajes(1)).map((m) => [m.tipo, m.texto])).toEqual([["reaccion", "🗒️ Nota guardada: Clave wifi oficina"]]);
 
     const { db } = await import("../src/db/index.js");
     const { sql } = await import("drizzle-orm");
@@ -373,12 +378,12 @@ describe("bot", () => {
     interpretar.mockResolvedValueOnce({ ...base, intencion: "nota_consultar", consulta: "clave del wifi" });
     responderConNotas.mockResolvedValueOnce({ respuesta: "La clave del wifi de la oficina es *Mate2026!*", nota_ids: [1] });
     await bot.procesar(texto("¿cuál era la clave del wifi?"));
-    expect(respuestas[1]).toContain("Mate2026!");
+    expect(respuestas[0]).toContain("Mate2026!");
     const notasEnviadas = responderConNotas.mock.calls[0][2] as { contenido: string }[];
     expect(notasEnviadas[0].contenido).toContain("Mate2026!");
 
     await bot.procesar(texto("notas"));
-    expect(respuestas[2]).toContain("Clave wifi oficina");
+    expect(respuestas[1]).toContain("Clave wifi oficina");
   });
 
   it("foto con 'guardala como nota' va a notas", async () => {
@@ -399,7 +404,7 @@ describe("bot", () => {
       key: { id: "FOTO3", remoteJid: "5491112345678@s.whatsapp.net" },
       message: { imageMessage: { mimetype: "image/jpeg", fileLength: 1000, caption: "guardala como nota" } },
     });
-    expect(respuestas[0]).toContain("Guardé la nota *Patente del auto*");
+    expect(reacciones.map((r) => [r.id, r.emoji])).toEqual([["FOTO3", "🗒️"]]);
     const { todasLasNotas } = await import("../src/servicios/notas.js");
     const [n] = await todasLasNotas();
     expect(n.contenido).toContain("AB 123 CD");
@@ -555,7 +560,13 @@ describe("bot", () => {
       nota: { titulo: "Compras", contenido: "leche, pan", categoria: "compras" },
     });
     await bot.procesar(texto("agregá leche y pan a la lista"));
-    expect(respuestas[0]).toContain("Anotado: *Compras*");
+    expect(reacciones.at(-1)!.emoji).toBe("🗒️");
+
+    // Si WhatsApp no deja reaccionar, va el texto.
+    interpretar.mockResolvedValueOnce({ ...base, intencion: "nota_guardar", nota: { titulo: "Ferretería", contenido: "tornillos", categoria: "compras" } });
+    const sinReaccion = new Procesador({ ...canal, reaccionar: async () => Promise.reject(new Error("sin conexión")) });
+    await sinReaccion.procesar(texto("anotá tornillos para la ferretería"));
+    expect(respuestas.at(-1)).toContain("Anotado: *Ferretería*");
   });
 
   it("un PDF por privado avisa que las facturas ahora se cargan en el ERP", async () => {

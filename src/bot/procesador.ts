@@ -46,7 +46,7 @@ import { analizarEnlace, analizarFoto, ErrorIA, interpretar, responderConNotas, 
 import { ErrorAudio, transcribir } from "../servicios/audio.js";
 import { actualizarNota, borrarNota, crearNota, obtenerNota, relacionadas, todasLasNotas } from "../servicios/notas.js";
 import { obtenerAdjunto } from "../servicios/adjuntos.js";
-import { preguntarAlAgente, textoTope } from "./agente.js";
+import { esSoloEmoji, preguntarAlAgente, textoTope } from "./agente.js";
 import { resumirVideo } from "./resumir-video.js";
 import { ErrorVideo, esLinkDeVideo, leerVideo, MAX_SEGUNDOS_VIDEO, textoErrorVideo, type FuenteVideo } from "../servicios/videos.js";
 import { buscarLinks, crearLink, listarLinks, urlValida, type Link } from "../servicios/links.js";
@@ -242,6 +242,23 @@ export class Procesador {
       intencionDetectada: extra.intencion ?? null,
     });
     return id;
+  }
+
+  /**
+   * Una confirmación sin nada nuevo que contar ("guardé la nota"): solo una reacción a tu mensaje. En el historial queda
+   * el emoji con qué se hizo; si WhatsApp no deja reaccionar, va el texto.
+   */
+  private async reaccionarODecir(emoji: string, que: string, texto: string, intencion: string) {
+    const msg = contexto.getStore()?.msg;
+    if (msg?.key.id)
+      try {
+        await this.canal.reaccionar(msg, emoji);
+        await registrarAqui({ direccion: "saliente", tipo: "reaccion", texto: `${emoji} ${que}`, intencionDetectada: intencion });
+        return;
+      } catch (err) {
+        await registrar("aviso", "bot", "No se pudo reaccionar: va el texto", err);
+      }
+    return this.decir(texto, { intencion });
   }
 
   /** Manda una encuesta (si están activadas). Devuelve false si no se pudo, para contestar con texto. */
@@ -483,7 +500,7 @@ export class Procesador {
       // Sin IA, se guarda igual con el texto del pie.
     }
     const n = await crearNota({ titulo, contenido, categoria, adjuntoId });
-    return this.decir(`🗒️ Guardé la nota *${n.titulo}* con la foto. Cuando la necesites, preguntame.`, { intencion: "nota_guardar" });
+    return this.reaccionarODecir("🗒️", `Nota guardada: ${n.titulo}`, `🗒️ Guardé la nota *${n.titulo}* con la foto. Cuando la necesites, preguntame.`, "nota_guardar");
   }
 
   private async texto(msg: WAMessage, texto: string, tipo: "texto" | "audio" = "texto", eco?: string) {
@@ -637,7 +654,10 @@ export class Procesador {
   private async consultarAgente(texto: string, entranteId: number) {
     try {
       const r = await preguntarAlAgente(texto, "whatsapp", entranteId);
-      return this.decir("tope" in r ? textoTope(r.tope) : r.texto, { intencion: "tope" in r ? "agente_tope" : "agente" });
+      if ("tope" in r) return this.decir(textoTope(r.tope), { intencion: "agente_tope" });
+      // Si solo confirma lo que hizo, contesta con un emoji: va como reacción.
+      if (esSoloEmoji(r.texto)) return this.reaccionarODecir(r.texto.trim(), "Hecho", `${r.texto.trim()} Listo.`, "agente");
+      return this.decir(r.texto, { intencion: "agente" });
     } catch (err) {
       await registrar("error", "agente", "Falló el asistente", err);
       if (err instanceof ErrorIA && /clave|API key/i.test(err.message))
@@ -806,7 +826,7 @@ export class Procesador {
     if (p.tipo === "guardar") {
       const concepto = p.concepto || new URL(url!).hostname.replace(/^www\./, "");
       await crearLink({ concepto, url: url! });
-      await this.decir(`Guardado en tus links 👌\n${mostrar({ id: 0, concepto, url: url! })}`, { intencion: "link_guardado" });
+      await this.reaccionarODecir("🔗", `Link guardado: ${concepto}`, `Guardado en tus links 👌\n${mostrar({ id: 0, concepto, url: url! })}`, "link_guardado");
       return true;
     }
     if (p.tipo === "todos") {
@@ -834,9 +854,8 @@ export class Procesador {
       }
       const { renovada, s } = await renovarDesdeAviso(id);
       const vence = DateTime.fromISO(s.fechaVto).setLocale("es").toFormat("cccc dd/MM/yyyy");
-      return this.decir(renovada ? `🔄 Listo: *${s.nombre}* renovada. Ahora vence el ${vence}.` : `*${s.nombre}* ya estaba renovada: vence el ${vence}.`, {
-        intencion: "renovar_suscripcion",
-      });
+      if (!renovada) return this.decir(`*${s.nombre}* ya estaba renovada: vence el ${vence}.`, { intencion: "renovar_suscripcion" });
+      return this.reaccionarODecir("🔄", `${s.nombre} renovada (vence el ${vence})`, `🔄 Listo: *${s.nombre}* renovada. Ahora vence el ${vence}.`, "renovar_suscripcion");
     } catch (err) {
       if (err instanceof ErrorUsuario) return this.decir(err.message);
       throw err;
@@ -943,9 +962,12 @@ export class Procesador {
   private async guardarDelVideo(id: number, g: NonNullable<DatosBorrador["guardar"]>) {
     await cerrarBorrador(id);
     for (const l of g.links) await crearLink(l);
-    if (g.links.length) return this.decir(`🔗 Listo, ${g.links.length > 1 ? `guardé las ${g.links.length} en tus links` : "la guardé en tus links"}.`, { intencion: "links" });
+    if (g.links.length) {
+      const que = g.links.length > 1 ? `guardé las ${g.links.length} en tus links` : "la guardé en tus links";
+      return this.reaccionarODecir("🔗", `Links guardados: ${g.links.map((l) => l.concepto).join(", ")}`, `🔗 Listo, ${que}.`, "links");
+    }
     const n = await crearNota(g.nota!);
-    return this.decir(`🗒️ Guardé la nota *${n.titulo}*.`, { intencion: "nota_guardar" });
+    return this.reaccionarODecir("🗒️", `Nota guardada: ${n.titulo}`, `🗒️ Guardé la nota *${n.titulo}*.`, "nota_guardar");
   }
 
   /** Si hay uno solo, lo devuelve. Si hay varios, pregunta cuál (encuesta o lista) y devuelve null. */
@@ -1140,9 +1162,12 @@ export class Procesador {
         }
         const n = await crearNota({ ...i.nota, contenido, adjuntoId: b?.datos.adjuntoId ?? null });
         if (b) await cerrarBorrador(b.id);
-        return this.decir(`🗒️ Anotado: *${n.titulo}*${b?.datos.adjuntoId ? " (con la foto)" : ""}. Cuando lo necesites, preguntame.`, {
-          intencion: "nota_guardar",
-        });
+        return this.reaccionarODecir(
+          "🗒️",
+          `Nota guardada: ${n.titulo}`,
+          `🗒️ Anotado: *${n.titulo}*${b?.datos.adjuntoId ? " (con la foto)" : ""}. Cuando lo necesites, preguntame.`,
+          "nota_guardar",
+        );
       }
       case "nota_consultar": {
         const todas = await todasLasNotas();
