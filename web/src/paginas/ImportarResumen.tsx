@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AlertTriangle, CheckCircle2, FileText, X } from "lucide-react";
 import { Boton, Modal, useAccion, useAviso } from "../componentes/ui";
 import { post } from "../lib/api";
@@ -12,8 +12,11 @@ type Lectura = {
   vencimiento: string;
   saldo: number;
   pagoMinimo: number;
+  limiteCompra: number;
+  limiteCuotas: number;
   disponibleCompra: number;
   disponibleCuotas: number;
+  ultimos4: string;
   cuotas: Cuota[];
   consumos: { nombre: string; monto: number }[];
   cargos: { descripcion: string; monto: number }[];
@@ -26,14 +29,16 @@ const CAMPOS = [
   ["vencimiento", "Vencimiento", "fecha"],
   ["saldo", "Saldo actual", "plata"],
   ["pagoMinimo", "Pago mínimo", "plata"],
+  ["limiteCompra", "Límite de compra", "plata"],
+  ["limiteCuotas", "Límite en cuotas", "plata"],
   ["disponibleCompra", "Disponible para compras", "plata"],
   ["disponibleCuotas", "Disponible en cuotas", "plata"],
 ] as const;
 type Clave = (typeof CAMPOS)[number][0];
 
 const ERRORES_PDF = {
-  clave: "El PDF tiene contraseña: escribila y volvé a elegir el archivo.",
-  "clave-incorrecta": "La contraseña no es correcta.",
+  clave: "El PDF tiene contraseña: escribila y se lee solo.",
+  "clave-incorrecta": "La contraseña no es correcta: corregila y se vuelve a leer solo.",
   ilegible: "No se pudo leer ese PDF. Probá copiando el texto y pegándolo abajo.",
 };
 
@@ -44,17 +49,25 @@ export function ImportarResumen({ tarjetaId, onCerrar }: { tarjetaId: number; on
   const [errorPdf, setErrorPdf] = useState<string | null>(null);
   const [leyendo, setLeyendo] = useState(false);
   const [lectura, setLectura] = useState<Lectura | null>(null);
+  const [archivo, setArchivo] = useState<File | null>(null);
   const accion = useAccion();
 
-  const elegirPdf = async (archivo: File | undefined) => {
+  // El PDF se lee al elegirlo y otra vez cada vez que cambia la contraseña (sin tener que elegirlo de nuevo).
+  const vez = useRef(0);
+  useEffect(() => {
     if (!archivo) return;
-    setErrorPdf(null);
-    setLeyendo(true);
-    const r = await leerPdf(archivo, pdf.clave);
-    setLeyendo(false);
-    if ("error" in r) setErrorPdf(ERRORES_PDF[r.error]);
-    else setTexto(r.texto);
-  };
+    const esta = ++vez.current;
+    const espera = setTimeout(async () => {
+      setErrorPdf(null);
+      setLeyendo(true);
+      const r = await leerPdf(archivo, pdf.clave);
+      if (esta !== vez.current) return; // Ya hay una lectura más nueva.
+      setLeyendo(false);
+      if ("error" in r) setErrorPdf(ERRORES_PDF[r.error]);
+      else setTexto(r.texto);
+    }, 400);
+    return () => clearTimeout(espera);
+  }, [archivo, pdf.clave]);
   const leer = async () => {
     setLeyendo(true);
     const r = await accion(() => post<Lectura>("/api/tarjetas/leer-resumen", { texto }));
@@ -81,11 +94,24 @@ export function ImportarResumen({ tarjetaId, onCerrar }: { tarjetaId: number; on
         <div className="grid gap-3 sm:grid-cols-[1fr_200px]">
           <label className="block">
             <span className="etiqueta">PDF del resumen</span>
-            <input type="file" accept="application/pdf" className="campo file:mr-3 file:rounded file:border-0 file:bg-slate-100 file:px-2 file:py-1" onChange={(e) => void elegirPdf(e.target.files?.[0])} />
+            <span className="campo flex cursor-pointer items-center gap-2">
+              <FileText className="size-4 shrink-0 text-slate-400" />
+              <span className={`truncate ${archivo ? "" : "text-slate-400"}`}>{archivo ? archivo.name : "Elegir el PDF…"}</span>
+            </span>
+            <input
+              type="file"
+              accept="application/pdf"
+              className="sr-only"
+              onChange={(e) => {
+                // Se vacía para poder volver a elegir el mismo archivo.
+                setArchivo(e.target.files?.[0] ?? null);
+                e.target.value = "";
+              }}
+            />
           </label>
           <label className="block">
             <span className="etiqueta">Contraseña (si tiene)</span>
-            <input type="password" className="campo" autoComplete="off" value={pdf.clave} onChange={(e) => setPdf({ clave: e.target.value })} />
+            <input type="password" className="campo" autoComplete="new-password" value={pdf.clave} onChange={(e) => setPdf({ clave: e.target.value })} />
           </label>
         </div>
         {errorPdf && <p className="text-sm text-red-600">{errorPdf}</p>}
@@ -162,8 +188,12 @@ function Revisar({ tarjetaId, lectura, onVolver, onCerrar }: { tarjetaId: number
       vencimiento: campos.vencimiento || null,
       saldo: numero("saldo"),
       pagoMinimo: numero("pagoMinimo"),
+      // Un límite que no figura queda como estaba.
+      limiteCompra: aNumero(campos.limiteCompra),
+      limiteCuotas: aNumero(campos.limiteCuotas),
       disponibleCompra: numero("disponibleCompra"),
       disponibleCuotas: numero("disponibleCuotas"),
+      ultimos4: lectura.ultimos4,
       cuotas,
       consumos,
       cargos,
@@ -200,14 +230,14 @@ function Revisar({ tarjetaId, lectura, onVolver, onCerrar }: { tarjetaId: number
       <div className="space-y-4">
         {faltan.length ? (
           <p className="flex items-start gap-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
-            <AlertTriangle className="mt-0.5 size-4 shrink-0" /> No encontré: {faltan.join(", ")}. Completalo a mano{!campos.cierre && " (el cierre es obligatorio)"}.
+            <AlertTriangle className="mt-0.5 size-4 shrink-0" /> No encontré: {faltan.join(", ")}. Completalo a mano{!campos.cierre && " (el cierre es obligatorio)"}; un límite vacío queda como estaba.
           </p>
         ) : (
           <p className="flex items-center gap-2 rounded-lg bg-marca-suave px-3 py-2 text-sm text-marca-profundo">
             <CheckCircle2 className="size-4 shrink-0" /> Encontré todos los datos. Revisalos y guardá.
           </p>
         )}
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           {CAMPOS.map(([k, nombre, tipo]) => (
             <label key={k} className="block">
               <span className="etiqueta">{nombre}</span>

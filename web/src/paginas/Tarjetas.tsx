@@ -112,7 +112,7 @@ function DetalleTarjeta({ t, diasAviso }: { t: Tarjeta; diasAviso: number }) {
         {t.ultimoResumen
           ? `Último resumen: cierre ${fecha(t.ultimoResumen.cierre)} · vence ${fecha(t.ultimoResumen.vencimiento)} · ${t.cantidadResumenes} ${t.cantidadResumenes === 1 ? "resumen" : "resúmenes"} en el historial.`
           : "Todavía no hay resúmenes importados: los datos son los que cargaste a mano."}{" "}
-        Con <b className="font-medium text-slate-600">Importar resumen</b> elegís el PDF del banco (se lee en tu navegador) o pegás el texto: la IA lo ordena, lo revisás y al guardar se actualizan los saldos, las cuotas y los consumos. Reimportar el mismo resumen no duplica nada.
+        Con <b className="font-medium text-slate-600">Importar resumen</b> elegís el PDF del banco (se lee en tu navegador) o pegás el texto: la IA lo ordena, lo revisás y al guardar se actualizan todos los datos de la tarjeta (saldo, pago mínimo, límites, disponibles, fechas), las cuotas y los consumos. Reimportar el mismo resumen no duplica nada.
       </p>
 
       <Seccion titulo="Estado de cuenta">

@@ -11,7 +11,7 @@ import { abrir, avisoVtoPara, sellar, SIN_SALDOS, type DatosConsumo, type DatosC
 
 // Importar un resumen de tarjeta: Claude lee el texto del PDF y lo devuelve ordenado; se revisa en el panel y se guarda.
 
-const SALDOS = ["cierre", "vencimiento", "saldo", "pagoMinimo", "disponibleCompra", "disponibleCuotas"] as const;
+const DATOS = ["cierre", "vencimiento", "saldo", "pagoMinimo", "limiteCompra", "limiteCuotas", "disponibleCompra", "disponibleCuotas"] as const;
 const MONTO = "En pesos, con punto decimal (1.234,56 → 1234.56)";
 const FECHA = 'AAAA-MM-DD ("16 Abr 26" o "16/04/26" → 2026-04-16); "" si no figura';
 
@@ -20,9 +20,12 @@ export const EsquemaResumen = z.object({
   vencimiento: z.string().describe(`Fecha de VENCIMIENTO ACTUAL (no el próximo). ${FECHA}`),
   saldo: z.number().describe(`SALDO ACTUAL. ${MONTO}`),
   pagoMinimo: z.number().describe(`PAGO MÍNIMO. ${MONTO}`),
+  limiteCompra: z.number().describe(`LÍMITE DE COMPRA (o límite de crédito). ${MONTO}`),
+  limiteCuotas: z.number().describe(`LÍMITE DE CUOTAS (o de compras en cuotas). ${MONTO}`),
   disponibleCompra: z.number().describe(`DISPONIBLE (DE) COMPRA. ${MONTO}`),
   disponibleCuotas: z.number().describe(`DISPONIBLE (DE) CUOTAS. ${MONTO}`),
-  no_encontrado: z.array(z.enum(SALDOS)).describe("Los datos de arriba que no figuran en el texto"),
+  ultimos4: z.string().describe('Los últimos 4 números de la tarjeta (de "XXXX XXXX XXXX 1376" → "1376"); "" si no figura'),
+  no_encontrado: z.array(z.enum(DATOS)).describe("Los datos de arriba que no figuran en el texto"),
   cuotas: z
     .array(
       z.object({
@@ -64,6 +67,7 @@ export async function leerResumen(texto: string) {
   const { no_encontrado, consumos, ...datos } = r;
   return {
     ...datos,
+    ultimos4: /^\d{4}$/.test(datos.ultimos4) ? datos.ultimos4 : "",
     cuotas: datos.cuotas.map((c) => ({ ...c, fechaCompra: c.fechaCompra || null })),
     // Se guardan los que se repiten cada mes (los de un solo pago se ven en el resumen del banco).
     consumos: consumos.filter((c) => c.recurrente).map(({ nombre, monto }) => ({ nombre, monto })),
@@ -78,8 +82,13 @@ export type ResumenRevisado = {
   vencimiento: string | null;
   saldo: number;
   pagoMinimo: number;
+  /** null: no figuraba en el resumen (queda el que había). */
+  limiteCompra: number | null;
+  limiteCuotas: number | null;
   disponibleCompra: number;
   disponibleCuotas: number;
+  /** Si la tarjeta no los tenía, se completan. */
+  ultimos4: string;
   cuotas: DatosCuota[];
   consumos: { nombre: string; monto: number }[];
   cargos: { descripcion: string; monto: number }[];
@@ -91,7 +100,7 @@ const mismoComercio = (a: string, b: string) => clave(a) === clave(b);
 
 /**
  * Guarda el resumen en el historial (uno por fecha de cierre: reimportarlo lo reemplaza). Si es el más nuevo,
- * actualiza la tarjeta y las cuotas; si es viejo, no pisa los datos actuales. Los consumos que se repiten suman el
+ * actualiza todos los datos de la tarjeta (saldos, límites, disponibles, fechas y, si faltaban, los últimos 4) y las cuotas; si es viejo, no pisa los datos actuales. Los consumos que se repiten suman el
  * monto de su período.
  */
 export async function guardarResumen(tarjetaId: number, r: ResumenRevisado) {
@@ -108,14 +117,23 @@ export async function guardarResumen(tarjetaId: number, r: ResumenRevisado) {
     let cuotasNuevas = 0;
     let cuotasActualizadas = 0;
     if (masNuevo) {
-      const limites = abrir(t.datosCifrados, SIN_SALDOS);
+      const antes = abrir(t.datosCifrados, SIN_SALDOS);
+      const saldos = {
+        limiteCompra: r.limiteCompra ?? antes.limiteCompra,
+        limiteCuotas: r.limiteCuotas ?? antes.limiteCuotas,
+        disponibleCompra: r.disponibleCompra,
+        disponibleCuotas: r.disponibleCuotas,
+        saldo: r.saldo,
+        pagoMinimo: r.pagoMinimo,
+      };
       await tx
         .update(tarjeta)
         .set({
+          ultimos4: t.ultimos4 || r.ultimos4,
           cierre: r.cierre,
           vencimiento: r.vencimiento,
           ...(r.vencimiento !== t.vencimiento ? { avisoVtoPara: await avisoVtoPara(r.vencimiento) } : {}),
-          datosCifrados: sellar({ ...limites, saldo: r.saldo, pagoMinimo: r.pagoMinimo, disponibleCompra: r.disponibleCompra, disponibleCuotas: r.disponibleCuotas }),
+          datosCifrados: sellar(saldos),
           actualizadoEn: new Date(),
         })
         .where(eq(tarjeta.id, tarjetaId));

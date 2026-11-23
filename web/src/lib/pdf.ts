@@ -15,6 +15,9 @@ function renglones(fragmentos: Fragmento[]): string[] {
   return lineas.map((l) => l.sort((a, b) => a.x - b.x).map((f) => f.texto).join(" "));
 }
 
+/** La contraseña como se escribió, sin espacios de más y solo con los números (el DNI con puntos: "30.123.456"). */
+const variantes = (clave: string) => [...new Set([clave, clave.trim(), clave.replace(/\D/g, "")])].filter((c, i) => c || i === 0);
+
 /**
  * Saca el texto de un PDF en el navegador: el archivo no se sube a ningún lado. PDF.js se carga recién acá
  * (no pesa en el resto del panel).
@@ -22,20 +25,27 @@ function renglones(fragmentos: Fragmento[]): string[] {
 export async function leerPdf(archivo: File, clave: string): Promise<LecturaPdf> {
   const pdfjs = await import("pdfjs-dist");
   pdfjs.GlobalWorkerOptions.workerSrc = (await import("pdfjs-dist/build/pdf.worker.min.mjs?url")).default;
-  const tarea = pdfjs.getDocument({ data: new Uint8Array(await archivo.arrayBuffer()), password: clave || undefined });
-  try {
-    const doc = await tarea.promise;
-    const paginas: string[] = [];
-    for (let n = 1; n <= doc.numPages; n++) {
-      const { items } = await (await doc.getPage(n)).getTextContent();
-      const fragmentos = items.flatMap((it) => ("str" in it && it.str.trim() ? [{ x: it.transform[4], y: it.transform[5], texto: it.str.trim() }] : []));
-      paginas.push(renglones(fragmentos).join("\n"));
+  const datos = new Uint8Array(await archivo.arrayBuffer());
+  let resultado: LecturaPdf = { error: "clave-incorrecta" };
+  for (const intento of variantes(clave)) {
+    // PDF.js se queda con los datos que recibe: cada intento va con su copia.
+    const tarea = pdfjs.getDocument({ data: datos.slice(), password: intento || undefined });
+    try {
+      const doc = await tarea.promise;
+      const paginas: string[] = [];
+      for (let n = 1; n <= doc.numPages; n++) {
+        const { items } = await (await doc.getPage(n)).getTextContent();
+        const fragmentos = items.flatMap((it) => ("str" in it && it.str.trim() ? [{ x: it.transform[4], y: it.transform[5], texto: it.str.trim() }] : []));
+        paginas.push(renglones(fragmentos).join("\n"));
+      }
+      return { texto: paginas.join("\n\n") };
+    } catch (err) {
+      if (!(err instanceof pdfjs.PasswordException)) return { error: "ilegible" };
+      resultado = { error: err.code === pdfjs.PasswordResponses.INCORRECT_PASSWORD ? "clave-incorrecta" : "clave" };
+      if (resultado.error === "clave") return resultado;
+    } finally {
+      void tarea.destroy();
     }
-    return { texto: paginas.join("\n\n") };
-  } catch (err) {
-    if (err instanceof pdfjs.PasswordException) return { error: err.code === pdfjs.PasswordResponses.INCORRECT_PASSWORD ? "clave-incorrecta" : "clave" };
-    return { error: "ilegible" };
-  } finally {
-    void tarea.destroy();
   }
+  return resultado;
 }
