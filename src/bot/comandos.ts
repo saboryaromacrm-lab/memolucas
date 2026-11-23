@@ -83,7 +83,8 @@ export const TEXTO_AYUDA = `👋 Soy *Memolucas*, tu bot de recordatorios. Escri
 • _Tengo turno el jueves a las 10, avisame 1 hora antes_
 • Mandame una *foto* de una factura o turno y te propongo el recordatorio.
 • Mandame un *audio* y lo entiendo igual que si me escribieras.
-• Mandame un *link* (Instagram, TikTok, YouTube, entradas, recetas, notas…): te digo de qué se trata y te propongo cuándo recordártelo.
+• Mandame un *reel o TikTok* (o el video): te lo resumo, con los links de las páginas que nombra.
+• Mandame un *link* (entradas, recetas, notas…): te digo de qué se trata y te propongo cuándo recordártelo.
 
 🗒️ *Notas*: _anotá que la clave del wifi es…_ · _anotá comprar leche y pan_ · _¿cuál era la clave del wifi?_ · foto + _guardala como nota_
 🔗 *Links*: _guardá en mis links el home banking: https://…_ · _¿cuál era el link del home banking?_ · *mis links*
