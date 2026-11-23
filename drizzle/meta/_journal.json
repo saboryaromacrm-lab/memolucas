@@ -92,6 +92,13 @@
       "when": 1795109963306,
       "tag": "0012_sacar_compras",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1795445131783,
+      "tag": "0013_calculadoras",
+      "breakpoints": true
     }
   ]
 }

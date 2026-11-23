@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import { NavLink, useLocation } from "react-router";
 import {
   Bell,
+  Calculator,
   CalendarDays,
   History,
   LayoutDashboard,
@@ -26,6 +27,7 @@ const SECCIONES = [
   // Notas y Calendario van en la barra inferior del celular (posiciones 3 y 4).
   { a: "/notas", texto: "Notas", icono: StickyNote },
   { a: "/calendario", texto: "Calendario", icono: CalendarDays },
+  { a: "/calculadoras", texto: "Calculadoras", icono: Calculator },
   { a: "/whatsapp", texto: "WhatsApp", icono: MessageCircle },
   { a: "/historial", texto: "Historial", icono: History },
   { a: "/configuracion", texto: "Configuración", icono: Settings },
