@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { DateTime } from "luxon";
 import { db } from "../src/db/index.js";
-import { tarjeta, tarjetaCuota } from "../src/db/schema.js";
-import { avisarTarjetas, estadoCuota, ultimoCierreHasta } from "../src/servicios/tarjetas.js";
+import { tarjeta, tarjetaCuota, tarjetaGasto } from "../src/db/schema.js";
+import { avisarCierres, avisarTarjetas, estadoCuota, ultimoCierreHasta } from "../src/servicios/tarjetas.js";
 import { baseLimpia, enviadorFalso, panelConSesion, reloj } from "./ayuda.js";
 
 const Z = "America/Argentina/Buenos_Aires";
@@ -74,7 +74,12 @@ describe("tarjetas desde el panel", () => {
       ["Garbarino", 4, 2],
       ["Frávega", 1, 2],
     ]);
-    expect(t.proximoResumenCuotas).toBe(17_000);
+    expect(t.proximoResumen).toMatchObject({ cierre: "2026-12-16", vencimiento: "2026-12-25", totalArs: 17_000, totalUsd: 0, sinImportar: null, faltaPago: "2026-11-16" });
+    expect(t.proximoResumen.lineas.map((l: { descripcion: string; detalle: string }) => `${l.descripcion} ${l.detalle}`)).toEqual([
+      "Mercado Libre Cuota 12/12",
+      "Garbarino Cuota 5/6",
+      "Frávega Cuota 2/3",
+    ]);
     expect(t.totalAdeudado).toBe(2_000 + 20_000 + 10_000);
     expect(t.finalizadas.map((c: { comercio: string }) => c.comercio)).toEqual(["Ya pagada"]);
     // Próximos cierres: en diciembre se paga todo y termina Mercado Libre; en enero terminan las otras dos.
@@ -106,6 +111,74 @@ describe("tarjetas desde el panel", () => {
     expect((await listar()).tarjetas).toEqual([]);
     expect(await db.select().from(tarjetaCuota)).toEqual([]);
     expect((await app.inject({ url: "/api/tarjetas" })).statusCode).toBe(401);
+  });
+
+  it("próximo resumen: cuotas, suscripciones de la tarjeta, débitos sin duplicar, compras cargadas y saldo sin pagar", async () => {
+    const wa = enviadorFalso();
+    const { id } = (await app.inject({ method: "POST", url: "/api/tarjetas", headers, payload: VISA })).json();
+    const post = (url: string, payload: object) => app.inject({ method: "POST", url, headers, payload });
+    // El resumen de noviembre trae dos débitos que se repiten.
+    const resumen = (cierre: string, vencimiento: string, consumos: object[]) =>
+      post(`/api/tarjetas/${id}/resumenes`, { ...VISA, cierre, vencimiento, limiteCompra: null, limiteCuotas: null, ultimos4: "", cuotas: [], consumos, cargos: [] });
+    await resumen("2026-11-16", "2026-11-25", [
+      { nombre: "NETFLIX.COM", monto: 4_599 },
+      { nombre: "SPOTIFY P2B3", monto: 2_999 },
+    ]);
+    const susc = (nombre: string, extra: object) => post("/api/suscripciones", { nombre, frecuencia: "mensual", monto: 0, ...extra });
+    await susc("Netflix", { fechaVto: "2026-11-05", monto: 4_999, tarjetaId: id }); // ya se cobró el 5/11: el próximo, el 5/12
+    await susc("ChatGPT", { fechaVto: "2026-11-28", monto: 20, moneda: "USD", tarjetaId: id });
+    await susc("Dominio", { fechaVto: "2027-03-01", monto: 15_000, frecuencia: "anual", tarjetaId: id }); // fuera de este resumen
+    await susc("Spotify", { fechaVto: "2026-12-01", monto: 2_999 }); // sin definir: se sugiere la Visa
+    await susc("HBO", { fechaVto: "2026-12-01", monto: 3_000, sinTarjeta: true });
+
+    // Compras: una de este período, una del anterior (ya cerró) y una en 6 cuotas.
+    await post(`/api/tarjetas/${id}/compras`, { descripcion: "Súper", monto: 30_000, fecha: "2026-11-18" });
+    await post(`/api/tarjetas/${id}/compras`, { descripcion: "Nafta", monto: 40_000, fecha: "2026-11-10" });
+    await post(`/api/tarjetas/${id}/compras`, { descripcion: "Heladera", monto: 600_000, fecha: "2026-11-19", cuotas: 6 });
+    // Del resumen de noviembre pagaste 200.000 de 250.000,50.
+    await app.inject({ method: "PUT", url: `/api/tarjetas/${id}/pago`, headers, payload: { monto: 200_000 } });
+
+    const p = (await listar()).tarjetas[0].proximoResumen;
+    expect(p.lineas.map((l: { tipo: string; descripcion: string; detalle: string | null; monto: number; moneda: string }) => [l.tipo, l.descripcion, l.detalle, l.monto, l.moneda])).toEqual([
+      ["cuota", "Heladera", "Cuota 1/6", 100_000, "ARS"],
+      ["suscripcion", "Netflix", "en el resumen figura como NETFLIX.COM", 4_999, "ARS"],
+      ["suscripcion", "ChatGPT", null, 20, "USD"],
+      ["debito", "SPOTIFY P2B3", "como en el último resumen", 2_999, "ARS"],
+      ["compra", "Súper", "18/11", 30_000, "ARS"],
+      ["saldo", "Lo que quedó sin pagar", "pagaste $ 200.000,00 de $ 250.000,50", 50_000.5, "ARS"],
+    ]);
+    expect(p).toMatchObject({ cierre: "2026-12-16", vencimiento: "2026-12-25", totalArs: 187_998.5, totalUsd: 20, faltaPago: null, pagado: 200_000 });
+    expect(JSON.stringify(await db.select().from(tarjetaGasto))).not.toContain("Súper");
+
+    // La suscripción sin tarjeta que aparece en los débitos se sugiere; la de "otro medio", no.
+    const { suscripciones, sugerencias } = (await app.inject({ url: "/api/suscripciones", headers })).json();
+    const spotify = suscripciones.find((x: { nombre: string }) => x.nombre === "Spotify");
+    expect(sugerencias).toEqual({ [spotify.id]: { tarjetaId: id, tarjeta: "VISA Banco Formosa ···1376", comoAparece: "SPOTIFY P2B3" } });
+
+    // Dos días antes del cierre te llega lo que viene, una sola vez.
+    await avisarCierres();
+    expect(wa.enviados).toHaveLength(0);
+    vi.setSystemTime(local("2026-12-14T09:00"));
+    await avisarCierres();
+    await avisarCierres();
+    expect(wa.enviados.map((e) => e.texto)).toEqual([
+      [
+        "🧾 *VISA Banco Formosa ···1376* cierra mié 16/12 y vence 25/12",
+        "Te viene aprox. *$ 187.998,50 + US$ 20,00*",
+        "• Cuotas: $ 100.000,00",
+        "• Suscripciones y débitos (3): $ 7.998,00 + US$ 20,00",
+        "• Compras que cargaste: $ 30.000,00",
+        "• Saldo sin pagar del anterior: $ 50.000,50",
+        "_Sin impuestos, percepciones ni intereses. El detalle, en el panel._",
+      ].join("\n"),
+    ]);
+
+    // Pasado el cierre, si no importaste el resumen te lo marca; al importarlo, las compras cargadas se van.
+    vi.setSystemTime(local("2026-12-18T09:00"));
+    expect((await listar()).tarjetas[0].proximoResumen).toMatchObject({ cierre: "2027-01-16", sinImportar: "2026-12-16", pagado: null });
+    await resumen("2026-12-16", "2026-12-25", []);
+    expect(await db.select().from(tarjetaGasto)).toEqual([]);
+    expect((await listar()).tarjetas[0].proximoResumen).toMatchObject({ sinImportar: null, faltaPago: "2026-12-16" });
   });
 
   it("avisa por WhatsApp unos días antes del vencimiento, con el saldo y el pago mínimo, una sola vez", async () => {

@@ -303,7 +303,7 @@ Reglas:
   - "¿cuál era la clave del wifi?", "¿qué anoté del auto?" → nota_consultar con consulta.
   - "cambiá la nota del wifi: ahora es Y" → nota_editar con nota_ids y nota (contenido nuevo completo). "borrá la nota del wifi" → nota_borrar con nota_ids.
   - Si hay una foto pendiente y dice "guardala como nota" → nota_guardar (la foto se adjunta).
-- consulta: preguntas o pedidos sobre sus suscripciones, tarjetas de crédito, cuotas, gastos o links guardados; cuentas y porcentajes; información general o de actualidad (dólar, clima, noticias, "¿qué es…?"); y pedidos de varios pasos o que no encajan en las otras intenciones. Lo resuelve otro asistente: dejá "respuesta" vacía.
+- consulta: preguntas o pedidos sobre sus suscripciones, tarjetas de crédito, cuotas, gastos o links guardados (también anotar una compra con tarjeta: "gasté 30 mil en el súper con la Visa", o cuánto pagó del resumen); cuentas y porcentajes; información general o de actualidad (dólar, clima, noticias, "¿qué es…?"); y pedidos de varios pasos o que no encajan en las otras intenciones. Lo resuelve otro asistente: dejá "respuesta" vacía.
 - Para charla ("gracias", "jaja", "buen día") contestá corto y natural en "respuesta" (ej. "¡De nada! 🙌"). Para ayuda o si no entendés, en "respuesta" decí qué entendiste y qué podés hacer, en una o dos líneas.
 - confianza entre 0 y 1.
 

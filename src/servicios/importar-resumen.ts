@@ -1,10 +1,10 @@
-import { eq } from "drizzle-orm";
+import { and, eq, lte } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db/index.js";
-import { tarjeta, tarjetaConsumo, tarjetaCuota, tarjetaResumen } from "../db/schema.js";
+import { tarjeta, tarjetaConsumo, tarjetaCuota, tarjetaGasto, tarjetaResumen } from "../db/schema.js";
 import { pedir } from "../bot/ia.js";
 import { bus } from "../lib/eventos.js";
-import { normalizar } from "../lib/textos.js";
+import { claveComercio } from "../lib/textos.js";
 import { obtenerConfig } from "./configuracion.js";
 import { ErrorUsuario } from "./recordatorios.js";
 import { abrir, sellar } from "../lib/cifrado.js";
@@ -96,8 +96,7 @@ export type ResumenRevisado = {
 };
 
 /** "Mercado Libre" y "MERCADOLIBRE" son el mismo: sin mayúsculas, acentos, espacios ni signos. */
-const clave = (s: string) => normalizar(s).replace(/[^a-z0-9]/g, "");
-const mismoComercio = (a: string, b: string) => clave(a) === clave(b);
+const mismoComercio = (a: string, b: string) => claveComercio(a) === claveComercio(b);
 
 /**
  * Guarda el resumen en el historial (uno por fecha de cierre: reimportarlo lo reemplaza). Si es el más nuevo,
@@ -169,6 +168,9 @@ export async function guardarResumen(tarjetaId: number, r: ResumenRevisado) {
         }
       }
     }
+
+    // Las compras que cargaste hasta este cierre ya vienen en el resumen.
+    await tx.delete(tarjetaGasto).where(and(eq(tarjetaGasto.tarjetaId, tarjetaId), lte(tarjetaGasto.fecha, r.cierre)));
 
     const periodo = r.cierre.slice(0, 7);
     const consumos = (await tx.select().from(tarjetaConsumo).where(eq(tarjetaConsumo.tarjetaId, tarjetaId))).map((c) => ({

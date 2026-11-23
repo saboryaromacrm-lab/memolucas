@@ -167,6 +167,9 @@ export const suscripcion = pgTable(
     avisoDiaEnviado: boolean("aviso_dia_enviado").notNull().default(false),
     /** "Recordame mañana": cuándo vuelve a avisar. */
     recordarEn: ts("recordar_en"),
+    /** Con qué tarjeta se paga (suma al próximo resumen de esa tarjeta). sinTarjeta: se paga con otro medio. */
+    tarjetaId: integer("tarjeta_id").references(() => tarjeta.id, { onDelete: "set null" }),
+    sinTarjeta: boolean("sin_tarjeta").notNull().default(false),
     creadoEn: creadoEn(),
     actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
   },
@@ -187,6 +190,8 @@ export const tarjeta = pgTable("tarjeta", {
   vencimiento: date("vencimiento"),
   /** Vencimiento del que ya se mandó el aviso por WhatsApp. */
   avisoVtoPara: date("aviso_vto_para"),
+  /** Cierre del que ya se mandó el aviso de "esto te viene en el resumen". */
+  avisoCierrePara: date("aviso_cierre_para"),
   /** Límites, disponibles, saldo y pago mínimo. */
   datosCifrados: text("datos_cifrados").notNull(),
   creadoEn: creadoEn(),
@@ -231,6 +236,25 @@ export const tarjetaCuota = pgTable(
     actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
   },
   (t) => [index("tarjeta_cuota_tarjeta_idx").on(t.tarjetaId)],
+);
+
+/**
+ * Compras en un pago que cargaste (en el panel o pidiéndoselo al asistente) para estimar el próximo resumen. Al
+ * importar el resumen que ya las trae, se borran solas. Descripción y monto van cifrados.
+ */
+export const tarjetaGasto = pgTable(
+  "tarjeta_gasto",
+  {
+    id: serial("id").primaryKey(),
+    tarjetaId: integer("tarjeta_id")
+      .notNull()
+      .references(() => tarjeta.id, { onDelete: "cascade" }),
+    fecha: date("fecha").notNull(),
+    moneda: text("moneda").$type<"ARS" | "USD">().notNull().default("ARS"),
+    datosCifrados: text("datos_cifrados").notNull(),
+    creadoEn: creadoEn(),
+  },
+  (t) => [index("tarjeta_gasto_tarjeta_idx").on(t.tarjetaId, t.fecha)],
 );
 
 /** Consumos de un solo pago que se repiten cada mes (Netflix en la tarjeta, por ejemplo), detectados al importar. */

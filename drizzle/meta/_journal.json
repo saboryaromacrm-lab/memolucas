@@ -148,6 +148,13 @@
       "when": 1795462334592,
       "tag": "0020_canal_mensaje",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1795462901361,
+      "tag": "0021_proximo_resumen",
+      "breakpoints": true
     }
   ]
 }
