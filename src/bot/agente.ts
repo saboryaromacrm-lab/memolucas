@@ -1,7 +1,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { betaZodTool } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { z } from "zod";
-import { ahora, zona } from "../lib/fechas.js";
+import { ahora, aLocal, zona } from "../lib/fechas.js";
 import { normalizar } from "../lib/textos.js";
 import { obtenerConfig } from "../servicios/configuracion.js";
 import { listarRango } from "./rangos.js";
@@ -13,6 +13,8 @@ import { borrarLink, buscarLinks, crearLink, listarLinks, urlValida } from "../s
 import { borrarSuscripcion, crearSuscripcion, listarSuscripciones, renovarSuscripcion } from "../servicios/suscripciones.js";
 import { listarTarjetas } from "../servicios/tarjetas.js";
 import { diasParaVencer } from "../servicios/vencimientos.js";
+import { buscarMensajesWa, cancelarProgramadoWa, confirmarEnvioWa, DIAS_GUARDADO, leerChatWa, listarChatsWa, prepararEnvioWa, programadosWa, type MensajeLeido } from "../servicios/wa-personal.js";
+import { personal } from "../whatsapp/personal.js";
 import { cliente, ErrorIA, gastoDelMes, registrarUso } from "./ia.js";
 
 // El asistente: Claude con herramientas sobre los datos de la app (agenda, notas, suscripciones, tarjetas, links)
@@ -33,6 +35,15 @@ async function seguro(fn: () => Promise<unknown>): Promise<string> {
     throw err;
   }
 }
+
+/** Las herramientas de tu WhatsApp, solo si está vinculado. */
+async function conTuWhatsapp(fn: () => Promise<unknown>): Promise<string> {
+  if (!(await personal.tieneSesion())) return "Error: tu WhatsApp no está vinculado. Se vincula en el panel: WhatsApp → Tu WhatsApp.";
+  return seguro(fn);
+}
+
+const mensajesParaLeer = (ms: MensajeLeido[], conChat: boolean) =>
+  ms.map((m) => ({ ...(conChat ? { chat: m.chat, chat_jid: m.chatJid } : {}), fecha: aLocal(m.fecha).toFormat("dd/MM HH:mm"), de: m.de, texto: m.texto }));
 
 const fecha = (iso: string) => {
   const d = new Date(iso);
@@ -152,13 +163,72 @@ function herramientas(origen: "whatsapp" | "panel") {
       run: (l) => seguro(() => crearLink(l)),
     }),
     betaZodTool({
+      name: "wa_chats",
+      description: "Sus chats y contactos de WhatsApp (su número personal) con el jid para las otras herramientas wa_. Con consulta, los que coinciden por nombre o número; sin consulta, los más recientes.",
+      inputSchema: z.object({ consulta: z.string().optional() }),
+      run: ({ consulta }) => conTuWhatsapp(() => listarChatsWa(consulta)),
+    }),
+    betaZodTool({
+      name: "wa_leer",
+      description: `Los últimos mensajes de un chat de su WhatsApp, del más viejo al más nuevo ("Yo" es el usuario). Para leer o resumir una conversación. Solo hay ${DIAS_GUARDADO} días guardados.`,
+      inputSchema: z.object({ chat_jid: z.string(), cantidad: z.number().int().min(1).max(300).optional().describe("Por defecto 60") }),
+      run: ({ chat_jid, cantidad }) => conTuWhatsapp(async () => mensajesParaLeer(await leerChatWa(chat_jid, cantidad ?? 60), false)),
+    }),
+    betaZodTool({
+      name: "wa_buscar",
+      description: `Busca palabras en los mensajes de su WhatsApp (todos los chats, o uno con chat_jid). Busca en los últimos ${DIAS_GUARDADO} días.`,
+      inputSchema: z.object({ consulta: z.string(), chat_jid: z.string().optional() }),
+      run: ({ consulta, chat_jid }) =>
+        conTuWhatsapp(async () => {
+          const encontrados = await buscarMensajesWa(consulta, chat_jid);
+          if (encontrados.length) return mensajesParaLeer(encontrados, true);
+          return `No está en los mensajes de los últimos ${DIAS_GUARDADO} días. Decíselo y ofrecele buscar más atrás en un chat (wa_buscar_mas_atras).`;
+        }),
+    }),
+    betaZodTool({
+      name: "wa_buscar_mas_atras",
+      description: `Le pide al teléfono mensajes de antes de los últimos ${DIAS_GUARDADO} días de un chat (de a 50; se puede repetir para ir más atrás) y busca ahí. Solo si el usuario quiere buscar más atrás.`,
+      inputSchema: z.object({ chat_jid: z.string(), consulta: z.string().optional() }),
+      run: ({ chat_jid, consulta }) =>
+        conTuWhatsapp(async () => {
+          const llegaron = await personal.traerMasAtras(chat_jid);
+          if (!llegaron) return "El teléfono no mandó mensajes más viejos (puede que no haya más, o que el teléfono esté sin conexión).";
+          const encontrados = consulta ? await buscarMensajesWa(consulta, chat_jid) : await leerChatWa(chat_jid, llegaron);
+          return { llegaron, mensajes: mensajesParaLeer(encontrados, false) };
+        }),
+    }),
+    betaZodTool({
+      name: "wa_preparar_envio",
+      description:
+        "Prepara un mensaje para mandar desde su WhatsApp, ahora o programado. NO lo manda: devuelve un código. Después mostrale el texto exacto y para quién, y preguntale si lo mandás.",
+      inputSchema: z.object({
+        chat_jid: z.string().describe("De wa_chats; o un número con código de país + @s.whatsapp.net"),
+        texto: z.string().describe("El mensaje tal cual se va a mandar, escrito como lo escribiría el usuario"),
+        enviar_en: Fecha.optional().describe("Para programarlo; sin esto se manda apenas confirma"),
+      }),
+      run: ({ chat_jid, texto, enviar_en }) => conTuWhatsapp(() => prepararEnvioWa(chat_jid, texto, enviar_en ? fecha(enviar_en) : null)),
+    }),
+    betaZodTool({
+      name: "wa_confirmar_envio",
+      description: "Manda (o programa) un mensaje preparado. Solo después de que el usuario dijo que sí en un mensaje suyo, al texto exacto que le mostraste.",
+      inputSchema: z.object({ codigo: z.string() }),
+      run: ({ codigo }) => conTuWhatsapp(() => confirmarEnvioWa(codigo, personal)),
+    }),
+    betaZodTool({
+      name: "wa_programados",
+      description: "Mensajes programados para mandar desde su WhatsApp que todavía no salieron.",
+      inputSchema: z.object({}),
+      run: () => seguro(programadosWa),
+    }),
+    betaZodTool({
       name: "borrar",
-      description: "Borra un recordatorio, nota, suscripción o link. Solo con confirmado=true, después de que el usuario dijo que sí en un mensaje suyo.",
-      inputSchema: z.object({ tipo: z.enum(["recordatorio", "nota", "suscripcion", "link"]), id: z.number().int(), confirmado: z.boolean() }),
+      description:
+        "Borra un recordatorio, nota, suscripción o link, o cancela un mensaje programado de WhatsApp. Solo con confirmado=true, después de que el usuario dijo que sí en un mensaje suyo.",
+      inputSchema: z.object({ tipo: z.enum(["recordatorio", "nota", "suscripcion", "link", "mensaje_programado"]), id: z.number().int(), confirmado: z.boolean() }),
       run: ({ tipo, id, confirmado }) =>
         seguro(async () => {
           if (!confirmado) return "No se borró: preguntale al usuario si lo borra y esperá que diga que sí.";
-          await { recordatorio: borrarRecordatorio, nota: borrarNota, suscripcion: borrarSuscripcion, link: borrarLink }[tipo](id);
+          await { recordatorio: borrarRecordatorio, nota: borrarNota, suscripcion: borrarSuscripcion, link: borrarLink, mensaje_programado: cancelarProgramadoWa }[tipo](id);
           return "Borrado.";
         }),
     }),
@@ -168,10 +238,11 @@ function herramientas(origen: "whatsapp" | "panel") {
 const sistema = (nombre: string) => `Sos Memolucas, el asistente personal de ${nombre}: le hablás por WhatsApp y en su panel.
 Español rioplatense con voseo, cercano y práctico, frases cortas. Escribís para WhatsApp: *negrita* con un asterisco, _cursiva_, listas con •; sin tablas ni títulos con #.
 
-Tenés herramientas sobre sus cosas: agenda y recordatorios, notas, suscripciones, tarjetas de crédito (solo lectura), links guardados, y búsqueda en internet para información general o de actualidad.
+Tenés herramientas sobre sus cosas: agenda y recordatorios, notas, suscripciones, tarjetas de crédito (solo lectura), links guardados, su WhatsApp personal (si lo vinculó) y búsqueda en internet para información general o de actualidad.
 - Respondé con sus datos reales usando las herramientas; no inventes. Si algo no está, decilo.
 - Si un pedido es claro, hacelo directo. Si falta algo clave (por ejemplo la fecha), preguntá.
 - Para borrar: primero preguntá "¿Lo borro?" y recién cuando conteste que sí, llamá a borrar con confirmado=true.
+- Su WhatsApp: podés leer, resumir y buscar sus chats (últimos ${DIAS_GUARDADO} días; si no encontrás algo, decí que no está en esos días y ofrecé buscar más atrás), y mandar o programar mensajes en su nombre. Para mandar: buscá el chat con wa_chats (si hay varios parecidos, preguntá cuál), prepará con wa_preparar_envio, mostrale *para quién* y el *texto exacto*, y preguntá "¿Lo mando?". Recién cuando diga que sí, wa_confirmar_envio. Si cambia el texto, prepará de nuevo y volvé a preguntar. Nunca contestes a nadie por tu cuenta.
 - Las tarjetas no se cambian desde acá: los datos se actualizan importando el resumen en el panel.
 - Plata como en Argentina: $ 1.234,56 (US$ si es en dólares).
 - Al principio de cada mensaje del usuario va la fecha y hora actual: usala para calcular fechas.

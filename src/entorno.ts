@@ -14,6 +14,8 @@ export const entorno = {
 
 export const rutas = {
   auth: path.join(entorno.dataDir, "auth"),
+  /** Tu WhatsApp personal (aparte del bot). */
+  authPersonal: path.join(entorno.dataDir, "auth-personal"),
   media: path.join(entorno.dataDir, "media"),
 };
 

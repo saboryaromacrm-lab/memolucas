@@ -7,7 +7,8 @@ import { bus } from "../lib/eventos.js";
 import { normalizar } from "../lib/textos.js";
 import { obtenerConfig } from "./configuracion.js";
 import { ErrorUsuario } from "./recordatorios.js";
-import { abrir, avisoVtoPara, sellar, SIN_SALDOS, type DatosConsumo, type DatosCuota } from "./tarjetas.js";
+import { abrir, sellar } from "../lib/cifrado.js";
+import { avisoVtoPara, SIN_SALDOS, type DatosConsumo, type DatosCuota } from "./tarjetas.js";
 
 // Importar un resumen de tarjeta: Claude lee el texto del PDF y lo devuelve ordenado; se revisa en el panel y se guarda.
 

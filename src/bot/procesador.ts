@@ -96,6 +96,9 @@ const PIDE_BOT = /\b(recorda|recordame|recordanos|recuerden|avisa|avisame|avisan
 const MINUTOS_BORRADOR_GRUPO = 30;
 /** Hasta cuánto después de una pregunta del bot ("¿para qué día?") un "hoy" o "mañana" es la respuesta y no un comando. */
 const MINUTOS_RESPUESTA_A_PREGUNTA = 30;
+/** Si el asistente terminó con una pregunta, lo que se conteste en este rato es para él. */
+const MINUTOS_RESPUESTA_AL_ASISTENTE = 30;
+const TERMINA_EN_PREGUNTA = /\?[\s\p{Extended_Pictographic}\uFE0F\u200D]*$/u;
 
 /** Registra un mensaje con el chat y el autor del contexto actual. */
 const registrarAqui = (m: Parameters<typeof registrarMensaje>[0]) =>
@@ -492,12 +495,27 @@ export class Procesador {
       return this.contestarSuscripcion(suscripcionId, accionSuscripcion);
     }
 
-    // 1) "Mis links" (en privado): guardar uno o buscarlo. Va antes que el análisis de links.
+    // 1) Respuesta a una pregunta del asistente ("¿Lo mando?" → "sí"): sigue la charla con él, sin pasar por los
+    // comandos. Si fue lo último que dijo el bot y hace poco (o citándola).
+    const delAsistente = citadoFila ?? ultimaDelBot;
+    if (
+      !enGrupo() &&
+      delAsistente?.direccion === "saliente" &&
+      delAsistente.intencionDetectada === "agente" &&
+      TERMINA_EN_PREGUNTA.test(delAsistente.texto ?? "") &&
+      (citadoFila || entrante.creadoEn.getTime() - delAsistente.creadoEn.getTime() <= MINUTOS_RESPUESTA_AL_ASISTENTE * 60_000)
+    ) {
+      await anotar("agente");
+      if (eco) await this.decir(eco, { intencion: "transcripcion" });
+      return this.consultarAgente(texto, entrante.id);
+    }
+
+    // 2) "Mis links" (en privado): guardar uno o buscarlo. Va antes que el análisis de links.
     const urls = extraerUrls(texto);
     const pedido = enGrupo() ? null : pedidoDeLinks(textoSinUrls(texto), urls.length > 0);
     if (pedido && (await this.misLinks(pedido, urls[0]))) return void (await anotar("links"));
 
-    // 2) Links: se leen y se analizan.
+    // 3) Links: se leen y se analizan.
     if (urls.length) {
       // En el grupo, un link compartido sin pedirle nada al bot es charla.
       if (enGrupo() && !PIDE_BOT.test(normalizar(textoSinUrls(texto)))) return void (await anotar("ignorar"));
@@ -505,7 +523,7 @@ export class Procesador {
       return this.enlace(msg, urls[0], textoSinUrls(texto) || null);
     }
 
-    // 3) Respuesta rápida a una propuesta (foto o link).
+    // 4) Respuesta rápida a una propuesta (foto o link).
     const borrador = await borradorActivo();
     if (borrador?.datos.propuesta && esAfirmativo(texto)) {
       await anotar("aceptar_propuesta");
@@ -516,7 +534,7 @@ export class Procesador {
       return this.rechazarBorrador(borrador.id, borrador.datos);
     }
 
-    // 4) Comandos rápidos sin IA. Si responde a un aviso ("mañana", "en 2 horas"), lo interpreta la IA como posponer;
+    // 5) Comandos rápidos sin IA. Si responde a un aviso ("mañana", "en 2 horas"), lo interpreta la IA como posponer;
     // si contesta una pregunta del bot ("¿para qué día?" → "hoy"), la IA lo toma como la respuesta.
     const comando = detectarComando(texto);
     // En el grupo, "hoy", "lista", etc. pueden ser charla: los interpreta la IA. "listo" confirma solo si hay un aviso esperando.
@@ -561,7 +579,7 @@ export class Procesador {
       }
     }
 
-    // 5) IA.
+    // 6) IA.
     const cfg = await obtenerConfig();
     let interp: Interpretacion;
     try {

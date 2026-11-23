@@ -1,33 +1,15 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import makeWASocket, {
-  Browsers,
-  DisconnectReason,
-  decryptPollVote,
-  downloadMediaMessage,
-  fetchLatestBaileysVersion,
-  isJidBroadcast,
-  isJidGroup,
-  isJidNewsletter,
-  isLidUser,
-  isPnUser,
-  jidNormalizedUser,
-  useMultiFileAuthState,
-  type ConnectionState,
-  type WAMessage,
-  type WASocket,
-  type proto,
-} from "baileys";
-import QRCode from "qrcode";
+import { decryptPollVote, downloadMediaMessage, isJidBroadcast, isJidGroup, isJidNewsletter, isLidUser, isPnUser, jidNormalizedUser, type WAMessage, type WASocket, type proto } from "baileys";
 import { rutas } from "../entorno.js";
-import { bus } from "../lib/eventos.js";
 import { logger, registrar } from "../lib/log.js";
 import { actualizarConfig, obtenerConfig } from "../servicios/configuracion.js";
 import type { Enviador } from "../servicios/enviador.js";
 import { esMiembro, guardarGrupo } from "./grupos.js";
 import { jidDeNumero, mismoNumero } from "./numeros.js";
+import { espera, numeroDeJid, SesionWhatsApp } from "./sesion.js";
 
-export type EstadoWhatsApp = "iniciando" | "conectando" | "esperando_qr" | "conectado" | "desconectado" | "sesion_cerrada";
+export type { EstadoWhatsApp } from "./sesion.js";
 
 export type Remitente = {
   autorizado: boolean;
@@ -41,82 +23,31 @@ export type Remitente = {
 const MINUTOS_CACHE_GRUPO = 10;
 type Manejador = (msg: WAMessage, remitente: Remitente) => Promise<void>;
 
-const ESPERAS_S = [5, 10, 30, 60, 300];
-const espera = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const numeroDeJid = (jid: string | null | undefined) => (jid ? jidNormalizedUser(jid).split("@")[0] : null);
-
-class ConexionWhatsApp implements Enviador {
-  private sock: WASocket | null = null;
-  private estado: EstadoWhatsApp = "iniciando";
-  private qr: string | null = null;
-  private numeroVinculado: string | null = null;
-  private desconectadoDesde: Date | null = new Date();
-  private ultimoError: string | null = null;
-  private reintentos = 0;
-  private temporizador: NodeJS.Timeout | null = null;
-  private deteniendo = false;
+/** El número del bot: responde solo a tu número (y en tus grupos). */
+class ConexionWhatsApp extends SesionWhatsApp implements Enviador {
   private chatJid: string | null = null;
   private enviados = new Map<string, proto.IMessage>();
   private manejador: Manejador | null = null;
   private grupos = new Map<string, { miembro: boolean; nombre: string; hasta: number }>();
   private gruposAvisados = new Set<string>();
-  private alConectar: (() => void) | null = null;
+
+  constructor() {
+    super(rutas.auth, "WhatsApp del bot", true);
+  }
 
   onMensaje(fn: Manejador) {
     this.manejador = fn;
   }
-  onConectado(fn: () => void) {
-    this.alConectar = fn;
-  }
 
-  conectado() {
-    return this.estado === "conectado" && !!this.sock;
-  }
-
-  info() {
+  protected opciones() {
     return {
-      estado: this.estado,
-      qr: this.estado === "esperando_qr" ? this.qr : null,
-      numeroVinculado: this.numeroVinculado,
-      desconectadoDesde: this.estado === "conectado" ? null : this.desconectadoDesde,
-      ultimoError: this.ultimoError,
+      // Estados y canales no interesan: se descartan antes de procesarlos. Los grupos se filtran después.
+      shouldIgnoreJid: (jid: string) => !!(isJidBroadcast(jid) || isJidNewsletter(jid)),
+      getMessage: async (key: proto.IMessageKey) => (key.id ? this.enviados.get(key.id) : undefined),
     };
   }
 
-  private cambiarEstado(estado: EstadoWhatsApp) {
-    if (estado !== "conectado" && this.estado === "conectado") this.desconectadoDesde = new Date();
-    this.estado = estado;
-    bus.avisar("whatsapp", this.info());
-  }
-
-  async iniciar(): Promise<void> {
-    this.deteniendo = false;
-    if (this.temporizador) clearTimeout(this.temporizador);
-    this.temporizador = null;
-    await fs.mkdir(rutas.auth, { recursive: true });
-    const { state, saveCreds } = await useMultiFileAuthState(rutas.auth);
-    let version: [number, number, number] | undefined;
-    try {
-      version = (await fetchLatestBaileysVersion()).version;
-    } catch {
-      version = undefined; // Usa la que trae Baileys.
-    }
-    this.cambiarEstado("conectando");
-    const sock = makeWASocket({
-      auth: state,
-      version,
-      logger: logger.child({ modulo: "baileys" }, { level: "warn" }) as never,
-      browser: Browsers.ubuntu("Chrome"),
-      markOnlineOnConnect: false,
-      syncFullHistory: false,
-      // Estados y canales no interesan: se descartan antes de procesarlos. Los grupos se filtran después.
-      shouldIgnoreJid: (jid) => !!(isJidBroadcast(jid) || isJidNewsletter(jid)),
-      getMessage: async (key) => (key.id ? this.enviados.get(key.id) : undefined),
-    });
-    this.sock = sock;
-
-    sock.ev.on("creds.update", saveCreds);
-    sock.ev.on("connection.update", (u) => void this.alActualizar(sock, u));
+  protected escuchar(sock: WASocket) {
     // Si cambian los integrantes o el nombre de un grupo, se vuelve a consultar.
     sock.ev.on("group-participants.update", ({ id }) => this.grupos.delete(id));
     sock.ev.on("groups.update", (gs) => gs.forEach((g) => g.id && this.grupos.delete(g.id)));
@@ -126,57 +57,12 @@ class ConexionWhatsApp implements Enviador {
     });
   }
 
-  private async alActualizar(sock: WASocket, u: Partial<ConnectionState>) {
-    if (sock !== this.sock) return;
-    const { connection, lastDisconnect, qr } = u;
-    if (qr) {
-      this.qr = await QRCode.toDataURL(qr, { margin: 1, width: 320 });
-      this.cambiarEstado("esperando_qr");
-    }
-    if (connection === "open") {
-      this.reintentos = 0;
-      this.qr = null;
-      this.ultimoError = null;
-      this.numeroVinculado = numeroDeJid(sock.user?.id);
-      this.cambiarEstado("conectado");
-      await registrar("info", "whatsapp", `Conectado como +${this.numeroVinculado}`);
-      await this.resolverAutorizado();
-      this.alConectar?.();
-    }
-    if (connection === "close") {
-      this.sock = null;
-      const error = lastDisconnect?.error as (Error & { output?: { statusCode?: number } }) | undefined;
-      const codigo = error?.output?.statusCode;
-      this.ultimoError = error?.message ?? null;
-      if (this.deteniendo) return;
-      if (codigo === DisconnectReason.loggedOut || codigo === DisconnectReason.forbidden) {
-        // Sesión cerrada desde el teléfono o número bloqueado: hay que vincular de nuevo.
-        await registrar("error", "whatsapp", codigo === 403 ? "WhatsApp rechazó el número (posible bloqueo)" : "La sesión se cerró desde el teléfono", {
-          codigo,
-        });
-        await this.borrarSesion();
-        this.cambiarEstado("sesion_cerrada");
-        this.programarReconexion(5);
-        return;
-      }
-      this.cambiarEstado("desconectado");
-      if (codigo === DisconnectReason.restartRequired) return this.programarReconexion(0);
-      const sinVincular = !estaRegistrado(sock);
-      const s = sinVincular ? 3 : ESPERAS_S[Math.min(this.reintentos, ESPERAS_S.length - 1)];
-      this.reintentos++;
-      if (!sinVincular) await registrar("aviso", "whatsapp", `Se cortó la conexión (código ${codigo ?? "?"}). Reintento en ${s} s`);
-      this.programarReconexion(s);
-    }
+  protected async alConectar() {
+    await this.resolverAutorizado();
   }
 
-  private programarReconexion(segundos: number) {
-    if (this.temporizador) clearTimeout(this.temporizador);
-    this.temporizador = setTimeout(() => {
-      this.iniciar().catch((err) => {
-        void registrar("error", "whatsapp", "No se pudo iniciar WhatsApp", err);
-        this.programarReconexion(30);
-      });
-    }, segundos * 1000);
+  protected async alPerderSesion() {
+    this.chatJid = null;
   }
 
   /** Busca el JID real del número autorizado y su LID (para reconocerlo en chats nuevos). */
@@ -374,58 +260,6 @@ class ConexionWhatsApp implements Enviador {
     if (!sock) throw new Error("WhatsApp no está conectado");
     return downloadMediaMessage(msg, "buffer", {}, { logger: logger as never, reuploadRequest: sock.updateMediaMessage });
   }
-
-  async pedirCodigo(numero: string): Promise<string> {
-    if (this.estado === "conectado") throw new Error("WhatsApp ya está vinculado");
-    if (!this.sock || this.estado !== "esperando_qr") {
-      await this.reconectar();
-      for (let i = 0; i < 30 && this.estado !== "esperando_qr"; i++) await espera(500);
-    }
-    if (!this.sock) throw new Error("No se pudo iniciar la conexión, probá de nuevo");
-    const codigo = await this.sock.requestPairingCode(numero);
-    return codigo.match(/.{1,4}/g)?.join("-") ?? codigo;
-  }
-
-  async reconectar() {
-    this.deteniendo = true;
-    this.sock?.end(undefined);
-    this.sock = null;
-    this.reintentos = 0;
-    await espera(300);
-    await this.iniciar();
-  }
-
-  private async borrarSesion() {
-    await fs.rm(rutas.auth, { recursive: true, force: true });
-    this.numeroVinculado = null;
-    this.chatJid = null;
-  }
-
-  async desvincular() {
-    this.deteniendo = true;
-    try {
-      await this.sock?.logout();
-    } catch {
-      this.sock?.end(undefined);
-    }
-    this.sock = null;
-    await this.borrarSesion();
-    await registrar("aviso", "whatsapp", "Se desvinculó WhatsApp desde el panel");
-    this.cambiarEstado("sesion_cerrada");
-    await espera(500);
-    await this.iniciar();
-  }
-
-  async detener() {
-    this.deteniendo = true;
-    if (this.temporizador) clearTimeout(this.temporizador);
-    this.sock?.end(undefined);
-    this.sock = null;
-  }
-}
-
-function estaRegistrado(sock: WASocket): boolean {
-  return !!sock.authState.creds.registered || !!sock.authState.creds.me;
 }
 
 export const whatsapp = new ConexionWhatsApp();

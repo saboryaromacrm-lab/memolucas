@@ -391,6 +391,53 @@ export const usoIa = pgTable("uso_ia", {
   creadoEn: creadoEn(),
 });
 
+// ───────────── Tu WhatsApp (el personal, vinculado aparte del bot) ─────────────
+// Lo lee el asistente: chats y contactos, los mensajes de los últimos 7 días (texto cifrado) y los mensajes que
+// le pediste programar. Al desvincularlo se borra todo.
+
+/** Chats y contactos. nombre: el de tu agenda; apodo: el que se puso la persona en WhatsApp. */
+export const waChat = pgTable("wa_chat", {
+  jid: text("jid").primaryKey(),
+  nombre: text("nombre"),
+  apodo: text("apodo"),
+  esGrupo: boolean("es_grupo").notNull().default(false),
+  ultimoMensajeEn: ts("ultimo_mensaje_en"),
+});
+
+/** Mensajes: texto y autor cifrados. guardarHasta: 7 días después de enviado (1 día si se trajo de más atrás). */
+export const waMensaje = pgTable(
+  "wa_mensaje",
+  {
+    id: serial("id").primaryKey(),
+    waId: text("wa_id").notNull(),
+    chatJid: text("chat_jid").notNull(),
+    /** El chat como lo nombra WhatsApp (puede ser un LID): hace falta para pedir mensajes más viejos. */
+    remoteJid: text("remote_jid").notNull(),
+    deMi: boolean("de_mi").notNull(),
+    datosCifrados: text("datos_cifrados").notNull(),
+    enviadoEn: ts("enviado_en").notNull(),
+    guardarHasta: ts("guardar_hasta").notNull(),
+  },
+  (t) => [uniqueIndex("wa_mensaje_unico").on(t.chatJid, t.waId), index("wa_mensaje_chat_idx").on(t.chatJid, t.enviadoEn), index("wa_mensaje_hasta_idx").on(t.guardarHasta)],
+);
+
+export type EstadoProgramado = "pendiente" | "enviado" | "vencido" | "error";
+
+/** Mensajes que confirmaste para mandar más tarde desde tu WhatsApp. */
+export const waProgramado = pgTable(
+  "wa_programado",
+  {
+    id: serial("id").primaryKey(),
+    chatJid: text("chat_jid").notNull(),
+    /** { texto, para } */
+    datosCifrados: text("datos_cifrados").notNull(),
+    enviarEn: ts("enviar_en").notNull(),
+    estado: text("estado").$type<EstadoProgramado>().notNull().default("pendiente"),
+    creadoEn: creadoEn(),
+  },
+  (t) => [index("wa_programado_idx").on(t.estado, t.enviarEn)],
+);
+
 export type Recordatorio = typeof recordatorio.$inferSelect;
 export type Ocurrencia = typeof ocurrencia.$inferSelect;
 export type Configuracion = typeof configuracion.$inferSelect;
