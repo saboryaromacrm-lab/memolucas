@@ -8,6 +8,7 @@ import { obtenerConfig } from "./servicios/configuracion.js";
 import { fijarEnviador } from "./servicios/enviador.js";
 import { barrer, detenerScheduler, iniciarScheduler } from "./servicios/scheduler.js";
 import { whatsapp } from "./whatsapp/conexion.js";
+import { personal } from "./whatsapp/personal.js";
 
 async function arrancar() {
   const faltan = validarEntorno();
@@ -37,6 +38,9 @@ async function arrancar() {
   // Al reconectar, se da unos segundos a WhatsApp para sincronizar y se manda lo pendiente.
   whatsapp.onConectado(() => setTimeout(() => void barrer(), 5000));
   whatsapp.iniciar().catch((err) => void registrar("error", "whatsapp", "No se pudo iniciar WhatsApp", err));
+  // Tu WhatsApp personal, si lo vinculaste (los programados que vencieron mientras estaba caído salen al conectar).
+  personal.onConectado(() => void barrer());
+  personal.iniciarSiHaySesion().catch((err) => void registrar("error", "whatsapp", "No se pudo iniciar tu WhatsApp", err));
 
   // 5) Lo que debió dispararse mientras la app estaba apagada.
   void barrer();
@@ -51,6 +55,7 @@ async function arrancar() {
     try {
       await app.close();
       await whatsapp.detener();
+      await personal.detener();
       await detenerScheduler();
       await pool.end();
     } finally {

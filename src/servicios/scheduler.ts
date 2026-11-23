@@ -12,6 +12,8 @@ import { avanzarRecurrente, fijarAgendador, recurrentesParaAvanzar } from "./rec
 import { revisarResumenDiario } from "./resumen.js";
 import { avisarSuscripciones } from "./suscripciones.js";
 import { avisarTarjetas } from "./tarjetas.js";
+import { enviarProgramadosWa, purgarWa } from "./wa-personal.js";
+import { personal } from "../whatsapp/personal.js";
 
 const COLA_DISPARO = "disparo";
 const COLA_BARRIDO = "barrido";
@@ -38,6 +40,7 @@ export async function barrer(): Promise<void> {
     await revisarResumenDiario();
     await avisarSuscripciones();
     await avisarTarjetas();
+    await enviarProgramadosWa(personal);
     await db.delete(borradorPendiente).where(lt(borradorPendiente.expiraEn, new Date()));
     ultimoBarrido = new Date();
   } catch (err) {
@@ -47,10 +50,14 @@ export async function barrer(): Promise<void> {
   }
 }
 
-/** Mantenimiento una vez por hora: recorta logs, borra los archivos sueltos y, si está activado, las fotos viejas. */
+/**
+ * Mantenimiento una vez por hora: recorta logs, borra los archivos sueltos, los mensajes de tu WhatsApp de más de
+ * 7 días y, si está activado, las fotos viejas.
+ */
 async function mantenimiento() {
   await recortarLogs(500);
   await borrarArchivosSueltos();
+  await purgarWa();
   const cfg = await obtenerConfig();
   if (!cfg.limpiezaFotosActiva) return;
   const limite = new Date(Date.now() - cfg.limpiezaFotosDias * 86_400_000);

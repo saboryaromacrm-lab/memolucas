@@ -2,7 +2,7 @@ import { asc, eq } from "drizzle-orm";
 import type { DateTime } from "luxon";
 import { db } from "../db/index.js";
 import { tarjeta, tarjetaConsumo, tarjetaCuota, tarjetaResumen, type Tarjeta, type TarjetaCuota } from "../db/schema.js";
-import { cifrar, descifrar } from "../lib/cifrado.js";
+import { abrir, sellar } from "../lib/cifrado.js";
 import { bus } from "../lib/eventos.js";
 import { ahora } from "../lib/fechas.js";
 import { registrar } from "../lib/log.js";
@@ -23,13 +23,6 @@ export type DatosConsumo = { nombre: string; montos: Record<string, number> };
 
 export const SIN_SALDOS: Saldos = { limiteCompra: 0, limiteCuotas: 0, disponibleCompra: 0, disponibleCuotas: 0, saldo: 0, pagoMinimo: 0 };
 const ILEGIBLE = "(no se pudo descifrar)";
-
-export const sellar = (datos: object) => cifrar(JSON.stringify(datos));
-/** Lo cifrado de una fila; si no se puede descifrar (¿cambió el APP_SECRET?), "vacio". */
-export function abrir<T>(cifrado: string, vacio: T): T {
-  const texto = descifrar(cifrado);
-  return texto ? (JSON.parse(texto) as T) : vacio;
-}
 
 const saldosDe = (d: Saldos): Saldos => ({
   limiteCompra: d.limiteCompra,

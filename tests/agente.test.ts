@@ -80,6 +80,13 @@ describe("asistente", () => {
       "ver_tarjetas",
       "ver_links",
       "guardar_link",
+      "wa_chats",
+      "wa_leer",
+      "wa_buscar",
+      "wa_buscar_mas_atras",
+      "wa_preparar_envio",
+      "wa_confirmar_envio",
+      "wa_programados",
       "borrar",
       "web_search",
     ]);

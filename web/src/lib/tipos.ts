@@ -66,6 +66,18 @@ export type InfoWhatsapp = {
   minutosCaido: number;
 };
 
+/** Tu WhatsApp personal (el que lee el asistente). */
+export type InfoPersonal = {
+  estado: EstadoWa;
+  qr: string | null;
+  numeroVinculado: string | null;
+  numeroVinculadoTexto: string | null;
+  ultimoError: string | null;
+  chats: number;
+  mensajes: number;
+  programados: { id: number; enviarEn: string; para: string; texto: string }[];
+};
+
 export type Plantillas = {
   confirmacion: string;
   aviso: string;

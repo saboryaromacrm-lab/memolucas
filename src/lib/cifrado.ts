@@ -20,3 +20,11 @@ export function descifrar(cifrado: string): string | null {
     return null;
   }
 }
+
+/** Un objeto cifrado como JSON (una fila con varios datos privados). */
+export const sellar = (datos: object) => cifrar(JSON.stringify(datos));
+/** Lo cifrado con sellar; si no se puede descifrar (¿cambió el APP_SECRET?), "vacio". */
+export function abrir<T>(cifrado: string, vacio: T): T {
+  const texto = descifrar(cifrado);
+  return texto ? (JSON.parse(texto) as T) : vacio;
+}
