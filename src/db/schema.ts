@@ -123,6 +123,13 @@ export const nota = pgTable("nota", {
   actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
 });
 
+/** Notas de las calculadoras (ej. la de Bavosi), una por clave, cifradas. */
+export const notaCalculadora = pgTable("nota_calculadora", {
+  clave: text("clave").primaryKey(),
+  textoCifrado: text("texto_cifrado").notNull(),
+  actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
+});
+
 export type EstadoRecordatorio = "activo" | "pausado" | "cumplido" | "no_confirmado" | "borrado";
 export type ModoInsistencia = "global" | "propia" | "off";
 

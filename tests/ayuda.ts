@@ -1,6 +1,9 @@
 import { sql } from "drizzle-orm";
 import { vi } from "vitest";
 import { db, migrarBase } from "../src/db/index.js";
+import { PIN_INICIAL } from "../src/entorno.js";
+import { asegurarAcceso } from "../src/http/rutas/auth.js";
+import { COOKIE_SESION, crearServidor } from "../src/http/servidor.js";
 import { actualizarConfig, invalidarConfig } from "../src/servicios/configuracion.js";
 import { fijarEnviador, type Enviador } from "../src/servicios/enviador.js";
 
@@ -45,7 +48,7 @@ export async function baseLimpia() {
     migrado = true;
   }
   await db.execute(
-    sql`truncate table mensaje, ocurrencia, recordatorio, nota, encuesta, grupo, adjunto, borrador_pendiente, log_sistema, uso_ia, configuracion, acceso_panel restart identity cascade`,
+    sql`truncate table mensaje, ocurrencia, recordatorio, nota, nota_calculadora, encuesta, grupo, adjunto, borrador_pendiente, log_sistema, uso_ia, configuracion, acceso_panel restart identity cascade`,
   );
   invalidarConfig();
   await actualizarConfig({ numeroAutorizado: "5491112345678" });
@@ -62,4 +65,13 @@ export function reloj(inicio: Date) {
       vi.setSystemTime(d);
     },
   };
+}
+
+/** El servidor con la sesión del panel iniciada (PIN inicial): para probar la API como el panel. */
+export async function panelConSesion() {
+  await asegurarAcceso();
+  const app = await crearServidor();
+  const r = await app.inject({ method: "POST", url: "/api/auth/login", payload: { pin: PIN_INICIAL } });
+  const cookie = r.cookies.find((c) => c.name === COOKIE_SESION)!;
+  return { app, headers: { cookie: `${cookie.name}=${cookie.value}` } };
 }
