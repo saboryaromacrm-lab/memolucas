@@ -17,6 +17,13 @@ body {
   @apply bg-slate-50 text-slate-800 antialiased;
 }
 
+@layer base {
+  /* Un texto largo que no se corta (un error, un link) no estira la grilla más allá de la pantalla. */
+  .grid > * {
+    min-width: 0;
+  }
+}
+
 @layer components {
 .tarjeta {
   @apply rounded-xl border border-slate-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)];

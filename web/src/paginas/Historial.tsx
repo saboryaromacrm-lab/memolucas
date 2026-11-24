@@ -52,13 +52,19 @@ export function Historial() {
   return (
     <div>
       <Encabezado titulo="Historial" subtitulo="Todos los mensajes que mandaste y recibiste del bot." />
-      <div className="mb-4 grid gap-2 sm:grid-cols-[1fr_auto_auto]">
-        <div className="relative">
+      <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-[1fr_auto_auto] sm:items-end">
+        <div className="relative col-span-2 sm:col-span-1">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
           <input className="campo pl-9" placeholder="Buscar en los mensajes…" value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
-        <input type="date" className="campo" value={desde} onChange={(e) => setDesde(e.target.value)} aria-label="Desde" />
-        <input type="date" className="campo" value={hasta} onChange={(e) => setHasta(e.target.value)} aria-label="Hasta" />
+        <label className="block">
+          <span className="etiqueta">Desde</span>
+          <input type="date" className="campo" value={desde} onChange={(e) => setDesde(e.target.value)} />
+        </label>
+        <label className="block">
+          <span className="etiqueta">Hasta</span>
+          <input type="date" className="campo" value={hasta} onChange={(e) => setHasta(e.target.value)} />
+        </label>
       </div>
       {cargando && !datos ? (
         <Cargando />

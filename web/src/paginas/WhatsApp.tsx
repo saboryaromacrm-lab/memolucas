@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { AlertTriangle, Clock, KeyRound, Link2Off, Loader2, QrCode, RefreshCw, Send, ShieldCheck, Smartphone, X } from "lucide-react";
-import { Boton, Cargando, Encabezado, Modal, useAccion } from "../componentes/ui";
+import { Ayuda, Boton, Cargando, Encabezado, Modal, useAccion } from "../componentes/ui";
 import { del, post, put } from "../lib/api";
 import { cuandoCorto, fechaHora, haceCuanto } from "../lib/fechas";
 import type { Grupo, InfoPersonal, InfoWhatsapp } from "../lib/tipos";
@@ -274,10 +274,13 @@ function TuWhatsapp() {
           <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
             <Smartphone className="size-4 text-marca-oscuro" /> Tu WhatsApp
           </div>
-          <p className="mt-1 max-w-2xl text-xs text-slate-500">
-            Con tu número vinculado, el asistente lee, resume y busca tus chats de los últimos 7 días, y manda o programa mensajes por vos. Antes de mandar
-            cualquier cosa te muestra el texto y a quién, y espera tu “sí”. Nunca marca nada como leído.
-          </p>
+          <p className="mt-1 max-w-2xl text-xs text-slate-500">Para que el asistente lea tus chats y mande mensajes por vos.</p>
+          <Ayuda titulo="¿Qué puede hacer?">
+            <p className="max-w-2xl text-xs">
+              Con tu número vinculado, el asistente lee, resume y busca tus chats de los últimos 7 días, y manda o programa mensajes por vos. Antes de
+              mandar cualquier cosa te muestra el texto y a quién, y espera tu “sí”. Nunca marca nada como leído.
+            </p>
+          </Ayuda>
         </div>
         {(vinculado || wa.estado === "esperando_qr") && (
           <Boton chico variante="peligro" icono={<Link2Off className="size-3.5" />} disabled={ocupado} onClick={() => setDesvincular(true)}>

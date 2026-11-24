@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from "react";
-import { BellRing, Camera, CheckCircle2, Copy, MoreVertical, Pause, Pencil, Play, Plus, Repeat, Search, Send, Trash2, ListChecks } from "lucide-react";
+import { useEffect, useState } from "react";
+import { BellRing, Camera, CheckCircle2, Copy, Pause, Pencil, Play, Plus, Repeat, Search, Send, Trash2, ListChecks } from "lucide-react";
 import { useEditor } from "../componentes/Editor";
-import { Boton, Cargando, Encabezado, InsigniaEstado, Modal, Vacio, useAccion } from "../componentes/ui";
+import { Boton, Cargando, Deslizable, Encabezado, InsigniaEstado, MenuAcciones, Modal, Vacio, useAccion } from "../componentes/ui";
 import { del, post } from "../lib/api";
 import { cuandoCorto } from "../lib/fechas";
 import type { Recordatorio } from "../lib/tipos";
@@ -45,19 +45,19 @@ export function Recordatorios() {
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
           <input className="campo pl-9" placeholder="Buscar por título o descripción…" value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
-        <div className="-mx-4 flex gap-1.5 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:px-0">
+        <Deslizable className="gap-1.5 sm:flex-wrap">
           {FILTROS.map(([v, t]) => (
             <button
               key={v}
               onClick={() => setFiltro(v)}
-              className={`shrink-0 rounded-full border px-3 py-1 text-sm font-medium transition ${
+              className={`shrink-0 rounded-full border px-3.5 py-1.5 text-sm font-medium transition ${
                 filtro === v ? "border-marca-oscuro bg-marca-oscuro text-white" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
               }`}
             >
               {t}
             </button>
           ))}
-        </div>
+        </Deslizable>
       </div>
 
       {cargando && !datos ? (
@@ -84,21 +84,9 @@ export function Recordatorios() {
 function Fila({ r }: { r: Recordatorio }) {
   const editor = useEditor();
   const accion = useAccion();
-  const [menu, setMenu] = useState(false);
   const [borrar, setBorrar] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    if (!menu) return;
-    const fuera = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setMenu(false);
-    document.addEventListener("mousedown", fuera);
-    return () => document.removeEventListener("mousedown", fuera);
-  }, [menu]);
-
-  const hacer = (ruta: string, ok: string) => {
-    setMenu(false);
-    void accion(() => post(`/api/recordatorios/${r.id}/${ruta}`), ok);
-  };
+  const hacer = (ruta: string, ok: string) => void accion(() => post(`/api/recordatorios/${r.id}/${ruta}`), ok);
   const activo = r.estado === "activo";
 
   return (
@@ -112,8 +100,8 @@ function Fila({ r }: { r: Recordatorio }) {
           </span>
         )}
         <span className="min-w-0 flex-1">
-          <span className="flex items-center gap-2">
-            <span className="truncate text-sm font-semibold text-slate-800">{r.titulo}</span>
+          <span className="flex items-start gap-2">
+            <span className="line-clamp-2 break-words text-sm font-semibold text-slate-800">{r.titulo}</span>
             {r.grupoNombre && <span className="shrink-0 rounded-full bg-sky-50 px-2 py-0.5 text-[11px] font-medium text-sky-700">👨‍👩‍👧 {r.grupoNombre}</span>}
             {r.estado !== "activo" && <InsigniaEstado estado={r.estado} />}
           </span>
@@ -128,44 +116,17 @@ function Fila({ r }: { r: Recordatorio }) {
           <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-500">{r.origen === "panel" ? "Panel" : r.origen === "foto" ? "Foto" : r.origen === "enlace" ? "Link" : "WhatsApp"}</span>
         </span>
       </button>
-      <div className="relative" ref={ref}>
-        <button onClick={() => setMenu(!menu)} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label="Acciones">
-          <MoreVertical className="size-5" />
-        </button>
-        {menu && (
-          <div className="absolute right-0 top-9 z-20 w-48 overflow-hidden rounded-xl border border-slate-200 bg-white py-1 text-sm shadow-lg">
-            <Item icono={<Pencil />} onClick={() => (setMenu(false), editor.abrir({ id: r.id }))}>
-              Editar
-            </Item>
-            {activo && (
-              <Item icono={<Send />} onClick={() => hacer("enviar-ahora", "Enviado por WhatsApp")}>
-                Enviar ahora
-              </Item>
-            )}
-            {activo && (
-              <Item icono={<CheckCircle2 />} onClick={() => hacer("hecho", "Marcado como hecho")}>
-                Marcar como hecho
-              </Item>
-            )}
-            {activo && (
-              <Item icono={<Pause />} onClick={() => hacer("pausar", "Pausado")}>
-                Pausar
-              </Item>
-            )}
-            {r.estado === "pausado" && (
-              <Item icono={<Play />} onClick={() => hacer("reanudar", "Reanudado")}>
-                Reanudar
-              </Item>
-            )}
-            <Item icono={<Copy />} onClick={() => hacer("duplicar", "Duplicado")}>
-              Duplicar
-            </Item>
-            <Item icono={<Trash2 />} peligro onClick={() => (setMenu(false), setBorrar(true))}>
-              Borrar
-            </Item>
-          </div>
-        )}
-      </div>
+      <MenuAcciones
+        acciones={[
+          { texto: "Editar", icono: <Pencil />, onClick: () => editor.abrir({ id: r.id }) },
+          activo && { texto: "Enviar ahora", icono: <Send />, onClick: () => hacer("enviar-ahora", "Enviado por WhatsApp") },
+          activo && { texto: "Marcar como hecho", icono: <CheckCircle2 />, onClick: () => hacer("hecho", "Marcado como hecho") },
+          activo && { texto: "Pausar", icono: <Pause />, onClick: () => hacer("pausar", "Pausado") },
+          r.estado === "pausado" && { texto: "Reanudar", icono: <Play />, onClick: () => hacer("reanudar", "Reanudado") },
+          { texto: "Duplicar", icono: <Copy />, onClick: () => hacer("duplicar", "Duplicado") },
+          { texto: "Borrar", icono: <Trash2 />, peligro: true, onClick: () => setBorrar(true) },
+        ]}
+      />
       <Modal
         abierto={borrar}
         onCerrar={() => setBorrar(false)}
@@ -194,17 +155,5 @@ function Fila({ r }: { r: Recordatorio }) {
         </p>
       </Modal>
     </div>
-  );
-}
-
-function Item({ icono, children, onClick, peligro }: { icono: React.ReactNode; children: React.ReactNode; onClick: () => void; peligro?: boolean }) {
-  return (
-    <button
-      onClick={onClick}
-      className={`flex w-full items-center gap-2.5 px-3 py-2 text-left hover:bg-slate-50 [&>svg]:size-4 ${peligro ? "text-red-600" : "text-slate-700 [&>svg]:text-slate-400"}`}
-    >
-      {icono}
-      {children}
-    </button>
   );
 }

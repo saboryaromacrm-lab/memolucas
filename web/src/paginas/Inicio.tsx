@@ -126,7 +126,7 @@ function Bloque({ titulo, eventos, vacio }: { titulo: string; eventos: Evento[];
               <button onClick={() => editor.abrir({ id: e.recordatorio.id })} className="flex w-full items-center gap-4 px-4 py-3 text-left hover:bg-slate-50">
                 <span className="w-12 shrink-0 text-sm font-semibold tabular-nums text-marca-profundo">{hora(e.cuando)}</span>
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium text-slate-800">
+                  <span className="line-clamp-2 break-words text-sm font-medium text-slate-800">
                     {e.recordatorio.titulo}
                     {e.recordatorio.grupoNombre && <span className="ml-2 text-[11px] font-normal text-sky-700">👨‍👩‍👧 {e.recordatorio.grupoNombre}</span>}
                   </span>
