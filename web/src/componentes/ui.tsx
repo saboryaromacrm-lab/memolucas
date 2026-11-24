@@ -1,5 +1,5 @@
-import { createContext, useCallback, useContext, useEffect, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
-import { CheckCircle2, Loader2, X, XCircle } from "lucide-react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
+import { CheckCircle2, ChevronDown, HelpCircle, Loader2, MoreVertical, X, XCircle } from "lucide-react";
 import type { EstadoRecordatorio } from "../lib/tipos";
 
 // ───────────── Botón ─────────────
@@ -25,7 +25,7 @@ export function Boton({
       {...props}
       disabled={props.disabled || cargando}
       className={`inline-flex items-center justify-center gap-1.5 rounded-lg font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${
-        chico ? "px-2.5 py-1.5 text-xs" : "px-3.5 py-2 text-sm"
+        chico ? "min-h-9 px-3 py-1.5 text-xs sm:min-h-0 sm:px-2.5" : "min-h-10 px-3.5 py-2 text-sm"
       } ${VARIANTES[variante]} ${className}`}
     >
       {cargando ? <Loader2 className="size-4 animate-spin" /> : icono}
@@ -207,5 +207,96 @@ export function useAccion() {
       }
     },
     [avisar],
+  );
+}
+
+// ───────────── Menú ⋮ de una fila ─────────────
+
+export type AccionMenu = { texto: string; icono: ReactNode; onClick: () => void; peligro?: boolean };
+
+/** Las acciones de una fila detrás de un ⋮ (un solo botón grande para el dedo, y el nombre tiene lugar). */
+export function MenuAcciones({ acciones, etiqueta = "Acciones" }: { acciones: (AccionMenu | false | null | undefined)[]; etiqueta?: string }) {
+  const [abierto, setAbierto] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!abierto) return;
+    const fuera = (e: Event) => !ref.current?.contains(e.target as Node) && setAbierto(false);
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && setAbierto(false);
+    document.addEventListener("pointerdown", fuera);
+    document.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("pointerdown", fuera);
+      document.removeEventListener("keydown", esc);
+    };
+  }, [abierto]);
+  return (
+    <div className="relative shrink-0" ref={ref}>
+      <button
+        onClick={() => setAbierto(!abierto)}
+        className="flex size-10 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+        aria-label={etiqueta}
+        aria-expanded={abierto}
+      >
+        <MoreVertical className="size-5" />
+      </button>
+      {abierto && (
+        <div className="absolute right-0 top-10 z-20 w-52 overflow-hidden rounded-xl border border-slate-200 bg-white py-1 text-sm shadow-lg">
+          {acciones.filter((a): a is AccionMenu => !!a).map((a) => (
+            <button
+              key={a.texto}
+              onClick={() => (setAbierto(false), a.onClick())}
+              className={`flex w-full items-center gap-2.5 px-3 py-2.5 text-left hover:bg-slate-50 [&>svg]:size-4 ${a.peligro ? "text-red-600" : "text-slate-700 [&>svg]:text-slate-400"}`}
+            >
+              {a.icono}
+              {a.texto}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ───────────── Fila deslizable (pestañas, filtros) ─────────────
+
+/** Una fila que se desliza de costado, con un degradado del lado donde hay más (así se nota que sigue). */
+export function Deslizable({ children, className = "" }: { children: ReactNode; className?: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [lados, setLados] = useState({ izq: false, der: false });
+  const medir = useCallback(() => {
+    const el = ref.current;
+    if (el) setLados({ izq: el.scrollLeft > 2, der: el.scrollLeft + el.clientWidth < el.scrollWidth - 2 });
+  }, []);
+  useEffect(() => {
+    medir();
+    const ro = new ResizeObserver(medir);
+    if (ref.current) ro.observe(ref.current);
+    return () => ro.disconnect();
+  }, [medir]);
+  const sombra = "pointer-events-none absolute inset-y-0 w-8 from-slate-50 to-transparent transition-opacity";
+  return (
+    <div className="relative">
+      <div ref={ref} onScroll={medir} className={`flex gap-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${className}`}>
+        {children}
+      </div>
+      <span className={`${sombra} left-0 bg-gradient-to-r ${lados.izq ? "opacity-100" : "opacity-0"}`} />
+      <span className={`${sombra} right-0 bg-gradient-to-l ${lados.der ? "opacity-100" : "opacity-0"}`} />
+    </div>
+  );
+}
+
+// ───────────── Ayuda plegable ─────────────
+
+/** Un texto de ayuda largo, plegado: se abre al tocarlo (no empuja el contenido para abajo). */
+export function Ayuda({ titulo = "¿Cómo funciona?", children }: { titulo?: string; children: ReactNode }) {
+  const [abierta, setAbierta] = useState(false);
+  return (
+    <div className="text-sm text-slate-500">
+      <button onClick={() => setAbierta(!abierta)} className="inline-flex min-h-10 items-center gap-1.5 font-medium text-marca-oscuro" aria-expanded={abierta}>
+        <HelpCircle className="size-4" /> {titulo}
+        <ChevronDown className={`size-4 transition ${abierta ? "rotate-180" : ""}`} />
+      </button>
+      {abierta && <div className="mt-1 space-y-1.5">{children}</div>}
+    </div>
   );
 }

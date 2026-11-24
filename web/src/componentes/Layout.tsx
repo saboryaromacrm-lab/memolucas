@@ -59,8 +59,8 @@ export function ChipWhatsapp({ info, compacto }: { info: InfoWhatsapp | null; co
   return (
     <NavLink
       to="/whatsapp"
-      className={`inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-xs font-medium ${
-        info.alerta ? "border-red-200 bg-red-50 text-red-700" : "border-slate-200 bg-white text-slate-600"
+      className={`inline-flex items-center gap-2 rounded-full text-xs font-medium ${
+        compacto ? "size-10 justify-center" : `border px-2.5 py-1 ${info.alerta ? "border-red-200 bg-red-50 text-red-700" : "border-slate-200 bg-white text-slate-600"}`
       }`}
       title={`WhatsApp: ${TEXTO_WA[info.estado]}`}
     >
@@ -79,7 +79,7 @@ function Marca() {
       <img src="/icono.svg" alt="" className="size-8 rounded-lg" />
       <div className="leading-tight">
         <div className="text-[15px] font-semibold text-slate-900">Memolucas</div>
-        <div className="text-[11px] text-slate-500">Recordatorios por WhatsApp</div>
+        <div className="hidden text-[11px] text-slate-500 md:block">Recordatorios por WhatsApp</div>
       </div>
     </div>
   );
@@ -181,19 +181,19 @@ export function Layout({ children }: { children: ReactNode }) {
       </aside>
 
       {/* Barra superior (celular) */}
-      <header className="sticky top-0 z-30 flex items-center justify-between border-b border-slate-200 bg-white/95 px-4 py-2.5 backdrop-blur md:hidden">
+      <header className="sticky top-0 z-30 flex items-center justify-between border-b border-slate-200 bg-white/95 px-4 py-1.5 backdrop-blur md:hidden">
         <Marca />
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-0.5">
           <ChipWhatsapp info={wa} compacto />
-          <button onClick={() => setAsistente(true)} className="rounded-lg p-1.5 text-marca-oscuro hover:bg-slate-100" aria-label="Asistente">
+          <button onClick={() => setAsistente(true)} className="flex size-10 items-center justify-center rounded-lg text-marca-oscuro hover:bg-slate-100" aria-label="Asistente">
             <Sparkles className="size-5" />
           </button>
-          <button onClick={() => setLinks(true)} className="rounded-lg p-1.5 text-marca-oscuro hover:bg-slate-100" aria-label="Mis links">
+          <button onClick={() => setLinks(true)} className="flex size-10 items-center justify-center rounded-lg text-marca-oscuro hover:bg-slate-100" aria-label="Mis links">
             <Link2 className="size-5" />
           </button>
-          <button onClick={() => setMenu(true)} className="relative rounded-lg p-1.5 text-slate-600 hover:bg-slate-100" aria-label="Menú">
+          <button onClick={() => setMenu(true)} className="relative flex size-10 items-center justify-center rounded-lg text-slate-600 hover:bg-slate-100" aria-label="Menú">
             <Menu className="size-5" />
-            {hayAvisos && <span className="absolute right-0.5 top-0.5 size-2.5 rounded-full bg-amber-400 ring-2 ring-white" />}
+            {hayAvisos && <span className="absolute right-1.5 top-1.5 size-2.5 rounded-full bg-amber-400 ring-2 ring-white" />}
           </button>
         </div>
       </header>
@@ -251,7 +251,7 @@ export function Layout({ children }: { children: ReactNode }) {
           <div className="absolute inset-y-0 right-0 flex w-72 flex-col bg-white p-4 shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="mb-4 flex items-center justify-between">
               <Marca />
-              <button onClick={() => setMenu(false)} className="rounded-lg p-1 text-slate-500 hover:bg-slate-100" aria-label="Cerrar">
+              <button onClick={() => setMenu(false)} className="flex size-10 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100" aria-label="Cerrar">
                 <X className="size-5" />
               </button>
             </div>

@@ -20,7 +20,7 @@ export function Logs() {
           <button
             key={n}
             onClick={() => setNivel(n)}
-            className={`rounded-full border px-3 py-1 text-sm font-medium ${nivel === n ? "border-marca-oscuro bg-marca-oscuro text-white" : "border-slate-200 bg-white text-slate-600"}`}
+            className={`rounded-full border px-3.5 py-1.5 text-sm font-medium ${nivel === n ? "border-marca-oscuro bg-marca-oscuro text-white" : "border-slate-200 bg-white text-slate-600"}`}
           >
             {n ? NIVELES[n][0] : "Todos"}
           </button>

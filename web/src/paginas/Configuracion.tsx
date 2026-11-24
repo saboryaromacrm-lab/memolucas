@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Download, KeyRound, PlugZap, RotateCcw, Save, Upload } from "lucide-react";
-import { Boton, Cargando, Encabezado, Interruptor, useAccion, useAviso } from "../componentes/ui";
+import { Boton, Cargando, Deslizable, Encabezado, Interruptor, useAccion, useAviso } from "../componentes/ui";
 import { post, put } from "../lib/api";
 import type { Configuracion as Cfg, Plantillas } from "../lib/tipos";
 import { useDatos } from "../lib/vivo";
@@ -99,7 +99,7 @@ export function Configuracion() {
     <div>
       <Encabezado titulo="Configuración" subtitulo="Todo se aplica al instante, sin reiniciar nada." />
       <div className="grid gap-6 md:grid-cols-[200px_1fr]">
-        <nav className="-mx-4 flex gap-1 overflow-x-auto px-4 md:mx-0 md:flex-col md:px-0">
+        <Deslizable className="gap-1 md:flex-col md:overflow-visible">
           {SECCIONES.map(([v, t]) => (
             <button
               key={v}
@@ -111,7 +111,7 @@ export function Configuracion() {
               {t}
             </button>
           ))}
-        </nav>
+        </Deslizable>
 
         <div className="space-y-4 pb-16">
           {seccion === "general" && (

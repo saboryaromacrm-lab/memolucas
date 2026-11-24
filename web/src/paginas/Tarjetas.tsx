@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { CreditCard, FileText, Pencil, Plus, Trash2 } from "lucide-react";
-import { Boton, Cargando, Encabezado, Modal, Vacio, useAccion } from "../componentes/ui";
+import { Ayuda, Boton, Cargando, Encabezado, MenuAcciones, Modal, useAccion, Vacio } from "../componentes/ui";
 import { del, post, put } from "../lib/api";
 import { aCampo, aNumero, pct, plata } from "../lib/numeros";
 import { useRecordado } from "../lib/recordado";
@@ -109,12 +109,18 @@ function DetalleTarjeta({ t, diasAviso }: { t: Tarjeta; diasAviso: number }) {
 
   return (
     <div className="space-y-4">
-      <p className="text-sm text-slate-500">
-        {t.ultimoResumen
-          ? `Último resumen: cierre ${fecha(t.ultimoResumen.cierre)} · vence ${fecha(t.ultimoResumen.vencimiento)} · ${t.cantidadResumenes} ${t.cantidadResumenes === 1 ? "resumen" : "resúmenes"} en el historial.`
-          : "Todavía no hay resúmenes importados: los datos son los que cargaste a mano."}{" "}
-        Con <b className="font-medium text-slate-600">Importar resumen</b> elegís el PDF del banco (se lee en tu navegador) o pegás el texto: la IA lo ordena, lo revisás y al guardar se actualizan todos los datos de la tarjeta (saldo, pago mínimo, límites, disponibles, fechas), las cuotas y los consumos. Reimportar el mismo resumen no duplica nada.
-      </p>
+      <div>
+        <p className="text-sm text-slate-500">
+          {t.ultimoResumen
+            ? `Último resumen: cierre ${fecha(t.ultimoResumen.cierre)} · vence ${fecha(t.ultimoResumen.vencimiento)} · ${t.cantidadResumenes} ${t.cantidadResumenes === 1 ? "resumen" : "resúmenes"} en el historial.`
+            : "Todavía no hay resúmenes importados: los datos son los que cargaste a mano."}
+        </p>
+        <Ayuda titulo="¿Cómo se actualiza?">
+          <p>
+            Con <b className="font-medium text-slate-600">Importar resumen</b> elegís el PDF del banco (se lee en tu navegador) o pegás el texto: la IA lo ordena, lo revisás y al guardar se actualizan todos los datos de la tarjeta (saldo, pago mínimo, límites, disponibles, fechas), las cuotas y los consumos. Reimportar el mismo resumen no duplica nada.
+          </p>
+        </Ayuda>
+      </div>
 
       <Seccion titulo="Estado de cuenta">
         <div className="grid grid-cols-2 gap-4 p-4 sm:grid-cols-3 lg:grid-cols-5">
@@ -160,30 +166,20 @@ function DetalleTarjeta({ t, diasAviso }: { t: Tarjeta; diasAviso: number }) {
         }
       >
         {verProyeccion ? (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[560px] text-sm">
-              <thead className="text-left text-xs uppercase tracking-wide text-slate-500">
-                <tr>
-                  <th className="px-4 py-2">Cierre</th>
-                  <th className="px-4 py-2 text-right">Cuotas a pagar</th>
-                  <th className="px-4 py-2 text-right">Se libera</th>
-                  <th className="px-4 py-2 text-right">Disponible</th>
-                  <th className="px-4 py-2">Terminan</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {t.proyeccion.map((p) => (
-                  <tr key={p.mes}>
-                    <td className="px-4 py-2 capitalize">{p.mes}</td>
-                    <td className="px-4 py-2 text-right tabular-nums">{plata(p.cuotas)}</td>
-                    <td className={`px-4 py-2 text-right tabular-nums ${p.libera ? "text-marca-oscuro" : "text-slate-400"}`}>{p.libera ? `+${plata(p.libera)}` : "—"}</td>
-                    <td className="px-4 py-2 text-right font-medium tabular-nums">{plata(p.disponible)}</td>
-                    <td className="px-4 py-2 text-xs text-slate-500">{p.terminan.join(", ")}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <ul className="divide-y divide-slate-100">
+            {t.proyeccion.map((p) => (
+              <li key={p.mes} className="grid grid-cols-[1fr_auto] gap-x-3 px-4 py-2.5 text-sm sm:grid-cols-[110px_1fr_1fr_1fr] sm:items-center">
+                <span className="font-medium capitalize text-slate-800">{p.mes}</span>
+                <span className="text-right font-semibold tabular-nums sm:order-last">
+                  {plata(p.disponible)}
+                  <span className="block text-[11px] font-normal text-slate-400">disponible</span>
+                </span>
+                <span className="tabular-nums text-slate-600">Cuotas {plata(p.cuotas)}</span>
+                <span className={`tabular-nums ${p.libera ? "text-marca-oscuro" : "text-slate-400"} sm:text-right`}>{p.libera ? `Se libera +${plata(p.libera)}` : "No se libera nada"}</span>
+                {p.terminan.length > 0 && <span className="col-span-2 text-xs text-slate-500 sm:col-span-4">Terminan: {p.terminan.join(", ")}</span>}
+              </li>
+            ))}
+          </ul>
         ) : (
           <p className="px-4 py-3 text-sm text-slate-500">Cuánto vas a pagar de cuotas y cuánto disponible se libera cuando terminan.</p>
         )}
@@ -203,7 +199,7 @@ function DetalleTarjeta({ t, diasAviso }: { t: Tarjeta; diasAviso: number }) {
               <li key={c.id} className="flex items-center gap-3 px-4 py-3">
                 <div className="min-w-0 flex-1">
                   <div className="flex items-baseline justify-between gap-2">
-                    <span className="truncate font-medium text-slate-800">{c.comercio}</span>
+                    <span className="line-clamp-2 break-words font-medium text-slate-800">{c.comercio}</span>
                     <span className="shrink-0 text-sm font-semibold tabular-nums">{plata(c.montoCuota)}</span>
                   </div>
                   <div className="my-1.5 h-1.5 overflow-hidden rounded-full bg-slate-100">
@@ -217,17 +213,18 @@ function DetalleTarjeta({ t, diasAviso }: { t: Tarjeta; diasAviso: number }) {
                     <span>Faltan {plata(c.montoCuota * c.restantes)}</span>
                   </div>
                 </div>
-                <button onClick={() => setCuota(c)} aria-label="Editar cuota" title="Editar" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100">
-                  <Pencil className="size-4" />
-                </button>
-                <button
-                  onClick={() => confirm(`¿Borrar las cuotas de ${c.comercio}?`) && void accion(() => del(`/api/tarjetas/cuotas/${c.id}`), "Cuotas borradas")}
-                  aria-label="Borrar cuota"
-                  title="Borrar"
-                  className="rounded-lg p-2 text-slate-400 hover:bg-red-50 hover:text-red-600"
-                >
-                  <Trash2 className="size-4" />
-                </button>
+                <MenuAcciones
+                  etiqueta={`Acciones de ${c.comercio}`}
+                  acciones={[
+                    { texto: "Editar", icono: <Pencil />, onClick: () => setCuota(c) },
+                    {
+                      texto: "Borrar",
+                      icono: <Trash2 />,
+                      peligro: true,
+                      onClick: () => confirm(`¿Borrar las cuotas de ${c.comercio}?`) && void accion(() => del(`/api/tarjetas/cuotas/${c.id}`), "Cuotas borradas"),
+                    },
+                  ]}
+                />
               </li>
             ))}
           </ul>
@@ -238,45 +235,39 @@ function DetalleTarjeta({ t, diasAviso }: { t: Tarjeta; diasAviso: number }) {
 
       <Seccion titulo="Consumos que se repiten cada mes">
         {t.consumos.length ? (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[480px] text-sm">
-              <thead className="text-left text-xs uppercase tracking-wide text-slate-500">
-                <tr>
-                  <th className="px-4 py-2">Consumo</th>
-                  <th className="px-4 py-2 text-right">Último</th>
-                  <th className="px-4 py-2 text-right">Anterior</th>
-                  <th className="px-4 py-2 text-right">Variación</th>
-                  <th className="w-10" />
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {t.consumos.map((c) => (
-                  <tr key={c.id}>
-                    <td className="px-4 py-2">{c.nombre}</td>
-                    <td className="px-4 py-2 text-right tabular-nums">{plata(c.monto)}</td>
-                    <td className="px-4 py-2 text-right tabular-nums text-slate-500">{c.anterior === null ? "—" : plata(c.anterior)}</td>
-                    <td className={`px-4 py-2 text-right tabular-nums ${c.variacion === null ? "text-slate-400" : c.variacion > 0 ? "text-red-600" : c.variacion < 0 ? "text-marca-oscuro" : "text-slate-500"}`}>
-                      {c.anterior === null ? "Nuevo" : c.variacion === null || c.variacion === 0 ? "=" : `${c.variacion > 0 ? "↑" : "↓"} ${pct(Math.abs(c.variacion))}`}
-                    </td>
-                    <td className="pr-2 text-right">
-                      <button
-                        onClick={() => confirm(`¿Borrar ${c.nombre}?`) && void accion(() => del(`/api/tarjetas/consumos/${c.id}`), "Consumo borrado")}
-                        aria-label="Borrar consumo"
-                        className="rounded-lg p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600"
-                      >
-                        <Trash2 className="size-4" />
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-                <tr className="font-semibold">
-                  <td className="px-4 py-2">Total</td>
-                  <td className="px-4 py-2 text-right tabular-nums">{plata(totalConsumos)}</td>
-                  <td colSpan={3} />
-                </tr>
-              </tbody>
-            </table>
-          </div>
+          <ul className="divide-y divide-slate-100 text-sm">
+            {t.consumos.map((c) => (
+              <li key={c.id} className="flex items-center gap-3 py-1.5 pl-4 pr-2">
+                <div className="min-w-0 flex-1">
+                  <div className="line-clamp-2 break-words font-medium text-slate-800">{c.nombre}</div>
+                  <div className="text-xs text-slate-500">{c.anterior === null ? "Nuevo" : `Antes ${plata(c.anterior)}`}</div>
+                </div>
+                <div className="shrink-0 text-right">
+                  <div className="font-semibold tabular-nums text-slate-900">{plata(c.monto)}</div>
+                  {c.anterior !== null && (
+                    <div className={`text-xs tabular-nums ${!c.variacion ? "text-slate-500" : c.variacion > 0 ? "text-red-600" : "text-marca-oscuro"}`}>
+                      {!c.variacion ? "Igual" : `${c.variacion > 0 ? "↑" : "↓"} ${pct(Math.abs(c.variacion))}`}
+                    </div>
+                  )}
+                </div>
+                <MenuAcciones
+                  etiqueta={`Acciones de ${c.nombre}`}
+                  acciones={[
+                    {
+                      texto: "Borrar",
+                      icono: <Trash2 />,
+                      peligro: true,
+                      onClick: () => confirm(`¿Borrar ${c.nombre}?`) && void accion(() => del(`/api/tarjetas/consumos/${c.id}`), "Consumo borrado"),
+                    },
+                  ]}
+                />
+              </li>
+            ))}
+            <li className="flex justify-between gap-3 py-2.5 pl-4 pr-14 font-semibold">
+              <span>Total</span>
+              <span className="tabular-nums">{plata(totalConsumos)}</span>
+            </li>
+          </ul>
         ) : (
           <p className="px-4 py-3 text-sm text-slate-500">Aparecen al importar los resúmenes (Netflix, Spotify… cobrados en la tarjeta).</p>
         )}
@@ -374,9 +365,9 @@ function SeccionProximoResumen({ t }: { t: Tarjeta }) {
                         <button
                           onClick={() => void accion(() => del(`/api/tarjetas/compras/${l.id}`), "Compra borrada")}
                           aria-label={`Borrar ${l.descripcion}`}
-                          className="self-center rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600"
+                          className="-my-2 flex size-10 shrink-0 items-center justify-center self-center rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-600"
                         >
-                          <Trash2 className="size-3.5" />
+                          <Trash2 className="size-4" />
                         </button>
                       )}
                     </li>
@@ -393,11 +384,15 @@ function SeccionProximoResumen({ t }: { t: Tarjeta }) {
       ) : (
         <p className="px-4 py-3 text-sm text-slate-500">Todavía no hay nada para el próximo resumen.</p>
       )}
-      <p className="border-t border-slate-100 px-4 py-2.5 text-xs text-slate-500">
-        Es un estimado: no incluye impuestos, percepciones ni intereses. De las compras en un pago cuentan las que cargues acá o le digas al asistente
-        (“gasté 30 mil en el súper con la Visa”); al importar el resumen que ya las trae, se van solas. Las suscripciones suman si en Suscripciones elegiste
-        que se pagan con esta tarjeta.
-      </p>
+      <div className="border-t border-slate-100 px-4 py-2 text-xs text-slate-500">
+        <p className="pt-1">Es un estimado: no incluye impuestos, percepciones ni intereses.</p>
+        <Ayuda titulo="¿Qué incluye?">
+          <p>
+            De las compras en un pago cuentan las que cargues acá o le digas al asistente (“gasté 30 mil en el súper con la Visa”); al importar el resumen
+            que ya las trae, se van solas. Las suscripciones suman si en Suscripciones elegiste que se pagan con esta tarjeta.
+          </p>
+        </Ayuda>
+      </div>
       {compra && <FormCompra tarjetaId={t.id} onCerrar={() => setCompra(false)} />}
     </Seccion>
   );
@@ -429,14 +424,14 @@ function Pago({ t }: { t: Tarjeta }) {
       ) : p.pagado === null ? (
         <span>
           ¿Cuánto pagaste del resumen del {fecha(t.cierre)} ({plata(t.saldo)})? Si no pagaste todo, lo que quedó suma al próximo.{" "}
-          <button className="font-medium text-marca-oscuro hover:underline" onClick={() => setAbierto(true)}>
+          <button className="-my-2 px-1 py-2 font-medium text-marca-oscuro hover:underline" onClick={() => setAbierto(true)}>
             Anotar pago
           </button>
         </span>
       ) : (
         <span>
           Pagaste {plata(p.pagado)} de {plata(t.saldo)} del resumen del {fecha(t.cierre)}.{" "}
-          <button className="font-medium text-marca-oscuro hover:underline" onClick={() => setAbierto(true)}>
+          <button className="-my-2 px-1 py-2 font-medium text-marca-oscuro hover:underline" onClick={() => setAbierto(true)}>
             Cambiar
           </button>
         </span>

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { CreditCard, ExternalLink, Pencil, Plus, RefreshCw, Repeat, Trash2 } from "lucide-react";
-import { Boton, Cargando, Encabezado, Modal, Vacio, useAccion } from "../componentes/ui";
+import { Boton, Cargando, Encabezado, MenuAcciones, Modal, Vacio, useAccion } from "../componentes/ui";
 import { del, post, put } from "../lib/api";
 import { ahora } from "../lib/fechas";
 import { aCampo, aNumero, plata } from "../lib/numeros";
@@ -53,7 +53,7 @@ export function Suscripciones() {
               <div key={s.id} className="grid grid-cols-[1fr_auto] items-center gap-x-3 gap-y-1.5 px-4 py-3 sm:flex sm:gap-4">
                 <div className="min-w-0 sm:flex-1">
                   <div className="flex items-center gap-2">
-                    <span className="truncate font-medium text-slate-900">{s.nombre}</span>
+                    <span className="line-clamp-2 break-words font-medium text-slate-900">{s.nombre}</span>
                     {s.url && (
                       <a href={s.url} target="_blank" rel="noreferrer" className="inline-flex shrink-0 items-center gap-0.5 text-xs font-medium text-marca-oscuro hover:underline">
                         Abrir <ExternalLink className="size-3" />
@@ -75,25 +75,24 @@ export function Suscripciones() {
                       <span>
                         ¿Se paga con la <b className="font-medium">{sugerencia.tarjeta}</b>? En el resumen figura como {sugerencia.comoAparece}.
                       </span>
-                      <button className="font-medium text-marca-oscuro hover:underline" onClick={() => void pagarCon(s, sugerencia.tarjetaId)}>
+                      <button className="rounded-full bg-marca-suave px-3.5 py-2 font-medium text-marca-profundo" onClick={() => void pagarCon(s, sugerencia.tarjetaId)}>
                         Sí
                       </button>
-                      <button className="font-medium text-slate-500 hover:underline" onClick={() => setEditando(s)}>
+                      <button className="rounded-full border border-slate-200 px-3.5 py-2 font-medium text-slate-600" onClick={() => setEditando(s)}>
                         Elegir otra
                       </button>
                     </div>
                   )}
                 </div>
-                <div className="flex shrink-0 justify-end gap-1 sm:order-last">
-                  <button onClick={() => void renovar(s)} title="Renovar: suma un período al vencimiento" aria-label="Renovar" className="rounded-lg p-2 text-marca-oscuro hover:bg-marca-suave">
-                    <RefreshCw className="size-4" />
-                  </button>
-                  <button onClick={() => setEditando(s)} title="Editar" aria-label="Editar" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100">
-                    <Pencil className="size-4" />
-                  </button>
-                  <button onClick={() => void borrar(s)} title="Borrar" aria-label="Borrar" className="rounded-lg p-2 text-slate-400 hover:bg-red-50 hover:text-red-600">
-                    <Trash2 className="size-4" />
-                  </button>
+                <div className="flex shrink-0 justify-end sm:order-last">
+                  <MenuAcciones
+                    etiqueta={`Acciones de ${s.nombre}`}
+                    acciones={[
+                      { texto: "Renovar (suma un período)", icono: <RefreshCw />, onClick: () => void renovar(s) },
+                      { texto: "Editar", icono: <Pencil />, onClick: () => setEditando(s) },
+                      { texto: "Borrar", icono: <Trash2 />, peligro: true, onClick: () => void borrar(s) },
+                    ]}
+                  />
                 </div>
                 <div className="flex items-center gap-2 text-sm sm:block sm:w-44 sm:text-right">
                   <div className="tabular-nums text-slate-800">{fechaLarga(s.fechaVto)}</div>

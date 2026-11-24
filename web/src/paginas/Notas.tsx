@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import { Camera, Copy, ImageOff, Lock, Plus, Search, StickyNote, Trash2 } from "lucide-react";
-import { Boton, Cargando, Encabezado, Modal, Vacio, useAccion, useAviso } from "../componentes/ui";
+import { Boton, Cargando, Deslizable, Encabezado, Modal, useAccion, useAviso, Vacio } from "../componentes/ui";
 import { api, del, post, put } from "../lib/api";
 import { fechaHora } from "../lib/fechas";
 import { sinTildes } from "../lib/textos";
@@ -45,19 +45,19 @@ export function Notas() {
           <input className="campo pl-9" placeholder="Buscar en tus notas…" value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
         {usadas.length > 1 && (
-          <div className="-mx-4 flex gap-1.5 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:px-0">
+          <Deslizable className="gap-1.5 sm:flex-wrap">
             {[null, ...usadas].map((c) => (
               <button
                 key={c ?? "todas"}
                 onClick={() => setCategoria(c)}
-                className={`shrink-0 rounded-full border px-3 py-1 text-sm font-medium capitalize ${
+                className={`shrink-0 rounded-full border px-3.5 py-1.5 text-sm font-medium capitalize ${
                   categoria === c ? "border-marca-oscuro bg-marca-oscuro text-white" : "border-slate-200 bg-white text-slate-600"
                 }`}
               >
                 {c ?? "Todas"}
               </button>
             ))}
-          </div>
+          </Deslizable>
         )}
       </div>
 
