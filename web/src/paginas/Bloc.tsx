@@ -276,9 +276,9 @@ export function Bloc({ comoApp = false }: { comoApp?: boolean }) {
             void agregarImagenes([...e.dataTransfer.files]);
           }}
         >
-          {/* Pestañas: se eligen, se arrastran para ordenar y con + se crea otra */}
+          {/* Pestañas: se eligen, se arrastran para ordenar y con + (pegado a la última, como en el navegador) se crea otra */}
           <div className="flex items-end gap-1 rounded-t-xl border-b border-slate-200 bg-slate-50 px-2 pt-2">
-            <div className="min-w-0 flex-1">
+            <div className="min-w-0">
               <Deslizable className="gap-1">
                 {pestanas.map((p) => (
                   <button
