@@ -69,6 +69,10 @@ Le escribís al bot como a una persona (*"recordame mañana a las 10 pagar la lu
 - Si la IA no anda (sin crédito en la cuenta de Claude, la clave o Anthropic caído), el bot avisa la causa **una sola vez**,
   guarda lo que le mandás (lo marca con ⏳) y lo hace solo cuando vuelve: prueba cada 5 minutos, al cargar otra clave o con
   *Probar ahora* en Inicio. Lo de más de 24 horas no lo hace: te lo lista para que lo reenvíes. Los comandos rápidos andan igual.
+- **Crédito de Claude:** Anthropic no deja consultar el saldo, así que se lo decís (Inicio → *Actualizar saldo*, o por WhatsApp
+  «cargué 10 dólares») y el bot descuenta lo que gasta cada consulta. Con el ritmo de los últimos 14 días calcula para cuántos días
+  alcanza y avisa por WhatsApp cuando quedan menos de 7 y menos de 2 (fuera del silencio); el resumen de la mañana lo suma cuando queda
+  poco. Si se termina, lo pone en 0 y, cuando vuelve, pregunta cuánto cargaste.
 - Healthcheck en `GET /health`.
 
 ## Tecnología

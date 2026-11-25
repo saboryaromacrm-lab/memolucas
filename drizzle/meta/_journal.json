@@ -169,6 +169,13 @@
       "when": 1795628299737,
       "tag": "0023_ia_pendiente",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1795628966818,
+      "tag": "0024_saldo_ia",
+      "breakpoints": true
     }
   ]
 }

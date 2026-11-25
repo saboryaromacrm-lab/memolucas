@@ -1,6 +1,7 @@
 import { ahora, hoyIso, parseHora } from "../lib/fechas.js";
 import { registrar } from "../lib/log.js";
 import { actualizarConfig, obtenerConfig, plantillasDe, renderizar } from "./configuracion.js";
+import { lineaCreditoResumen } from "./credito-ia.js";
 import { enviador } from "./enviador.js";
 import { formatearEventos, rangoHoy, textoPendientes } from "./listados.js";
 import { registrarMensaje } from "./mensajes.js";
@@ -15,7 +16,7 @@ export async function textoResumen(): Promise<string> {
   const lista = eventos.length ? formatearEventos(eventos, false) : "Nada programado 🙌";
   let texto = renderizar(plantillasDe(cfg).resumen, { nombre: cfg.nombreUsuario, lista, cantidad: eventos.length });
   if (cfg.resumenIncluirPendientes) texto += await textoPendientes();
-  return texto;
+  return texto + (await lineaCreditoResumen());
 }
 
 /** Lo llama el barrido cada minuto: envía el resumen si es la hora y todavía no se mandó hoy. */

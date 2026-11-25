@@ -6,6 +6,7 @@ import { iaPendiente, logSistema, mensaje, ocurrencia, recordatorio } from "../.
 import { ahora } from "../../lib/fechas.js";
 import { CAUSA_FALLA_IA, gastoDelMes } from "../../bot/ia.js";
 import { obtenerConfig } from "../../servicios/configuracion.js";
+import { creditoIA } from "../../servicios/credito-ia.js";
 import { rangoHoy, rangoManana } from "../../servicios/listados.js";
 import { crearRecordatorio, eventosEntre, pendientesSinConfirmar } from "../../servicios/recordatorios.js";
 import { cargarNombresGrupos, serializar } from "./recordatorios.js";
@@ -47,6 +48,8 @@ export const rutasPanel: FastifyPluginAsync = async (app) => {
         modelo: cfg.iaModelo,
         // Sin crédito, la clave o Anthropic caído: qué pasa, desde cuándo y cuántos mensajes esperan.
         falla: cfg.iaFalla ? { ...cfg.iaFalla, causa: CAUSA_FALLA_IA[cfg.iaFalla.motivo], guardados: guardados.n } : null,
+        // Saldo aproximado de la cuenta de Claude (null si nunca se cargó).
+        credito: await creditoIA(),
       },
     };
   });

@@ -14,6 +14,7 @@ import { borrarLink, buscarLinks, crearLink, listarLinks, urlValida } from "../s
 import { borrarSuscripcion, crearSuscripcion, listarSuscripciones, pagarSuscripcionCon, renovarSuscripcion } from "../servicios/suscripciones.js";
 import { cargarCompra, listarTarjetas, marcarPago } from "../servicios/tarjetas.js";
 import { agregarAlBloc, verBloc } from "../servicios/bloc.js";
+import { cargarSaldoIA, fijarSaldoIA } from "../servicios/credito-ia.js";
 import { diasParaVencer } from "../servicios/vencimientos.js";
 import { buscarMensajesWa, cancelarProgramadoWa, DIAS_GUARDADO, enviarWa, fijarAliasWa, leerChatWa, listarChatsWa, programadosWa, type MensajeLeido } from "../servicios/wa-personal.js";
 import { ErrorVideo, esLinkDeVideo, leerVideo, textoErrorVideo } from "../servicios/videos.js";
@@ -213,6 +214,17 @@ function herramientas(origen: Canal) {
       description: "Agrega un texto al final de una pestaña del Bloc (si no existe, la crea). No borra ni cambia lo que ya está.",
       inputSchema: z.object({ pestana: z.string(), texto: z.string() }),
       run: ({ pestana, texto }) => seguro(() => agregarAlBloc(pestana, texto)),
+    }),
+    betaZodTool({
+      name: "credito_claude",
+      description:
+        "Anota el crédito de la cuenta de Claude (la IA de este bot), para avisarle antes de que se termine. tipo \"carga\": cargó ese monto y se suma (\"cargué 10 dólares\"). tipo \"saldo\": el saldo que ve en la consola (\"me quedan 12,50\"). Devuelve el saldo y para cuántos días alcanza al ritmo de ahora.",
+      inputSchema: z.object({ tipo: z.enum(["carga", "saldo"]), monto_usd: z.number().min(0) }),
+      run: ({ tipo, monto_usd }) =>
+        seguro(async () => {
+          const c = (tipo === "carga" ? await cargarSaldoIA(monto_usd) : await fijarSaldoIA(monto_usd))!;
+          return { saldo_usd: Number(c.saldoUsd.toFixed(2)), gasto_por_dia_usd: Number(c.porDiaUsd.toFixed(3)), dias_que_alcanza: c.dias === null ? null : Math.floor(c.dias) };
+        }),
     }),
     betaZodTool({
       name: "ver_links",

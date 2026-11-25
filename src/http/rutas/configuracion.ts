@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { cambiarPin } from "./auth.js";
 import { revisarIA } from "../../bot/estado-ia.js";
+import { fijarSaldoIA } from "../../servicios/credito-ia.js";
 import { claveApi, ESFUERZOS, gastoDelMes, MODELOS, probarConexion } from "../../bot/ia.js";
 import { entorno } from "../../entorno.js";
 import { cifrar } from "../../lib/cifrado.js";
@@ -94,6 +95,12 @@ export const rutasConfiguracion: FastifyPluginAsync = async (app) => {
   });
 
   app.post("/configuracion/probar-ia", async () => probarConexion(await obtenerConfig()));
+
+  /** El saldo que ve en la consola de Claude: desde ahí descuenta lo que gasta y avisa cuando se acaba. */
+  app.put("/configuracion/saldo-ia", async (req) => {
+    const { saldoUsd } = z.object({ saldoUsd: z.number().min(0).max(100_000) }).parse(req.body);
+    return fijarSaldoIA(saldoUsd);
+  });
 
   app.put("/configuracion/groq-key", async (req) => {
     const { clave } = z.object({ clave: z.string().trim().nullable() }).parse(req.body);
