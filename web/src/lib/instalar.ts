@@ -11,9 +11,12 @@ if (typeof window !== "undefined")
     oyentes.forEach((o) => o());
   });
 
+/** Abierta como app instalada (ventana propia, sin la barra del navegador). */
+export const comoAppInstalada = () => typeof window !== "undefined" && window.matchMedia("(display-mode: standalone)").matches;
+
 /**
- * Instalar el panel como app de la compu (ícono en la barra de tareas, ventana propia). null si el navegador no lo
- * ofrece o ya está instalado.
+ * Instalar como app de la compu o del celular (ícono propio, ventana propia): la del manifiesto de la página (el panel,
+ * o el Bloc en /app/bloc). null si el navegador no lo ofrece o ya está instalada.
  */
 export function useInstalar(): (() => Promise<void>) | null {
   const [, refrescar] = useState(0);
@@ -22,8 +25,7 @@ export function useInstalar(): (() => Promise<void>) | null {
     oyentes.add(o);
     return () => void oyentes.delete(o);
   }, []);
-  const instalada = typeof window !== "undefined" && window.matchMedia("(display-mode: standalone)").matches;
-  if (!guardado || instalada) return null;
+  if (!guardado || comoAppInstalada()) return null;
   return async () => {
     const e = guardado!;
     guardado = null;

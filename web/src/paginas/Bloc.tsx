@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ChevronUp,
   ClipboardCopy,
+  ExternalLink,
   History,
   MonitorDown,
   NotebookPen,
@@ -22,7 +23,7 @@ import {
 import { Boton, Cargando, Deslizable, Encabezado, MenuAcciones, Modal, Vacio, useAccion, useAviso } from "../componentes/ui";
 import { api, del, get, post, put } from "../lib/api";
 import { fechaHora, haceCuanto } from "../lib/fechas";
-import { useInstalar } from "../lib/instalar";
+import { comoAppInstalada, useInstalar } from "../lib/instalar";
 import { useRecordado } from "../lib/recordado";
 import { useDatos } from "../lib/vivo";
 
@@ -37,7 +38,8 @@ const TAMANOS = [12, 14, 16, 18, 20, 24];
  * El Bloc: pestañas de texto que se guardan solas, como el Bloc de notas de la compu. Lo que escribís en un
  * dispositivo aparece solo en el otro; si escribís en los dos a la vez, nada se pierde (va al historial).
  */
-export function Bloc() {
+/** comoApp: el Bloc instalado como app aparte (/app/bloc), a pantalla completa y sin el menú del panel. */
+export function Bloc({ comoApp = false }: { comoApp?: boolean }) {
   const { datos } = useDatos<Pestana[]>("/api/bloc", ["bloc"]);
   const [activa, setActiva] = useRecordado("bloc-activa", { id: 0 });
   const [letra, setLetra] = useRecordado("bloc-letra", { px: 16 });
@@ -169,27 +171,55 @@ export function Bloc() {
 
   if (!datos) return <Cargando />;
 
+  const acciones = (
+    <>
+      <Boton chico={comoApp} icono={<Upload className="size-4" />} onClick={() => archivo.current?.click()}>
+        Importar .txt
+      </Boton>
+      <Boton chico={comoApp} icono={<ArchiveRestore className="size-4" />} onClick={() => setPapelera(true)}>
+        Papelera
+      </Boton>
+    </>
+  );
+
   return (
-    <div onKeyDown={alTeclear}>
-      <Encabezado
-        titulo="Bloc"
-        subtitulo="Se guarda solo. Lo ves igual en la compu y en el celular."
-        acciones={
-          <>
+    <div onKeyDown={alTeclear} className={comoApp ? "flex h-dvh flex-col bg-slate-50 p-2 pt-[max(0.5rem,env(safe-area-inset-top))] md:p-4" : undefined}>
+      {comoApp ? (
+        <header className="mb-3 flex shrink-0 flex-wrap items-center gap-2 px-1">
+          <img src="/bloc.svg" alt="" className="size-7" />
+          <h1 className="text-lg font-semibold text-slate-900">Bloc</h1>
+          <div className="ml-auto flex flex-wrap gap-2">
             {instalar && (
-              <Boton icono={<MonitorDown className="size-4" />} onClick={() => void instalar()}>
-                Instalar en la compu
+              <Boton chico variante="primario" icono={<MonitorDown className="size-4" />} onClick={() => void instalar()}>
+                Instalar
               </Boton>
             )}
-            <Boton icono={<Upload className="size-4" />} onClick={() => archivo.current?.click()}>
-              Importar .txt
+            {acciones}
+            <Boton chico icono={<ExternalLink className="size-4" />} onClick={() => window.open("/", "_blank", "noopener")}>
+              Abrir el panel
             </Boton>
-            <Boton icono={<ArchiveRestore className="size-4" />} onClick={() => setPapelera(true)}>
-              Papelera
-            </Boton>
-          </>
-        }
-      />
+          </div>
+          {!instalar && !comoAppInstalada() && (
+            <p className="w-full text-xs text-slate-500">
+              Para tenerlo como app: en Chrome o Edge, menú ⋮ → <b>Instalar «Bloc»</b> (o Transmitir, guardar y compartir → Instalar página como
+              app). En el iPhone: Compartir → <b>Agregar a inicio</b>.
+            </p>
+          )}
+        </header>
+      ) : (
+        <Encabezado
+          titulo="Bloc"
+          subtitulo="Se guarda solo. Lo ves igual en la compu y en el celular."
+          acciones={
+            <>
+              <Boton icono={<MonitorDown className="size-4" />} onClick={() => window.open("/app/bloc", "_blank", "noopener")}>
+                Instalar como app
+              </Boton>
+              {acciones}
+            </>
+          }
+        />
+      )}
       <input ref={archivo} type="file" accept=".txt,.md,text/plain" multiple hidden onChange={(e) => (void importar(e.target.files), (e.target.value = ""))} />
 
       {!actual || !local ? (
@@ -206,7 +236,7 @@ export function Bloc() {
           />
         </div>
       ) : (
-        <div className="tarjeta">
+        <div className={comoApp ? "tarjeta flex min-h-0 flex-1 flex-col" : "tarjeta"}>
           {/* Pestañas: se eligen, se arrastran para ordenar y con + se crea otra */}
           <div className="flex items-end gap-1 rounded-t-xl border-b border-slate-200 bg-slate-50 px-2 pt-2">
             <div className="min-w-0 flex-1">
@@ -279,6 +309,7 @@ export function Bloc() {
             buscando={buscando}
             onCerrarBusqueda={() => setBuscando(null)}
             onModo={setBuscando}
+            pantallaCompleta={comoApp}
           />
         </div>
       )}
@@ -316,6 +347,7 @@ function Hoja({
   buscando,
   onCerrarBusqueda,
   onModo,
+  pantallaCompleta,
 }: {
   texto: string;
   onTexto: (t: string) => void;
@@ -323,6 +355,8 @@ function Hoja({
   buscando: null | "buscar" | "reemplazar";
   onCerrarBusqueda: () => void;
   onModo: (m: "buscar" | "reemplazar") => void;
+  /** En la app del Bloc la hoja ocupa el resto de la ventana. */
+  pantallaCompleta: boolean;
 }) {
   const [buscado, setBuscado] = useState("");
   const [reemplazo, setReemplazo] = useState("");
@@ -414,7 +448,7 @@ function Hoja({
           </button>
         </div>
       )}
-      <div className="relative">
+      <div className={pantallaCompleta ? "relative min-h-0 flex-1" : "relative"}>
         {pintado && (
           <div ref={fondo} aria-hidden="true" className={`${ESTILO_HOJA} pointer-events-none absolute inset-0 overflow-y-scroll text-transparent`} style={{ fontSize: letra }}>
             {pintado}
@@ -428,7 +462,9 @@ function Hoja({
           spellCheck={false}
           placeholder="Escribí acá…"
           aria-label="Texto de la pestaña"
-          className={`${ESTILO_HOJA} relative h-[calc(100dvh-19rem)] rounded-b-xl min-h-80 resize-none overflow-y-scroll bg-transparent text-slate-800 outline-none md:h-[calc(100dvh-17rem)]`}
+          className={`${ESTILO_HOJA} relative rounded-b-xl resize-none overflow-y-scroll bg-transparent text-slate-800 outline-none ${
+            pantallaCompleta ? "h-full" : "h-[calc(100dvh-19rem)] min-h-80 md:h-[calc(100dvh-17rem)]"
+          }`}
           style={{ fontSize: letra }}
         />
       </div>

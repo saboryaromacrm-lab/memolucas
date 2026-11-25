@@ -190,7 +190,8 @@ export function Layout({ children }: { children: ReactNode }) {
         </div>
       )}
 
-      <main key={loc.pathname} className="mx-auto max-w-6xl px-4 pb-28 pt-5 md:px-8 md:pb-10 md:pt-8">
+      {/* El Bloc usa todo el ancho, como un editor; el resto, una columna cómoda de leer. */}
+      <main key={loc.pathname} className={`mx-auto px-4 pb-28 pt-5 md:px-8 md:pb-10 md:pt-8 ${loc.pathname === "/bloc" ? "max-w-none" : "max-w-6xl"}`}>
         {children}
       </main>
 
