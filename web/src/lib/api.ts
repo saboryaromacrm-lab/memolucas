@@ -7,15 +7,16 @@ export class ErrorApi extends Error {
   }
 }
 
-type Opciones = { metodo?: string; cuerpo?: unknown; formulario?: FormData };
+/** archivo: se manda tal cual, con su tipo (ej. una imagen pegada). */
+type Opciones = { metodo?: string; cuerpo?: unknown; formulario?: FormData; archivo?: Blob };
 
 /** fetch con cookies, JSON y manejo de errores (401 → vuelve al login). */
 export async function api<T = unknown>(ruta: string, op: Opciones = {}): Promise<T> {
   const r = await fetch(ruta, {
-    method: op.metodo ?? (op.cuerpo || op.formulario ? "POST" : "GET"),
+    method: op.metodo ?? (op.cuerpo || op.formulario || op.archivo ? "POST" : "GET"),
     credentials: "same-origin",
-    headers: op.cuerpo !== undefined ? { "Content-Type": "application/json" } : undefined,
-    body: op.formulario ?? (op.cuerpo !== undefined ? JSON.stringify(op.cuerpo) : undefined),
+    headers: op.cuerpo !== undefined ? { "Content-Type": "application/json" } : op.archivo ? { "Content-Type": op.archivo.type } : undefined,
+    body: op.formulario ?? op.archivo ?? (op.cuerpo !== undefined ? JSON.stringify(op.cuerpo) : undefined),
   });
   const tipo = r.headers.get("content-type") ?? "";
   const datos = tipo.includes("application/json") ? await r.json() : await r.text();

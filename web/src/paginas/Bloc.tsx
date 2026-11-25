@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent as EventoTecla } from "react";
+import { useEffect, useMemo, useRef, useState, type ClipboardEvent as EventoPegar, type DragEvent as EventoArrastre, type KeyboardEvent as EventoTecla } from "react";
 import {
   AArrowDown,
   AArrowUp,
@@ -10,6 +10,7 @@ import {
   ClipboardCopy,
   ExternalLink,
   History,
+  ImagePlus,
   MonitorDown,
   NotebookPen,
   Pencil,
@@ -26,8 +27,9 @@ import { fechaHora, haceCuanto } from "../lib/fechas";
 import { comoAppInstalada, useInstalar } from "../lib/instalar";
 import { useRecordado } from "../lib/recordado";
 import { useDatos } from "../lib/vivo";
+import { IMAGEN_MAX_MB, TiraImagenes, VisorImagen, type ImagenBloc } from "./BlocImagenes";
 
-type Pestana = { id: number; titulo: string; texto: string; orden: number; version: number; actualizadoEn: string };
+type Pestana = { id: number; titulo: string; texto: string; orden: number; version: number; actualizadoEn: string; imagenes: ImagenBloc[] };
 type Local = { texto: string; version: number };
 
 /** Mientras escribís, se guarda a los 0,7 s de la última tecla. */
@@ -50,10 +52,13 @@ export function Bloc({ comoApp = false }: { comoApp?: boolean }) {
   const [historial, setHistorial] = useState<Pestana | null>(null);
   const [papelera, setPapelera] = useState(false);
   const [arrastrando, setArrastrando] = useState<number | null>(null);
+  const [subiendo, setSubiendo] = useState(0);
+  const [viendo, setViendo] = useState<ImagenBloc | null>(null);
   const accion = useAccion();
   const avisar = useAviso();
   const instalar = useInstalar();
   const archivo = useRef<HTMLInputElement>(null);
+  const imagen = useRef<HTMLInputElement>(null);
 
   // Estado de guardado, en refs para que los temporizadores vean lo último.
   const localesRef = useRef(locales);
@@ -151,6 +156,31 @@ export function Bloc({ comoApp = false }: { comoApp?: boolean }) {
     for (const a of [...archivos]) ultima = (await nueva({ titulo: a.name.replace(/\.[^.]+$/, "").slice(0, 120), texto: await a.text() })) ?? ultima;
     if (ultima) avisar(archivos.length === 1 ? "Pestaña importada" : `${archivos.length} pestañas importadas`);
   };
+  /** Imágenes pegadas (Ctrl+V), arrastradas o elegidas con el botón: van a la pestaña que está abierta. */
+  const agregarImagenes = async (archivos: File[]) => {
+    const id = actual?.id;
+    const imagenes = archivos.filter((a) => a.type.startsWith("image/"));
+    if (!id || !imagenes.length) return false;
+    for (const a of imagenes) {
+      if (a.size > IMAGEN_MAX_MB * 1024 * 1024) {
+        avisar(`Esa imagen pesa más de ${IMAGEN_MAX_MB} MB.`, "error");
+        continue;
+      }
+      setSubiendo((n) => n + 1);
+      await accion(() => api(`/api/bloc/${id}/imagenes`, { archivo: a }));
+      setSubiendo((n) => n - 1);
+    }
+    return true;
+  };
+  // Pegar: si lo copiado es solo una imagen (una captura, una foto), va a la tira; si también trae texto, se pega el texto.
+  const alPegar = (e: EventoPegar) => {
+    const imagenes = [...e.clipboardData.files].filter((f) => f.type.startsWith("image/"));
+    if (!imagenes.length || e.clipboardData.getData("text/plain")) return;
+    e.preventDefault();
+    void agregarImagenes(imagenes);
+  };
+  const conArchivos = (e: EventoArrastre) => e.dataTransfer.types.includes("Files");
+
   const copiar = async (texto: string) => {
     try {
       await navigator.clipboard.writeText(texto);
@@ -236,7 +266,16 @@ export function Bloc({ comoApp = false }: { comoApp?: boolean }) {
           />
         </div>
       ) : (
-        <div className={comoApp ? "tarjeta flex min-h-0 flex-1 flex-col" : "tarjeta"}>
+        <div
+          className={comoApp ? "tarjeta flex min-h-0 flex-1 flex-col" : "tarjeta"}
+          onPaste={alPegar}
+          onDragOver={(e) => conArchivos(e) && e.preventDefault()}
+          onDrop={(e) => {
+            if (!conArchivos(e)) return;
+            e.preventDefault();
+            void agregarImagenes([...e.dataTransfer.files]);
+          }}
+        >
           {/* Pestañas: se eligen, se arrastran para ordenar y con + se crea otra */}
           <div className="flex items-end gap-1 rounded-t-xl border-b border-slate-200 bg-slate-50 px-2 pt-2">
             <div className="min-w-0 flex-1">
@@ -287,6 +326,14 @@ export function Bloc({ comoApp = false }: { comoApp?: boolean }) {
             <button onClick={() => void copiar(local.texto)} aria-label="Copiar todo" title="Copiar todo" className="flex size-10 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100">
               <ClipboardCopy className="size-5" />
             </button>
+            <button
+              onClick={() => imagen.current?.click()}
+              aria-label="Agregar imagen"
+              title="Agregar imagen (también Ctrl+V o arrastrándola)"
+              className="flex size-10 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100"
+            >
+              <ImagePlus className="size-5" />
+            </button>
             <button onClick={() => setLetra({ px: TAMANOS[Math.max(0, TAMANOS.indexOf(letra.px) - 1)] ?? 16 })} aria-label="Letra más chica" className="flex size-10 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100">
               <AArrowDown className="size-5" />
             </button>
@@ -300,6 +347,8 @@ export function Bloc({ comoApp = false }: { comoApp?: boolean }) {
               </span>
             </span>
           </div>
+
+          <TiraImagenes imagenes={actual.imagenes} subiendo={subiendo} onVer={setViendo} />
 
           <Hoja
             key={actual.id}
@@ -316,6 +365,8 @@ export function Bloc({ comoApp = false }: { comoApp?: boolean }) {
 
       {renombrar && <Renombrar p={renombrar} version={locales[renombrar.id]?.version ?? renombrar.version} onCerrar={() => setRenombrar(null)} />}
       {historial && <ModalHistorial p={historial} onCerrar={() => setHistorial(null)} />}
+      <input ref={imagen} type="file" accept="image/*" multiple hidden onChange={(e) => (void agregarImagenes([...(e.target.files ?? [])]), (e.target.value = ""))} />
+      {viendo && actual && <VisorImagen imagen={viendo} nombre={actual.titulo} onCerrar={() => setViendo(null)} />}
       {papelera && <ModalPapelera onCerrar={() => setPapelera(false)} onRestaurada={(id) => setActiva({ id })} />}
     </div>
   );
