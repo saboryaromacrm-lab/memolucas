@@ -1,0 +1,18 @@
+{
+  "id": "/app/bloc",
+  "name": "Bloc",
+  "short_name": "Bloc",
+  "description": "Tu Bloc de Memolucas: pestañas de texto que se guardan solas, en la compu y en el celular",
+  "lang": "es",
+  "start_url": "/app/bloc",
+  "scope": "/app/bloc",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#ffffff",
+  "icons": [
+    { "src": "/bloc-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/bloc-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/bloc-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "/bloc.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}

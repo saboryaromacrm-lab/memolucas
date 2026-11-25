@@ -142,6 +142,13 @@ Entrá a la URL y elegí:
 - **Android (Chrome)**: menú ⋮ → *Instalar app*.
 - **iPhone (Safari)**: Compartir → *Agregar a pantalla de inicio*.
 
+### El Bloc como app aparte
+
+Como el Bloc de notas de Windows: su propia ventana, su ícono (una libreta) y nada más que las pestañas y el texto.
+En el panel, **Bloc → Instalar como app** abre `/app/bloc`; ahí Chrome o Edge ofrecen *Instalar «Bloc»* (o menú ⋮ →
+Transmitir, guardar y compartir → Instalar página como app) y en el iPhone, Compartir → *Agregar a inicio*. Usa la misma
+sesión del panel y abre en la última pestaña que usaste.
+
 ## Si algo no anda
 
 | Problema | Qué hacer |

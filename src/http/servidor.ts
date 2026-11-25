@@ -36,6 +36,19 @@ declare module "@fastify/jwt" {
   }
 }
 
+/** /app/bloc: el Bloc como app aparte (se instala con su nombre y su ícono, sin el resto del panel). */
+const esAppBloc = (url: string) => /^\/app\/bloc(?:[/?#]|$)/.test(url);
+
+/** La misma página del panel, con el manifiesto, el título y los íconos del Bloc. */
+export function htmlDelBloc(indice: string): string {
+  return indice
+    .replace('href="/manifest.webmanifest"', 'href="/bloc.webmanifest"')
+    .replace('name="apple-mobile-web-app-title" content="Memolucas"', 'name="apple-mobile-web-app-title" content="Bloc"')
+    .replace('rel="apple-touch-icon" href="/icono-192.png"', 'rel="apple-touch-icon" href="/bloc-192.png"')
+    .replace('rel="icon" href="/icono.svg"', 'rel="icon" href="/bloc.svg"')
+    .replace("<title>Memolucas</title>", "<title>Bloc</title>");
+}
+
 export async function crearServidor() {
   const app = Fastify({
     logger: false,
@@ -117,9 +130,12 @@ export async function crearServidor() {
         else res.header("Cache-Control", "no-cache");
       },
     });
+    const indiceBloc = htmlDelBloc(fs.readFileSync(path.join(web, "index.html"), "utf8"));
     app.get("/*", async (req, reply) => {
       if (req.url.startsWith("/api/")) return reply.code(404).send({ error: "No existe" });
-      return reply.header("Cache-Control", "no-cache").sendFile("index.html");
+      reply.header("Cache-Control", "no-cache");
+      if (esAppBloc(req.url)) return reply.type("text/html; charset=utf-8").send(indiceBloc);
+      return reply.sendFile("index.html");
     });
   }
 

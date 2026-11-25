@@ -48,26 +48,37 @@ export function App() {
       ) : (
         <BrowserRouter>
           <ProveedorEditor>
-            <Layout>
-              <Routes>
-                <Route path="/" element={<Inicio />} />
-                <Route path="/recordatorios" element={<Recordatorios />} />
-                <Route path="/calendario" element={<Calendario />} />
-                <Route path="/notas" element={<Notas />} />
-                <Route path="/bloc" element={<Bloc />} />
-                <Route path="/calculadoras" element={<Calculadoras />} />
-                <Route path="/suscripciones" element={<Suscripciones />} />
-                <Route path="/tarjetas" element={<Tarjetas />} />
-                <Route path="/whatsapp" element={<WhatsApp />} />
-                <Route path="/historial" element={<Historial />} />
-                <Route path="/configuracion" element={<Configuracion />} />
-                <Route path="/logs" element={<Logs />} />
-                <Route path="*" element={<Navigate to="/" replace />} />
-              </Routes>
-            </Layout>
+            <Routes>
+              {/* El Bloc como app aparte: solo las pestañas y el texto, sin el menú del panel. */}
+              <Route path="/app/bloc" element={<Bloc comoApp />} />
+              <Route path="*" element={<Panel />} />
+            </Routes>
           </ProveedorEditor>
         </BrowserRouter>
       )}
     </ProveedorAvisos>
+  );
+}
+
+/** El panel: el menú y todas las secciones. */
+function Panel() {
+  return (
+    <Layout>
+      <Routes>
+        <Route path="/" element={<Inicio />} />
+        <Route path="/recordatorios" element={<Recordatorios />} />
+        <Route path="/calendario" element={<Calendario />} />
+        <Route path="/notas" element={<Notas />} />
+        <Route path="/bloc" element={<Bloc />} />
+        <Route path="/calculadoras" element={<Calculadoras />} />
+        <Route path="/suscripciones" element={<Suscripciones />} />
+        <Route path="/tarjetas" element={<Tarjetas />} />
+        <Route path="/whatsapp" element={<WhatsApp />} />
+        <Route path="/historial" element={<Historial />} />
+        <Route path="/configuracion" element={<Configuracion />} />
+        <Route path="/logs" element={<Logs />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </Layout>
   );
 }
