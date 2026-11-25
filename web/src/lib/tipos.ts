@@ -148,7 +148,15 @@ export type EstadoPanel = {
   manana: Evento[];
   pendientes: { ocurrencia: Ocurrencia; recordatorio: Recordatorio }[];
   contadores: { activos: number; cumplidosSemana: number; noConfirmados: number };
-  ia: { costoUsd: number; llamadas: number; tokensEntrada: number; tokensSalida: number; modelo: string };
+  ia: {
+    costoUsd: number;
+    llamadas: number;
+    tokensEntrada: number;
+    tokensSalida: number;
+    modelo: string;
+    /** La IA no anda (sin crédito, la clave o Anthropic caído) y cuántos mensajes esperan. */
+    falla: { motivo: "sin_credito" | "clave" | "caido"; desde: string; causa: string; guardados: number } | null;
+  };
 };
 
 export type Mensaje = {

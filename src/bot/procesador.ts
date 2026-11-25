@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { WAMessage } from "baileys";
-import { and, desc, eq, gt } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray } from "drizzle-orm";
 import { DateTime } from "luxon";
 import type Anthropic from "@anthropic-ai/sdk";
 import { db } from "../db/index.js";
@@ -8,9 +8,11 @@ import {
   adjunto,
   borradorPendiente,
   grupo,
+  iaPendiente,
   mensaje,
   ocurrencia,
   type AccionEncuesta,
+  type MotivoFallaIA,
   type Ocurrencia,
   type Recordatorio,
 } from "../db/schema.js";
@@ -42,7 +44,8 @@ import {
 } from "../servicios/recordatorios.js";
 import { EMOJIS_CONFIRMACION, TEXTO_AYUDA, detectarComando, esAfirmativo, esNegativo, pedidoDeLinks, respuestaASuscripcion, type PedidoDeLinks } from "./comandos.js";
 import { extraerUrls, leerEnlace, textoSinUrls, type VistaPreviaWa } from "../servicios/enlaces.js";
-import { analizarEnlace, analizarFoto, ErrorIA, interpretar, responderConNotas, type Interpretacion } from "./ia.js";
+import { analizarEnlace, analizarFoto, interpretar, motivoFallaIA, responderConNotas, type Interpretacion } from "./ia.js";
+import { anotarFallaIA, revisarIA, textoFallaIA } from "./estado-ia.js";
 import { ErrorAudio, transcribir } from "../servicios/audio.js";
 import { actualizarNota, borrarNota, crearNota, obtenerNota, relacionadas, todasLasNotas } from "../servicios/notas.js";
 import { obtenerAdjunto } from "../servicios/adjuntos.js";
@@ -220,6 +223,21 @@ async function cerrarBorrador(id: number) {
 
 /** msg: el mensaje al que se reacciona con ✅ si se marca algo como hecho. */
 type Ctx = { ocCitada: number | null; borrador: Awaited<ReturnType<typeof borradorActivo>>; msg: WAMessage };
+
+/** Lo que necesita la IA para un mensaje (conIA). */
+type DatosIA = Ctx & {
+  texto: string;
+  entranteId: number;
+  historial: Awaited<ReturnType<typeof ultimosMensajes>>;
+  citadoFila: typeof mensaje.$inferSelect | null;
+  /** Lo que entendió de un audio, para mostrarlo en el grupo. */
+  eco?: string;
+  /** Es uno guardado mientras la IA no andaba que se hace ahora: cuándo llegó. */
+  enviadoEn?: Date;
+};
+
+/** Lo guardado mientras la IA no andaba se hace solo si llegó hace menos de esto. */
+const HORAS_PENDIENTE_IA = 24;
 
 // ───────────── Procesador ─────────────
 
@@ -630,28 +648,118 @@ export class Procesador {
     }
 
     // 6) IA.
+    return this.conIA({ texto, entranteId: entrante.id, historial, citadoFila, ocCitada, borrador, msg, eco });
+  }
+
+  /**
+   * Lo que no es un comando lo interpreta la IA. Si la IA no anda (sin crédito, la clave, Anthropic caído), en privado
+   * se guarda y se hace cuando vuelva (reanudarPendientes).
+   */
+  private async conIA(d: DatosIA): Promise<void> {
     const cfg = await obtenerConfig();
+    // Con la IA caída se prueba si volvió (y se hace lo guardado, en orden); si no volvió, va directo a la cola.
+    if (cfg.iaFalla && !enGrupo() && !d.enviadoEn && !(await revisarIA(true))) return this.guardarParaDespues(d, null);
+    const texto = d.enviadoEn
+      ? `${d.texto}\n\n(Esto lo mandé el ${aLocal(d.enviadoEn).toFormat("ccc dd/MM HH:mm", { locale: "es" })} y recién ahora lo podés hacer porque la IA no andaba: "hoy", "mañana" o "en una hora" cuentan desde ese momento.)`
+      : d.texto;
     let interp: Interpretacion;
     try {
-      interp = await interpretar(cfg, texto, await this.contexto(historial, borrador?.datos ?? null, citadoFila));
+      interp = await interpretar(cfg, texto, await this.contexto(d.historial, d.borrador?.datos ?? null, d.citadoFila));
     } catch (err) {
-      if (enGrupo()) return; // En el grupo no se interrumpe la charla con errores.
-      if (err instanceof ErrorIA && /clave/i.test(err.message))
-        return this.decir("Me falta la clave de Claude para entenderte. Cargala en el panel (Configuración → IA).", { intencion: "error_ia" });
-      return this.decir(frases.errorTecnico(), { intencion: "error_ia" });
+      return this.falloIA(err, d);
     }
-    await anotar(interp.intencion);
+    await db.update(mensaje).set({ intencionDetectada: interp.intencion }).where(eq(mensaje.id, d.entranteId));
     if (interp.intencion === "ignorar") {
       if (enGrupo()) return; // Charla del grupo: no es para el bot.
       interp = { ...interp, intencion: "desconocido" }; // En privado siempre se contesta.
     }
-    if (eco) await this.decir(eco, { intencion: "transcripcion" });
+    if (d.eco) await this.decir(d.eco, { intencion: "transcripcion" });
     // Lo que no es un pedido simple lo resuelve el asistente (solo en privado: en el grupo no ve tus cosas).
-    if (interp.intencion === "consulta" && !enGrupo()) return this.consultarAgente(texto, entrante.id);
-    return this.ejecutarSeguro(interp, { ocCitada, borrador, msg });
+    if (interp.intencion === "consulta" && !enGrupo()) return this.consultarAgente(texto, d.entranteId, d);
+    return this.ejecutarSeguro(interp, { ocCitada: d.ocCitada, borrador: d.borrador, msg: d.msg });
   }
 
-  private async consultarAgente(texto: string, entranteId: number) {
+  /**
+   * La IA falló. En el grupo no se interrumpe la charla. En privado, si no depende del mensaje (sin crédito, la clave,
+   * Anthropic caído), se explica la causa y, si viene de conIA (d), se guarda para cuando vuelva.
+   */
+  private async falloIA(err: unknown, d?: DatosIA, intencion = "error_ia"): Promise<void> {
+    if (enGrupo()) return;
+    const motivo = motivoFallaIA(err);
+    if (!motivo) return this.decir(frases.errorTecnico(), { intencion });
+    const nuevo = await anotarFallaIA(motivo);
+    // Uno guardado que se estaba haciendo: queda guardado y se corta (reanudarPendientes).
+    if (d?.enviadoEn) throw err;
+    if (!d) return this.decir(textoFallaIA(motivo, false), { intencion });
+    return this.guardarParaDespues(d, nuevo ? motivo : null);
+  }
+
+  /** Guarda el mensaje para cuando vuelva la IA. Con motivo, avisa la causa (una sola vez); si no, solo ⏳. */
+  private async guardarParaDespues(d: DatosIA, motivo: MotivoFallaIA | null) {
+    await db.insert(iaPendiente).values({ mensajeId: d.entranteId, clave: d.msg.key, ocurrenciaId: d.ocCitada, creadoEn: new Date() });
+    await db.update(mensaje).set({ intencionDetectada: "pendiente_ia" }).where(eq(mensaje.id, d.entranteId));
+    if (motivo) return this.decir(textoFallaIA(motivo, true), { intencion: "ia_caida" });
+    return this.reaccionarODecir("⏳", "Guardado para cuando vuelva la IA", "⏳ Lo guardé: lo hago cuando vuelva la IA.", "pendiente_ia");
+  }
+
+  private reanudando: Promise<void> | null = null;
+  /** La IA volvió: hace en orden lo que llegó mientras no andaba y avisa lo que quedó viejo. */
+  reanudarPendientes(): Promise<void> {
+    this.reanudando ??= this.reanudarAqui().finally(() => (this.reanudando = null));
+    return this.reanudando;
+  }
+
+  private async reanudarAqui() {
+    const filas = await db
+      .select({ p: iaPendiente, m: mensaje })
+      .from(iaPendiente)
+      .innerJoin(mensaje, eq(mensaje.id, iaPendiente.mensajeId))
+      .orderBy(asc(iaPendiente.id));
+    if (!filas.length) return;
+    const limite = Date.now() - HORAS_PENDIENTE_IA * 3_600_000;
+    const viejas = filas.filter((f) => f.p.creadoEn.getTime() < limite);
+    const vigentes = filas.filter((f) => f.p.creadoEn.getTime() >= limite);
+    const enPrivado = (msg: WAMessage, fn: () => Promise<void>) => contexto.run({ grupo: null, autor: null, msg, compras: false }, fn);
+    await enPrivado({ key: filas[0].p.clave }, async () => {
+      if (vigentes.length)
+        await this.decir(
+          `✅ Volví a andar. Ahora hago ${vigentes.length === 1 ? "lo que me mandaste" : `las ${vigentes.length} cosas que me mandaste`} mientras no podía:`,
+          { intencion: "ia_volvio" },
+        );
+      for (const f of vigentes) {
+        const msg: WAMessage = { key: f.p.clave };
+        try {
+          await enPrivado(msg, async () => {
+            await this.canal.reaccionar(msg, "").catch(() => {}); // Saca el ⏳.
+            await this.conIA({
+              texto: f.m.texto ?? "",
+              entranteId: f.m.id,
+              historial: await ultimosMensajes(5, null, "whatsapp", f.m.id),
+              citadoFila: null,
+              ocCitada: f.p.ocurrenciaId,
+              borrador: null,
+              msg,
+              enviadoEn: f.p.creadoEn,
+            });
+          });
+        } catch (err) {
+          if (motivoFallaIA(err)) return; // Se volvió a caer: lo que falta queda guardado.
+          await registrar("error", "bot", "Falló un mensaje guardado mientras no andaba la IA", err);
+        }
+        await db.delete(iaPendiente).where(eq(iaPendiente.id, f.p.id));
+      }
+      if (!viejas.length) return;
+      const corto = (t: string) => (t.length > 80 ? `${t.slice(0, 79)}…` : t);
+      const lista = viejas.map((f) => `• «${corto(f.m.texto ?? "")}» (${aLocal(f.p.creadoEn).toFormat("ccc dd/MM HH:mm", { locale: "es" })})`);
+      await this.decir(
+        `${vigentes.length ? "" : "✅ Volví a andar. "}Estos no los hice porque pasaron más de ${HORAS_PENDIENTE_IA} horas:\n${lista.join("\n")}\nSi todavía los necesitás, mandámelos de nuevo.`,
+        { intencion: "ia_volvio" },
+      );
+      await db.delete(iaPendiente).where(inArray(iaPendiente.id, viejas.map((f) => f.p.id)));
+    });
+  }
+
+  private async consultarAgente(texto: string, entranteId: number, d?: DatosIA) {
     try {
       const r = await preguntarAlAgente(texto, "whatsapp", entranteId);
       if ("tope" in r) return this.decir(textoTope(r.tope), { intencion: "agente_tope" });
@@ -659,10 +767,8 @@ export class Procesador {
       if (esSoloEmoji(r.texto)) return this.reaccionarODecir(r.texto.trim(), "Hecho", `${r.texto.trim()} Listo.`, "agente");
       return this.decir(r.texto, { intencion: "agente" });
     } catch (err) {
-      await registrar("error", "agente", "Falló el asistente", err);
-      if (err instanceof ErrorIA && /clave|API key/i.test(err.message))
-        return this.decir("Me falta la clave de Claude para responderte. Cargala en el panel (Configuración → IA).", { intencion: "error_ia" });
-      return this.decir(frases.errorTecnico(), { intencion: "error_ia" });
+      if (!motivoFallaIA(err)) await registrar("error", "agente", "Falló el asistente", err);
+      return this.falloIA(err, d);
     }
   }
 
@@ -671,6 +777,7 @@ export class Procesador {
       await this.ejecutar(interp, ctx);
     } catch (err) {
       if (err instanceof ErrorUsuario) return this.decir(`🤔 ${err.message}`);
+      if (motivoFallaIA(err)) return this.falloIA(err);
       await registrar("error", "bot", "Error ejecutando la intención", err);
       return this.decir(frases.errorTecnico());
     }
@@ -952,10 +1059,8 @@ export class Procesador {
     } catch (err) {
       await reaccion("😕");
       if (err instanceof ErrorVideo) return this.decir(textoErrorVideo(err.motivo), { intencion: "video_error" });
-      await registrar("error", "videos", "No se pudo resumir un video", err);
-      if (err instanceof ErrorIA && /clave|API key/i.test(err.message))
-        return this.decir("Me falta la clave de Claude para resumir videos. Cargala en el panel (Configuración → IA).", { intencion: "error_ia" });
-      return this.decir(frases.errorTecnico(), { intencion: "video_error" });
+      if (!motivoFallaIA(err)) await registrar("error", "videos", "No se pudo resumir un video", err);
+      return this.falloIA(err, undefined, "video_error");
     }
   }
 

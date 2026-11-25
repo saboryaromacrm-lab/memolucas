@@ -162,6 +162,13 @@
       "when": 1795609559901,
       "tag": "0022_bloc",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1795628299737,
+      "tag": "0023_ia_pendiente",
+      "breakpoints": true
     }
   ]
 }

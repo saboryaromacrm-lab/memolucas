@@ -2,9 +2,9 @@ import { and, count, desc, eq, gte, ilike, lt, lte, ne, type SQL } from "drizzle
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { db } from "../../db/index.js";
-import { logSistema, mensaje, ocurrencia, recordatorio } from "../../db/schema.js";
+import { iaPendiente, logSistema, mensaje, ocurrencia, recordatorio } from "../../db/schema.js";
 import { ahora } from "../../lib/fechas.js";
-import { gastoDelMes } from "../../bot/ia.js";
+import { CAUSA_FALLA_IA, gastoDelMes } from "../../bot/ia.js";
 import { obtenerConfig } from "../../servicios/configuracion.js";
 import { rangoHoy, rangoManana } from "../../servicios/listados.js";
 import { crearRecordatorio, eventosEntre, pendientesSinConfirmar } from "../../servicios/recordatorios.js";
@@ -28,6 +28,7 @@ export const rutasPanel: FastifyPluginAsync = async (app) => {
       .select({ n: count() })
       .from(ocurrencia)
       .where(and(eq(ocurrencia.estado, "no_confirmada"), gte(ocurrencia.programadaPara, haceSieteDias)));
+    const [guardados] = await db.select({ n: count() }).from(iaPendiente);
     const evento = (e: Awaited<ReturnType<typeof eventosEntre>>[number]) => ({
       recordatorio: serializar(e.recordatorio, cfg),
       cuando: e.cuando,
@@ -41,7 +42,12 @@ export const rutasPanel: FastifyPluginAsync = async (app) => {
       manana: (await eventosEntre(manana.desde, manana.hasta)).map(evento),
       pendientes: (await pendientesSinConfirmar()).map((p) => ({ ocurrencia: p.ocurrencia, recordatorio: serializar(p.recordatorio, cfg) })),
       contadores: { activos: activos.n, cumplidosSemana: cumplidos.n, noConfirmados: noConf.n },
-      ia: { ...(await gastoDelMes()), modelo: cfg.iaModelo },
+      ia: {
+        ...(await gastoDelMes()),
+        modelo: cfg.iaModelo,
+        // Sin crédito, la clave o Anthropic caído: qué pasa, desde cuándo y cuántos mensajes esperan.
+        falla: cfg.iaFalla ? { ...cfg.iaFalla, causa: CAUSA_FALLA_IA[cfg.iaFalla.motivo], guardados: guardados.n } : null,
+      },
     };
   });
 

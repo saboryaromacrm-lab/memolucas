@@ -1,3 +1,4 @@
+import { alVolverLaIA } from "./bot/estado-ia.js";
 import { Procesador } from "./bot/procesador.js";
 import { esperarBase, migrarBase, pool } from "./db/index.js";
 import { entorno, validarEntorno } from "./entorno.js";
@@ -36,6 +37,8 @@ async function arrancar() {
   fijarEnviador(whatsapp);
   const procesador = new Procesador(whatsapp);
   whatsapp.onMensaje((msg, r) => procesador.procesar(msg, { grupo: r.grupo, autor: r.autor }));
+  // Lo que llegó mientras la IA no andaba (sin crédito, la clave, Anthropic caído) se hace cuando vuelve.
+  alVolverLaIA(() => procesador.reanudarPendientes());
   // Al reconectar, se da unos segundos a WhatsApp para sincronizar y se manda lo pendiente.
   whatsapp.onConectado(() => setTimeout(() => void barrer(), 5000));
   whatsapp.iniciar().catch((err) => void registrar("error", "whatsapp", "No se pudo iniciar WhatsApp", err));

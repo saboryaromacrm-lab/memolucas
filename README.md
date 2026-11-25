@@ -66,6 +66,9 @@ Le escribís al bot como a una persona (*"recordame mañana a las 10 pagar la lu
 - Si se cerró la sesión desde el teléfono, el panel pide un QR nuevo.
 - Lo que debió llegar mientras la app o WhatsApp estaban caídos se manda al volver, con el aviso **"⏰ Atrasado"**.
 - Si WhatsApp está caído más de 10 minutos (configurable), el panel lo marca en rojo.
+- Si la IA no anda (sin crédito en la cuenta de Claude, la clave o Anthropic caído), el bot avisa la causa **una sola vez**,
+  guarda lo que le mandás (lo marca con ⏳) y lo hace solo cuando vuelve: prueba cada 5 minutos, al cargar otra clave o con
+  *Probar ahora* en Inicio. Lo de más de 24 horas no lo hace: te lo lista para que lo reenvíes. Los comandos rápidos andan igual.
 - Healthcheck en `GET /health`.
 
 ## Tecnología
@@ -141,7 +144,8 @@ Entrá a la URL y elegí:
 |---|---|
 | "Bad Gateway" | Dokploy → memolucas → **Logs**. Si dice *"la base no responde"*, revisá `DATABASE_URL` (Internal URL) y redesplegá. |
 | El bot no responde | Panel → WhatsApp: ¿está "Conectado"? ¿El número autorizado es el tuyo? Mirá *Logs*. |
-| "Uy, no pude procesar eso" | Panel → Configuración → IA → *Probar conexión* (API key o modelo) |
+| "⚠️ Ahora no puedo usar la IA" | Lo que dice el mensaje (y el cartel de Inicio): cargar crédito en console.anthropic.com → Settings → Billing, o una clave nueva. Lo guardado se hace solo al volver. |
+| "Se me trabó algo" | Panel → Configuración → IA → *Probar conexión* (API key o modelo) y *Logs* |
 | WhatsApp bloqueó el número | Cambiá el chip, *Desvincular* y escaneá el QR nuevo |
 | Estado general | `https://memolucas.saboryaroma.com/health` |
 
