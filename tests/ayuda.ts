@@ -48,7 +48,7 @@ export async function baseLimpia() {
     migrado = true;
   }
   await db.execute(
-    sql`truncate table mensaje, ocurrencia, recordatorio, nota, nota_calculadora, link_guardado, suscripcion, tarjeta, tarjeta_cuota, tarjeta_resumen, tarjeta_consumo, encuesta, grupo, adjunto, borrador_pendiente, log_sistema, uso_ia, bloc_pestana, bloc_version, wa_chat, wa_mensaje, wa_programado, ia_pendiente, configuracion, acceso_panel restart identity cascade`,
+    sql`truncate table mensaje, ocurrencia, recordatorio, nota, nota_calculadora, link_guardado, suscripcion, tarjeta, tarjeta_cuota, tarjeta_resumen, tarjeta_consumo, encuesta, grupo, adjunto, borrador_pendiente, log_sistema, uso_ia, bloc_pestana, bloc_version, bloc_imagen, wa_chat, wa_mensaje, wa_programado, ia_pendiente, configuracion, acceso_panel restart identity cascade`,
   );
   invalidarConfig();
   await actualizarConfig({ numeroAutorizado: "5491112345678" });

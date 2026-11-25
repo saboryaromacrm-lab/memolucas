@@ -149,6 +149,11 @@ En el panel, **Bloc → Instalar como app** abre `/app/bloc`; ahí Chrome o Edge
 Transmitir, guardar y compartir → Instalar página como app) y en el iPhone, Compartir → *Agregar a inicio*. Usa la misma
 sesión del panel y abre en la última pestaña que usaste.
 
+**Imágenes en el Bloc:** pegalas con Ctrl+V (una captura con Win+Shift+S), arrastralas o usá el botón de la imagen (en el
+celular abre la galería o la cámara). Quedan como miniaturas arriba del texto de la pestaña; al tocar una se ve grande con
+*Copiar* (para pegarla en WhatsApp, un mail…), *Descargar*, *Compartir* (celular) y *Borrar*. Se guardan comprimidas y
+cifradas (hasta 15 MB al pegar, 30 por pestaña) y se van con la pestaña a la papelera.
+
 ## Si algo no anda
 
 | Problema | Qué hacer |

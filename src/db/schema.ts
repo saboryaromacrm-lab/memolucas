@@ -182,6 +182,26 @@ export const blocVersion = pgTable(
   (t) => [index("bloc_version_pestana_idx").on(t.pestanaId, t.creadoEn)],
 );
 
+/**
+ * Imágenes pegadas en una pestaña del Bloc (se ven como miniaturas arriba del texto). Los archivos están cifrados en
+ * MEDIA/bloc: "archivo" es el nombre base (<archivo>.bin la grande y <archivo>-mini.bin la miniatura).
+ */
+export const blocImagen = pgTable(
+  "bloc_imagen",
+  {
+    id: serial("id").primaryKey(),
+    pestanaId: integer("pestana_id")
+      .notNull()
+      .references(() => blocPestana.id, { onDelete: "cascade" }),
+    archivo: text("archivo").notNull(),
+    ancho: integer("ancho").notNull(),
+    alto: integer("alto").notNull(),
+    bytes: integer("bytes").notNull(),
+    creadoEn: creadoEn(),
+  },
+  (t) => [index("bloc_imagen_pestana_idx").on(t.pestanaId)],
+);
+
 /** Notas de las calculadoras (ej. la de Bavosi), una por clave, cifradas. */
 export const notaCalculadora = pgTable("nota_calculadora", {
   clave: text("clave").primaryKey(),

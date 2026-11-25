@@ -176,6 +176,13 @@
       "when": 1795628966818,
       "tag": "0024_saldo_ia",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1795637415587,
+      "tag": "0025_bloc_imagen",
+      "breakpoints": true
     }
   ]
 }

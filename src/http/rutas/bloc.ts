@@ -1,10 +1,15 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { ErrorUsuario } from "../../servicios/recordatorios.js";
 import {
+  agregarImagen,
+  borrarImagen,
   borrarPestana,
   cerrarPestana,
   crearPestana,
   guardarPestana,
+  IMAGEN_MAX_BYTES,
+  leerImagen,
   listarBloc,
   ordenarBloc,
   papeleraBloc,
@@ -55,5 +60,25 @@ export const rutasBloc: FastifyPluginAsync = async (app) => {
   app.post("/bloc/:id/versiones/:version/restaurar", async (req) => {
     const { id, version } = z.object({ id: z.coerce.number().int().positive(), version: z.coerce.number().int().positive() }).parse(req.params);
     return restaurarVersion(id, version);
+  });
+
+  // Imágenes: llegan como el archivo tal cual (Ctrl+V, arrastrada o de la cámara), hasta 15 MB.
+  app.addContentTypeParser(/^image\//, { parseAs: "buffer", bodyLimit: IMAGEN_MAX_BYTES }, (_req, cuerpo, listo) => listo(null, cuerpo));
+
+  app.post("/bloc/:id/imagenes", { bodyLimit: IMAGEN_MAX_BYTES }, async (req) => {
+    if (!Buffer.isBuffer(req.body) || !req.body.length) throw new ErrorUsuario("Eso no es una imagen.");
+    return agregarImagen(Id.parse(req.params).id, req.body);
+  });
+
+  /** WebP; ?mini=1 la miniatura. No cambia nunca (cada imagen nueva tiene otro id): se guarda en la caché del navegador. */
+  app.get("/bloc/imagenes/:id", async (req, reply) => {
+    const mini = z.object({ mini: z.string().optional() }).parse(req.query).mini === "1";
+    const datos = await leerImagen(Id.parse(req.params).id, mini);
+    return reply.header("Cache-Control", "private, max-age=31536000, immutable").type("image/webp").send(datos);
+  });
+
+  app.delete("/bloc/imagenes/:id", async (req) => {
+    await borrarImagen(Id.parse(req.params).id);
+    return { ok: true };
   });
 };

@@ -21,6 +21,24 @@ export function descifrar(cifrado: string): string | null {
   }
 }
 
+/** Un archivo cifrado (ej. una imagen del Bloc): iv (12) + etiqueta (16) + datos. */
+export function cifrarArchivo(datos: Buffer): Buffer {
+  const iv = crypto.randomBytes(12);
+  const c = crypto.createCipheriv("aes-256-gcm", clave(), iv);
+  const cuerpo = Buffer.concat([c.update(datos), c.final()]);
+  return Buffer.concat([iv, c.getAuthTag(), cuerpo]);
+}
+
+export function descifrarArchivo(cifrado: Buffer): Buffer | null {
+  try {
+    const d = crypto.createDecipheriv("aes-256-gcm", clave(), cifrado.subarray(0, 12));
+    d.setAuthTag(cifrado.subarray(12, 28));
+    return Buffer.concat([d.update(cifrado.subarray(28)), d.final()]);
+  } catch {
+    return null;
+  }
+}
+
 /** Un objeto cifrado como JSON (una fila con varios datos privados). */
 export const sellar = (datos: object) => cifrar(JSON.stringify(datos));
 /** Lo cifrado con sellar; si no se puede descifrar (¿cambió el APP_SECRET?), "vacio". */
