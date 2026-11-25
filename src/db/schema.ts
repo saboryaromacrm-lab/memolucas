@@ -11,6 +11,7 @@ import {
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+import type { proto } from "baileys";
 
 const ts = (nombre: string) => timestamp(nombre, { withTimezone: true });
 const creadoEn = () => ts("creado_en").notNull().defaultNow();
@@ -96,6 +97,8 @@ export const configuracion = pgTable("configuracion", {
   tarjetasDiasAviso: integer("tarjetas_dias_aviso").notNull().default(2),
   /** Tope de gasto de IA por mes (US$): al llegar, el asistente deja de usarse y queda lo básico. */
   agenteTopeUsd: integer("agente_tope_usd").notNull().default(10),
+  /** La IA no anda por algo que no depende del mensaje (sin crédito, clave, Anthropic caído): desde cuándo y por qué. */
+  iaFalla: jsonb("ia_falla").$type<{ motivo: MotivoFallaIA; desde: string }>(),
 
   actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
 });
@@ -372,6 +375,8 @@ export const ocurrencia = pgTable(
 );
 
 export type Canal = "whatsapp" | "panel";
+/** Por qué no anda la IA cuando no depende del mensaje. */
+export type MotivoFallaIA = "sin_credito" | "clave" | "caido";
 
 export const mensaje = pgTable(
   "mensaje",
@@ -404,6 +409,21 @@ export const borradorPendiente = pgTable("borrador_pendiente", {
   datos: jsonb("datos").$type<Record<string, unknown>>().notNull(),
   chat: text("chat"),
   expiraEn: ts("expira_en").notNull(),
+  creadoEn: creadoEn(),
+});
+
+/**
+ * Mensajes de WhatsApp que llegaron mientras la IA no andaba: se hacen solos cuando vuelve (los de más de 24 h no).
+ * clave: la del mensaje original, para reaccionarle.
+ */
+export const iaPendiente = pgTable("ia_pendiente", {
+  id: serial("id").primaryKey(),
+  mensajeId: integer("mensaje_id")
+    .notNull()
+    .references(() => mensaje.id, { onDelete: "cascade" }),
+  clave: jsonb("clave").$type<proto.IMessageKey>().notNull(),
+  /** El aviso que citaba (para "posponelo una hora" respondiendo a un aviso). */
+  ocurrenciaId: integer("ocurrencia_id").references(() => ocurrencia.id, { onDelete: "set null" }),
   creadoEn: creadoEn(),
 });
 

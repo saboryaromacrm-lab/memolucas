@@ -4,7 +4,8 @@ import { z } from "zod";
 import { db } from "../../db/index.js";
 import { mensaje } from "../../db/schema.js";
 import { preguntarAlAgente, textoTope } from "../../bot/agente.js";
-import { ErrorIA } from "../../bot/ia.js";
+import { anotarFallaIA } from "../../bot/estado-ia.js";
+import { CAUSA_FALLA_IA, motivoFallaIA } from "../../bot/ia.js";
 import { ErrorAudio, transcribir } from "../../servicios/audio.js";
 import { obtenerConfig } from "../../servicios/configuracion.js";
 import { registrarMensaje } from "../../servicios/mensajes.js";
@@ -17,8 +18,10 @@ async function conversar(texto: string, tipo: "texto" | "audio") {
   try {
     r = await preguntarAlAgente(texto, "panel", entrante.id);
   } catch (err) {
-    if (err instanceof ErrorIA && /clave|API key/i.test(err.message)) throw new ErrorUsuario("Falta la clave de Claude: cargala en Configuración → IA.");
-    throw err;
+    const motivo = motivoFallaIA(err);
+    if (!motivo) throw err;
+    await anotarFallaIA(motivo);
+    throw new ErrorUsuario(CAUSA_FALLA_IA[motivo]);
   }
   const respuesta = "tope" in r ? textoTope(r.tope) : r.texto;
   await registrarMensaje({ direccion: "saliente", texto: respuesta, chat: null, canal: "panel", intencionDetectada: "tope" in r ? "agente_tope" : "agente" });

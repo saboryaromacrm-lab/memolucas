@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Download, KeyRound, PlugZap, RotateCcw, Save, Upload } from "lucide-react";
 import { Boton, Cargando, Deslizable, Encabezado, Interruptor, useAccion, useAviso } from "../componentes/ui";
 import { post, put } from "../lib/api";
+import { plata } from "../lib/numeros";
 import type { Configuracion as Cfg, Plantillas } from "../lib/tipos";
 import { useDatos } from "../lib/vivo";
 
@@ -481,7 +482,7 @@ function SeccionIA({
       <Tarjeta titulo="Gasto de este mes">
         {uso ? (
           <div className="grid grid-cols-2 gap-4 text-sm sm:grid-cols-4">
-            <Cifra titulo="Estimado" valor={`US$ ${uso.costoUsd.toFixed(3)}`} />
+            <Cifra titulo="Estimado" valor={plata(uso.costoUsd, "USD")} />
             <Cifra titulo="Consultas" valor={String(uso.llamadas)} />
             <Cifra titulo="Tokens de entrada" valor={uso.tokensEntrada.toLocaleString("es-AR")} />
             <Cifra titulo="Tokens de salida" valor={uso.tokensSalida.toLocaleString("es-AR")} />

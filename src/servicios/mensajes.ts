@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, lt } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { mensaje, type Canal } from "../db/schema.js";
 import { bus } from "../lib/eventos.js";
@@ -13,11 +13,12 @@ export async function registrarMensaje(m: NuevoMensaje) {
 }
 
 /** Los últimos mensajes de un chat (por defecto, el privado de WhatsApp), del más viejo al más nuevo. */
-export async function ultimosMensajes(n = 5, ambito: Ambito = null, canal: Canal = "whatsapp") {
+/** antesDe: los anteriores a ese mensaje (para retomar uno guardado mientras la IA no andaba). */
+export async function ultimosMensajes(n = 5, ambito: Ambito = null, canal: Canal = "whatsapp", antesDe?: number) {
   const filas = await db
     .select()
     .from(mensaje)
-    .where(and(filtroChat(mensaje.chat, ambito), eq(mensaje.canal, canal)))
+    .where(and(filtroChat(mensaje.chat, ambito), eq(mensaje.canal, canal), antesDe ? lt(mensaje.id, antesDe) : undefined))
     .orderBy(desc(mensaje.id))
     .limit(n);
   return filas.reverse();

@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { cambiarPin } from "./auth.js";
+import { revisarIA } from "../../bot/estado-ia.js";
 import { claveApi, ESFUERZOS, gastoDelMes, MODELOS, probarConexion } from "../../bot/ia.js";
 import { entorno } from "../../entorno.js";
 import { cifrar } from "../../lib/cifrado.js";
@@ -87,6 +88,8 @@ export const rutasConfiguracion: FastifyPluginAsync = async (app) => {
     if (clave && !/^[\x21-\x7e]+$/.test(clave))
       throw new ErrorUsuario("La clave tiene caracteres raros (como •): copiala de nuevo con el botón de copiar de la consola de Claude.");
     await actualizarConfig({ iaApiKeyCifrada: clave ? cifrar(clave) : null });
+    // Si la IA estaba caída por la clave, se prueba ya (y se hace lo que quedó guardado).
+    void revisarIA(true);
     return configPublica();
   });
 

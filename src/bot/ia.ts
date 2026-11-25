@@ -3,7 +3,7 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { gte, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db/index.js";
-import { usoIa, type Configuracion } from "../db/schema.js";
+import { usoIa, type Configuracion, type MotivoFallaIA } from "../db/schema.js";
 import { entorno } from "../entorno.js";
 import { descifrar } from "../lib/cifrado.js";
 import { ahora, nombreDia } from "../lib/fechas.js";
@@ -19,6 +19,28 @@ export const ESFUERZOS = ["low", "medium", "high"] as const;
 type Esfuerzo = (typeof ESFUERZOS)[number];
 
 export class ErrorIA extends Error {}
+
+/** Qué pasa y qué hacer, para el bot y el panel. */
+export const CAUSA_FALLA_IA: Record<MotivoFallaIA, string> = {
+  sin_credito: "Se terminó el crédito de la cuenta de Claude. Cargalo en console.anthropic.com → Settings → Billing.",
+  clave: "La clave de Claude falta o no funciona. Generá una en console.anthropic.com → API Keys y cargala en el panel (Configuración → IA).",
+  caido: "Claude no está respondiendo: es un problema de Anthropic, no tuyo, y suele arreglarse solo.",
+};
+
+/** Por qué falló la IA si no depende del mensaje: sin crédito, la clave o Anthropic caído. null para el resto. */
+export function motivoFallaIA(err: unknown): MotivoFallaIA | null {
+  for (let e = err; e instanceof Error; e = e.cause) {
+    if (e instanceof Anthropic.AuthenticationError || e instanceof Anthropic.PermissionDeniedError) return "clave";
+    if (e instanceof Anthropic.APIError && (e.status === 402 || /credit balance|billing/i.test(e.message))) return "sin_credito";
+    if (e instanceof Anthropic.RateLimitError || e instanceof Anthropic.InternalServerError || e instanceof Anthropic.APIConnectionError) return "caido";
+    if (e instanceof ErrorIA && /API key/.test(e.message)) return "clave";
+  }
+  return null;
+}
+
+/** Cada respuesta que llega avisa que la IA anda (estado-ia.ts lo usa para saber que volvió). */
+let alContestar = () => {};
+export const fijarAlContestar = (fn: () => void) => void (alContestar = fn);
 
 const clientes = new Map<string, Anthropic>();
 export function claveApi(cfg: Configuracion): string {
@@ -55,6 +77,7 @@ export async function registrarUso(modelo: string, u: Uso) {
   const entrada = u.input_tokens + escrita * 1.25 + leida * 0.1;
   const costo = (entrada * precio.entrada + u.output_tokens * precio.salida) / 1_000_000 + (u.server_tool_use?.web_search_requests ?? 0) * USD_POR_BUSQUEDA;
   await db.insert(usoIa).values({ modelo, tokensEntrada: u.input_tokens + escrita + leida, tokensSalida: u.output_tokens, costoUsd: costo.toFixed(6) });
+  alContestar();
 }
 
 export async function gastoDelMes() {
@@ -130,7 +153,7 @@ export async function pedir<T extends z.ZodType>(
         continue;
       }
       await registrar("error", "ia", `Falló la IA (${op.modelo ?? cfg.iaModelo}, ${Date.now() - inicio} ms): ${msg}`);
-      throw err instanceof ErrorIA ? err : new ErrorIA(msg);
+      throw err instanceof ErrorIA ? err : new ErrorIA(msg, { cause: err });
     }
   }
 }
@@ -469,7 +492,7 @@ No inventes fechas ni datos que no estén. Si hay fechas pasadas, no las propong
   return pedir(cfg, EsquemaEnlace, system, [{ role: "user", content }]);
 }
 
-export async function probarConexion(cfg: Configuracion): Promise<{ ok: boolean; mensaje: string; ms: number }> {
+export async function probarConexion(cfg: Configuracion): Promise<{ ok: boolean; mensaje: string; ms: number; motivo?: MotivoFallaIA }> {
   const inicio = Date.now();
   try {
     const r = await cliente(cfg).messages.create({
@@ -482,6 +505,7 @@ export async function probarConexion(cfg: Configuracion): Promise<{ ok: boolean;
     const texto = r.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("").trim();
     return { ok: true, mensaje: `Respondió "${texto.slice(0, 40)}" con ${cfg.iaModelo}`, ms: Date.now() - inicio };
   } catch (err) {
-    return { ok: false, mensaje: err instanceof Error ? err.message : String(err), ms: Date.now() - inicio };
+    const motivo = motivoFallaIA(err) ?? undefined;
+    return { ok: false, mensaje: motivo ? CAUSA_FALLA_IA[motivo] : err instanceof Error ? err.message : String(err), ms: Date.now() - inicio, motivo };
   }
 }

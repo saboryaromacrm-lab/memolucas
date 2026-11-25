@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router";
-import { AlarmClockOff, BellRing, Camera, CheckCircle2, Clock4, ListChecks, MessageCircle, Repeat, Sparkles, XCircle } from "lucide-react";
+import { AlarmClockOff, AlertTriangle, BellRing, Camera, CheckCircle2, Clock4, ListChecks, MessageCircle, Repeat, Sparkles, XCircle } from "lucide-react";
 import { useEditor } from "../componentes/Editor";
 import { Boton, Cargando, useAccion } from "../componentes/ui";
 import { post, put } from "../lib/api";
@@ -30,6 +30,8 @@ export function Inicio() {
 
       {datos.configInicialPendiente && <ConfigInicial />}
 
+      {datos.ia.falla && <AvisoIA falla={datos.ia.falla} />}
+
       {datos.silenciadoHasta && (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
           <span className="flex items-center gap-2">
@@ -48,7 +50,7 @@ export function Inicio() {
         <Contador
           icono={<Sparkles />}
           titulo="IA este mes"
-          valor={`US$ ${datos.ia.costoUsd.toFixed(2)}`}
+          valor={plata(datos.ia.costoUsd, "USD")}
           detalle={`${datos.ia.llamadas} consultas`}
         />
       </div>
@@ -175,6 +177,49 @@ function VencenPronto() {
         })}
       </ul>
     </section>
+  );
+}
+
+/** Dónde se arregla cada falla en la consola de Claude. */
+const CONSOLA_CLAUDE = { sin_credito: "https://console.anthropic.com/settings/billing", clave: "https://console.anthropic.com/settings/keys" };
+
+/** La IA no anda: la causa, qué hacer y cuántos mensajes de WhatsApp esperan. */
+function AvisoIA({ falla }: { falla: NonNullable<EstadoPanel["ia"]["falla"]> }) {
+  const accion = useAccion();
+  const [probando, setProbando] = useState(false);
+  const consola = falla.motivo === "caido" ? null : CONSOLA_CLAUDE[falla.motivo];
+  const probar = async () => {
+    setProbando(true);
+    await accion(async () => {
+      const r = await post<{ ok: boolean; mensaje: string }>("/api/configuracion/probar-ia");
+      if (!r.ok) throw new Error(`Sigue sin andar. ${r.mensaje}`);
+    }, "La IA volvió a andar");
+    setProbando(false);
+  };
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+      <div className="min-w-0 space-y-1">
+        <p className="flex items-center gap-2 font-medium">
+          <AlertTriangle className="size-4 shrink-0" /> La IA no anda desde {cuandoCorto(falla.desde).toLowerCase()}
+        </p>
+        <p>{falla.causa}</p>
+        <p className="text-red-700">
+          {falla.guardados
+            ? `${falla.guardados === 1 ? "Hay 1 mensaje" : `Hay ${falla.guardados} mensajes`} de WhatsApp esperando: se hacen solos cuando vuelva.`
+            : "Mientras tanto andan los comandos rápidos (hoy, lista, listo…)."}
+        </p>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {consola && (
+          <a href={consola} target="_blank" rel="noreferrer" className="inline-flex min-h-9 items-center rounded-lg border border-red-200 bg-white px-3 font-medium text-red-700 hover:bg-red-100">
+            Abrir la consola
+          </a>
+        )}
+        <Boton chico cargando={probando} onClick={probar}>
+          Probar ahora
+        </Boton>
+      </div>
+    </div>
   );
 }
 
