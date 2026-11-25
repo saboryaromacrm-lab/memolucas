@@ -215,7 +215,16 @@ export function useAccion() {
 export type AccionMenu = { texto: string; icono: ReactNode; onClick: () => void; peligro?: boolean };
 
 /** Las acciones de una fila detrás de un ⋮ (un solo botón grande para el dedo, y el nombre tiene lugar). */
-export function MenuAcciones({ acciones, etiqueta = "Acciones" }: { acciones: (AccionMenu | false | null | undefined)[]; etiqueta?: string }) {
+export function MenuAcciones({
+  acciones,
+  etiqueta = "Acciones",
+  abreHacia = "izquierda",
+}: {
+  acciones: (AccionMenu | false | null | undefined)[];
+  etiqueta?: string;
+  /** Para qué lado se despliega la lista (a la derecha cuando el botón está pegado al borde izquierdo). */
+  abreHacia?: "izquierda" | "derecha";
+}) {
   const [abierto, setAbierto] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -240,7 +249,7 @@ export function MenuAcciones({ acciones, etiqueta = "Acciones" }: { acciones: (A
         <MoreVertical className="size-5" />
       </button>
       {abierto && (
-        <div className="absolute right-0 top-10 z-20 w-52 overflow-hidden rounded-xl border border-slate-200 bg-white py-1 text-sm shadow-lg">
+        <div className={`absolute top-10 z-20 w-52 overflow-hidden rounded-xl border border-slate-200 bg-white py-1 text-sm shadow-lg ${abreHacia === "derecha" ? "left-0" : "right-0"}`}>
           {acciones.filter((a): a is AccionMenu => !!a).map((a) => (
             <button
               key={a.texto}

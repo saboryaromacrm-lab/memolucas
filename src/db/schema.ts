@@ -140,6 +140,38 @@ export const linkGuardado = pgTable("link_guardado", {
   actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
 });
 
+/**
+ * Bloc: pestañas de texto largo, como el Bloc de notas de la compu. Título y texto cifrados. version sube en cada
+ * guardado: si llega un guardado hecho sobre una versión vieja (otro dispositivo escribió antes), lo de antes va al
+ * historial y no se pierde nada. cerradaEn: en la papelera (30 días).
+ */
+export const blocPestana = pgTable("bloc_pestana", {
+  id: serial("id").primaryKey(),
+  tituloCifrado: text("titulo_cifrado").notNull(),
+  textoCifrado: text("texto_cifrado").notNull(),
+  orden: integer("orden").notNull().default(0),
+  version: integer("version").notNull().default(1),
+  cerradaEn: ts("cerrada_en"),
+  creadoEn: creadoEn(),
+  actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
+});
+
+/** Versiones anteriores de cada pestaña (las últimas 30), para recuperar lo que se borró sin querer. */
+export const blocVersion = pgTable(
+  "bloc_version",
+  {
+    id: serial("id").primaryKey(),
+    pestanaId: integer("pestana_id")
+      .notNull()
+      .references(() => blocPestana.id, { onDelete: "cascade" }),
+    textoCifrado: text("texto_cifrado").notNull(),
+    /** Por qué se guardó: un rato de escritura, otro dispositivo, antes de restaurar otra. */
+    motivo: text("motivo").$type<"guardado" | "otro_dispositivo" | "antes_de_restaurar">().notNull(),
+    creadoEn: creadoEn(),
+  },
+  (t) => [index("bloc_version_pestana_idx").on(t.pestanaId, t.creadoEn)],
+);
+
 /** Notas de las calculadoras (ej. la de Bavosi), una por clave, cifradas. */
 export const notaCalculadora = pgTable("nota_calculadora", {
   clave: text("clave").primaryKey(),

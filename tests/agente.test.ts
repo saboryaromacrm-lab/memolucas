@@ -81,6 +81,8 @@ describe("asistente", () => {
       "ver_tarjetas",
       "cargar_compra_tarjeta",
       "marcar_pago_tarjeta",
+      "ver_bloc",
+      "agregar_al_bloc",
       "ver_links",
       "guardar_link",
       "wa_chats",

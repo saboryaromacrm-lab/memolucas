@@ -14,6 +14,7 @@ import { Inicio } from "./paginas/Inicio";
 import { Login } from "./paginas/Login";
 import { Logs } from "./paginas/Logs";
 import { Notas } from "./paginas/Notas";
+import { Bloc } from "./paginas/Bloc";
 import { Recordatorios } from "./paginas/Recordatorios";
 import { Suscripciones } from "./paginas/Suscripciones";
 import { Tarjetas } from "./paginas/Tarjetas";
@@ -53,6 +54,7 @@ export function App() {
                 <Route path="/recordatorios" element={<Recordatorios />} />
                 <Route path="/calendario" element={<Calendario />} />
                 <Route path="/notas" element={<Notas />} />
+                <Route path="/bloc" element={<Bloc />} />
                 <Route path="/calculadoras" element={<Calculadoras />} />
                 <Route path="/suscripciones" element={<Suscripciones />} />
                 <Route path="/tarjetas" element={<Tarjetas />} />
