@@ -1,7 +1,7 @@
 {
   "name": "Memolucas",
   "short_name": "Memolucas",
-  "description": "Recordatorios personales por WhatsApp",
+  "description": "Recordatorios por WhatsApp, notas y tu Bloc",
   "lang": "es",
   "start_url": "/",
   "scope": "/",
@@ -9,9 +9,52 @@
   "background_color": "#f8fafc",
   "theme_color": "#ffffff",
   "icons": [
-    { "src": "/icono-192.png", "sizes": "192x192", "type": "image/png" },
-    { "src": "/icono-512.png", "sizes": "512x512", "type": "image/png" },
-    { "src": "/icono-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
-    { "src": "/icono.svg", "sizes": "any", "type": "image/svg+xml" }
+    {
+      "src": "/icono-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icono-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/icono-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icono.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Bloc",
+      "short_name": "Bloc",
+      "description": "Abrir el Bloc",
+      "url": "/bloc",
+      "icons": [
+        {
+          "src": "/icono-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "Notas",
+      "url": "/notas",
+      "icons": [
+        {
+          "src": "/icono-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    }
   ]
 }

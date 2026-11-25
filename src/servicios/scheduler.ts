@@ -13,6 +13,7 @@ import { revisarResumenDiario } from "./resumen.js";
 import { avisarSuscripciones } from "./suscripciones.js";
 import { avisarCierres, avisarTarjetas } from "./tarjetas.js";
 import { actualizarYtDlp } from "./videos.js";
+import { purgarBloc } from "./bloc.js";
 import { enviarProgramadosWa, purgarWa } from "./wa-personal.js";
 import { personal } from "../whatsapp/personal.js";
 
@@ -54,12 +55,13 @@ export async function barrer(): Promise<void> {
 
 /**
  * Mantenimiento una vez por hora: recorta logs, borra los archivos sueltos, los mensajes de tu WhatsApp de más de
- * 7 días, actualiza yt-dlp (una vez por día) y, si está activado, borra las fotos viejas.
+ * 7 días y lo que lleva 30 días en la papelera del Bloc, actualiza yt-dlp (una vez por día) y, si está activado, borra las fotos viejas.
  */
 async function mantenimiento() {
   await recortarLogs(500);
   await borrarArchivosSueltos();
   await purgarWa();
+  await purgarBloc();
   await actualizarYtDlp();
   const cfg = await obtenerConfig();
   if (!cfg.limpiezaFotosActiva) return;
