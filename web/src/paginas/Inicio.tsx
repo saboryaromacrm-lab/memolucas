@@ -1,11 +1,11 @@
 import { useState } from "react";
 import { Link } from "react-router";
-import { AlarmClockOff, AlertTriangle, BellRing, Camera, CheckCircle2, Clock4, ListChecks, MessageCircle, Repeat, Sparkles, XCircle } from "lucide-react";
+import { AlarmClockOff, AlertTriangle, BatteryLow, BellRing, Camera, CheckCircle2, Clock4, ListChecks, MessageCircle, Repeat, Sparkles, XCircle } from "lucide-react";
 import { useEditor } from "../componentes/Editor";
 import { Boton, Cargando, useAccion } from "../componentes/ui";
 import { post, put } from "../lib/api";
 import { ahora, cuandoCorto, hora, haceCuanto } from "../lib/fechas";
-import { plata } from "../lib/numeros";
+import { aNumero, plata } from "../lib/numeros";
 import { useSuscripciones } from "../lib/suscripciones";
 import { colorVencimiento, diasParaVencer, textoDias } from "../lib/vencimientos";
 import type { EstadoPanel, Evento } from "../lib/tipos";
@@ -62,6 +62,7 @@ export function Inicio() {
         </div>
         <div className="space-y-6">
           <TarjetaWhatsapp estado={datos.whatsapp} />
+          <TarjetaCredito credito={datos.ia.credito} />
           <VencenPronto />
           <section className="tarjeta">
             <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
@@ -182,6 +183,83 @@ function VencenPronto() {
 
 /** Dónde se arregla cada falla en la consola de Claude. */
 const CONSOLA_CLAUDE = { sin_credito: "https://console.anthropic.com/settings/billing", clave: "https://console.anthropic.com/settings/keys" };
+
+/** Con menos de esto, la tarjeta del crédito se marca (y el bot avisa por WhatsApp). */
+const DIAS_POCO_CREDITO = 7;
+const alcanzaPara = (dias: number) => {
+  const n = Math.floor(dias);
+  return n < 1 ? "menos de 1 día" : n === 1 ? "1 día" : `${n} días`;
+};
+
+/** Crédito de la cuenta de Claude: Anthropic no deja consultarlo, así que se carga acá y el bot descuenta lo que gasta. */
+function TarjetaCredito({ credito }: { credito: EstadoPanel["ia"]["credito"] }) {
+  const accion = useAccion();
+  const [editando, setEditando] = useState(false);
+  const [valor, setValor] = useState("");
+  const poco = credito !== null && credito.dias !== null && credito.dias < DIAS_POCO_CREDITO;
+  const monto = aNumero(valor);
+  const guardar = async () => {
+    if (monto === null || monto < 0) return;
+    if (await accion(() => put("/api/configuracion/saldo-ia", { saldoUsd: monto }), "Saldo guardado")) {
+      setEditando(false);
+      setValor("");
+    }
+  };
+  return (
+    <section className={`tarjeta p-4 ${poco ? "border-amber-200" : ""}`}>
+      <div className="flex items-start gap-3">
+        <span className={`flex size-10 shrink-0 items-center justify-center rounded-full ${poco ? "bg-amber-50 text-amber-600" : "bg-marca-suave text-marca-oscuro"}`}>
+          <BatteryLow className="size-5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-semibold text-slate-800">Crédito de Claude</div>
+          {credito ? (
+            <>
+              <div className={`text-xl font-semibold tracking-tight ${poco ? "text-amber-700" : "text-slate-900"}`}>
+                {plata(credito.saldoUsd, "USD")} <span className="text-xs font-normal text-slate-400">aprox.</span>
+              </div>
+              <div className="text-xs text-slate-500">
+                {credito.dias === null ? "Sin gasto en los últimos días" : `Te alcanza para ${alcanzaPara(credito.dias)} · ${plata(credito.porDiaUsd, "USD")} por día`}
+              </div>
+            </>
+          ) : (
+            <div className="text-xs text-slate-500">Anthropic no deja consultarlo: cargá el saldo que ves en la consola y te aviso por WhatsApp antes de que se termine.</div>
+          )}
+        </div>
+      </div>
+      {editando || !credito ? (
+        <form
+          className="mt-3 flex flex-wrap gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void guardar();
+          }}
+        >
+          <input className="campo min-w-0 flex-1" inputMode="decimal" placeholder="Saldo en US$ (ej. 4,50)" value={valor} onChange={(e) => setValor(e.target.value)} autoFocus={editando} />
+          <Boton chico variante="primario" type="submit" disabled={monto === null}>
+            Guardar
+          </Boton>
+          {credito && (
+            <Boton chico onClick={() => setEditando(false)}>
+              Cancelar
+            </Boton>
+          )}
+        </form>
+      ) : (
+        <Boton chico className="mt-3" onClick={() => setEditando(true)}>
+          Actualizar saldo
+        </Boton>
+      )}
+      <p className="mt-3 text-xs text-slate-500">
+        Cuando cargues, decile al bot «cargué 10 dólares» o actualizalo acá. Para no quedarte nunca sin crédito, activá la recarga automática en la consola:
+        Settings → Billing → <b>Auto reload</b>.{" "}
+        <a href={CONSOLA_CLAUDE.sin_credito} target="_blank" rel="noreferrer" className="font-medium text-marca-oscuro underline">
+          Abrir la consola
+        </a>
+      </p>
+    </section>
+  );
+}
 
 /** La IA no anda: la causa, qué hacer y cuántos mensajes de WhatsApp esperan. */
 function AvisoIA({ falla }: { falla: NonNullable<EstadoPanel["ia"]["falla"]> }) {

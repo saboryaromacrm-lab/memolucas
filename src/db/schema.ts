@@ -99,6 +99,13 @@ export const configuracion = pgTable("configuracion", {
   agenteTopeUsd: integer("agente_tope_usd").notNull().default(10),
   /** La IA no anda por algo que no depende del mensaje (sin crédito, clave, Anthropic caído): desde cuándo y por qué. */
   iaFalla: jsonb("ia_falla").$type<{ motivo: MotivoFallaIA; desde: string }>(),
+  /**
+   * Crédito de la cuenta de Claude que dijo el usuario (Anthropic no deja consultarlo) y desde cuándo: el saldo es esto
+   * menos lo gastado desde entonces. avisado: el último aviso de que se acaba ("7" o "2" días), para no repetirlo.
+   */
+  iaSaldoUsd: numeric("ia_saldo_usd", { precision: 12, scale: 6, mode: "number" }),
+  iaSaldoDesde: ts("ia_saldo_desde"),
+  iaSaldoAvisado: text("ia_saldo_avisado").$type<"7" | "2">(),
 
   actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
 });

@@ -38,7 +38,7 @@ async function arrancar() {
   const procesador = new Procesador(whatsapp);
   whatsapp.onMensaje((msg, r) => procesador.procesar(msg, { grupo: r.grupo, autor: r.autor }));
   // Lo que llegó mientras la IA no andaba (sin crédito, la clave, Anthropic caído) se hace cuando vuelve.
-  alVolverLaIA(() => procesador.reanudarPendientes());
+  alVolverLaIA((motivo) => procesador.reanudarPendientes(motivo));
   // Al reconectar, se da unos segundos a WhatsApp para sincronizar y se manda lo pendiente.
   whatsapp.onConectado(() => setTimeout(() => void barrer(), 5000));
   whatsapp.iniciar().catch((err) => void registrar("error", "whatsapp", "No se pudo iniciar WhatsApp", err));

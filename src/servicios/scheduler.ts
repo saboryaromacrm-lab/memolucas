@@ -15,6 +15,7 @@ import { avisarCierres, avisarTarjetas } from "./tarjetas.js";
 import { actualizarYtDlp } from "./videos.js";
 import { purgarBloc } from "./bloc.js";
 import { revisarIA } from "../bot/estado-ia.js";
+import { revisarCreditoIA } from "./credito-ia.js";
 import { enviarProgramadosWa, purgarWa } from "./wa-personal.js";
 import { personal } from "../whatsapp/personal.js";
 
@@ -33,7 +34,7 @@ async function agendar(ocurrenciaId: number, cuando: Date) {
 
 let barriendo = false;
 
-/** Revisa todo lo que venció (incluye lo atrasado mientras la app o WhatsApp estaban caídos) y si volvió la IA. */
+/** Revisa todo lo que venció (incluye lo atrasado mientras la app o WhatsApp estaban caídos) si volvió la IA y si queda poco crédito de Claude. */
 export async function barrer(): Promise<void> {
   if (barriendo) return;
   barriendo = true;
@@ -46,6 +47,7 @@ export async function barrer(): Promise<void> {
     await avisarCierres();
     await enviarProgramadosWa(personal);
     await revisarIA();
+    await revisarCreditoIA();
     await db.delete(borradorPendiente).where(lt(borradorPendiente.expiraEn, new Date()));
     ultimoBarrido = new Date();
   } catch (err) {

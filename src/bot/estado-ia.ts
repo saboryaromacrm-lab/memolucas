@@ -1,6 +1,7 @@
 import type { MotivoFallaIA } from "../db/schema.js";
 import { registrar } from "../lib/log.js";
 import { actualizarConfig, obtenerConfig } from "../servicios/configuracion.js";
+import { fijarSaldoIA } from "../servicios/credito-ia.js";
 import { CAUSA_FALLA_IA, fijarAlContestar, probarConexion } from "./ia.js";
 
 // Cuando la IA no anda por algo que no depende del mensaje (sin crédito, la clave o Anthropic caído), el bot avisa una
@@ -17,22 +18,24 @@ export async function anotarFallaIA(motivo: MotivoFallaIA): Promise<boolean> {
   const cfg = await obtenerConfig();
   if (cfg.iaFalla?.motivo === motivo) return false;
   await actualizarConfig({ iaFalla: { motivo, desde: cfg.iaFalla?.desde ?? new Date().toISOString() } });
+  if (motivo === "sin_credito") await fijarSaldoIA(0);
   await registrar("error", "ia", `La IA dejó de andar: ${CAUSA_FALLA_IA[motivo]}`);
   return true;
 }
 
-let alVolver: () => Promise<void> = async () => {};
+let alVolver: (motivoAnterior: MotivoFallaIA) => Promise<void> = async () => {};
 /** Lo que se hace cuando la IA vuelve: los mensajes guardados (lo fija index.ts con el procesador). */
-export const alVolverLaIA = (fn: () => Promise<void>) => void (alVolver = fn);
+export const alVolverLaIA = (fn: (motivoAnterior: MotivoFallaIA) => Promise<void>) => void (alVolver = fn);
 
 let volviendo: Promise<void> | null = null;
 /** La IA contestó: si estaba anotada como caída, se levanta la falla y se hace lo guardado. */
 function iaAnda(): Promise<void> {
   volviendo ??= (async () => {
-    if (!(await obtenerConfig()).iaFalla) return;
+    const falla = (await obtenerConfig()).iaFalla;
+    if (!falla) return;
     await actualizarConfig({ iaFalla: null });
     await registrar("info", "ia", "La IA volvió a andar");
-    await alVolver();
+    await alVolver(falla.motivo);
   })().finally(() => (volviendo = null));
   return volviendo;
 }

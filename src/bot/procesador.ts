@@ -703,24 +703,27 @@ export class Procesador {
   }
 
   private reanudando: Promise<void> | null = null;
-  /** La IA volvió: hace en orden lo que llegó mientras no andaba y avisa lo que quedó viejo. */
-  reanudarPendientes(): Promise<void> {
-    this.reanudando ??= this.reanudarAqui().finally(() => (this.reanudando = null));
+  /**
+   * La IA volvió: hace en orden lo que llegó mientras no andaba y avisa lo que quedó viejo. Si se había terminado el
+   * crédito, pregunta cuánto cargó (para el saldo y los avisos de que se acaba).
+   */
+  reanudarPendientes(motivoAnterior?: MotivoFallaIA): Promise<void> {
+    this.reanudando ??= this.reanudarAqui(motivoAnterior === "sin_credito").finally(() => (this.reanudando = null));
     return this.reanudando;
   }
 
-  private async reanudarAqui() {
+  private async reanudarAqui(preguntarCarga: boolean) {
     const filas = await db
       .select({ p: iaPendiente, m: mensaje })
       .from(iaPendiente)
       .innerJoin(mensaje, eq(mensaje.id, iaPendiente.mensajeId))
       .orderBy(asc(iaPendiente.id));
-    if (!filas.length) return;
+    if (!filas.length && !preguntarCarga) return;
     const limite = Date.now() - HORAS_PENDIENTE_IA * 3_600_000;
     const viejas = filas.filter((f) => f.p.creadoEn.getTime() < limite);
     const vigentes = filas.filter((f) => f.p.creadoEn.getTime() >= limite);
     const enPrivado = (msg: WAMessage, fn: () => Promise<void>) => contexto.run({ grupo: null, autor: null, msg, compras: false }, fn);
-    await enPrivado({ key: filas[0].p.clave }, async () => {
+    await enPrivado({ key: filas[0]?.p.clave ?? {} }, async () => {
       if (vigentes.length)
         await this.decir(
           `✅ Volví a andar. Ahora hago ${vigentes.length === 1 ? "lo que me mandaste" : `las ${vigentes.length} cosas que me mandaste`} mientras no podía:`,
@@ -748,14 +751,21 @@ export class Procesador {
         }
         await db.delete(iaPendiente).where(eq(iaPendiente.id, f.p.id));
       }
-      if (!viejas.length) return;
-      const corto = (t: string) => (t.length > 80 ? `${t.slice(0, 79)}…` : t);
-      const lista = viejas.map((f) => `• «${corto(f.m.texto ?? "")}» (${aLocal(f.p.creadoEn).toFormat("ccc dd/MM HH:mm", { locale: "es" })})`);
-      await this.decir(
-        `${vigentes.length ? "" : "✅ Volví a andar. "}Estos no los hice porque pasaron más de ${HORAS_PENDIENTE_IA} horas:\n${lista.join("\n")}\nSi todavía los necesitás, mandámelos de nuevo.`,
-        { intencion: "ia_volvio" },
-      );
-      await db.delete(iaPendiente).where(inArray(iaPendiente.id, viejas.map((f) => f.p.id)));
+      if (viejas.length) {
+        const corto = (t: string) => (t.length > 80 ? `${t.slice(0, 79)}…` : t);
+        const lista = viejas.map((f) => `• «${corto(f.m.texto ?? "")}» (${aLocal(f.p.creadoEn).toFormat("ccc dd/MM HH:mm", { locale: "es" })})`);
+        await this.decir(
+          `${vigentes.length ? "" : "✅ Volví a andar. "}Estos no los hice porque pasaron más de ${HORAS_PENDIENTE_IA} horas:\n${lista.join("\n")}\nSi todavía los necesitás, mandámelos de nuevo.`,
+          { intencion: "ia_volvio" },
+        );
+        await db.delete(iaPendiente).where(inArray(iaPendiente.id, viejas.map((f) => f.p.id)));
+      }
+      // Como pregunta del asistente: la respuesta ("10 dólares") la anota él (herramienta credito_claude).
+      if (preguntarCarga)
+        await this.decir(
+          "💳 Volvió el crédito de Claude. Para avisarte antes de que se vuelva a terminar, decime cuánto cargaste (por ejemplo «cargué 10 dólares»). ¿Cuánto fue?",
+          { intencion: "agente" },
+        );
     });
   }
 

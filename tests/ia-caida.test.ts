@@ -62,7 +62,7 @@ describe("cuando la IA no anda", () => {
     descargarMedia: async () => Buffer.alloc(0),
     reaccionar: async (m: WAMessage, emoji: string) => void reacciones.push({ id: m.key.id!, emoji }),
   });
-  alVolverLaIA(() => bot.reanudarPendientes());
+  alVolverLaIA((motivo) => bot.reanudarPendientes(motivo));
 
   beforeEach(async () => {
     await baseLimpia();
@@ -121,6 +121,8 @@ describe("cuando la IA no anda", () => {
     expect(reacciones).toContainEqual({ id: segundo.key.id!, emoji: "" }); // Se sacó el ⏳.
     expect(await db.select().from(iaPendiente)).toHaveLength(0);
     expect((await obtenerConfig()).iaFalla).toBeNull();
+    // Volvió porque cargó crédito: pregunta cuánto, como pregunta del asistente (la respuesta la anota él).
+    expect(respuestas.at(-1)).toContain("decime cuánto cargaste (por ejemplo «cargué 10 dólares»). ¿Cuánto fue?");
   });
 
   it("si vuelve con un mensaje nuevo, primero hace lo guardado", async () => {
@@ -133,7 +135,8 @@ describe("cuando la IA no anda", () => {
     await bot.procesar(texto("mañana a las 18 comprar pan"));
     expect(respuestas[1]).toBe("✅ Volví a andar. Ahora hago lo que me mandaste mientras no podía:");
     expect(respuestas[2]).toContain("*Pagar la luz*");
-    expect(respuestas[3]).toContain("*Comprar pan*");
+    expect(respuestas[3]).toContain("¿Cuánto fue?");
+    expect(respuestas[4]).toContain("*Comprar pan*");
   });
 
   it("lo de más de 24 horas no lo hace: lo lista para que lo reenvíe", async () => {
@@ -142,7 +145,7 @@ describe("cuando la IA no anda", () => {
     reloj(local("2026-11-26T14:00"));
     probarConexion.mockResolvedValue({ ok: true, mensaje: "OK", ms: 5 });
     await revisarIA(true);
-    expect(respuestas.at(-1)).toBe(
+    expect(respuestas.at(-2)).toBe(
       "✅ Volví a andar. Estos no los hice porque pasaron más de 24 horas:\n• «recordame regar las plantas» (mié 25/11 13:29)\nSi todavía los necesitás, mandámelos de nuevo.",
     );
     expect(interpretar).toHaveBeenCalledTimes(1);

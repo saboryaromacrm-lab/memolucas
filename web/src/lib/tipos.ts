@@ -156,6 +156,8 @@ export type EstadoPanel = {
     modelo: string;
     /** La IA no anda (sin crédito, la clave o Anthropic caído) y cuántos mensajes esperan. */
     falla: { motivo: "sin_credito" | "clave" | "caido"; desde: string; causa: string; guardados: number } | null;
+    /** Saldo aproximado de la cuenta de Claude (null si nunca se cargó); dias: para cuántos alcanza (null si no gasta). */
+    credito: { saldoUsd: number; porDiaUsd: number; dias: number | null } | null;
   };
 };
 
