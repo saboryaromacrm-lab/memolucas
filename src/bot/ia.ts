@@ -326,7 +326,7 @@ Reglas:
   - "¿cuál era la clave del wifi?", "¿qué anoté del auto?" → nota_consultar con consulta.
   - "cambiá la nota del wifi: ahora es Y" → nota_editar con nota_ids y nota (contenido nuevo completo). "borrá la nota del wifi" → nota_borrar con nota_ids.
   - Si hay una foto pendiente y dice "guardala como nota" → nota_guardar (la foto se adjunta).
-- consulta: preguntas o pedidos sobre sus suscripciones, tarjetas de crédito, cuotas, gastos o links guardados (también anotar una compra con tarjeta: "gasté 30 mil en el súper con la Visa", o cuánto pagó del resumen); el crédito de Claude, la IA de este bot ("cargué 10 dólares"); cuentas y porcentajes; información general o de actualidad (dólar, clima, noticias, "¿qué es…?"); y pedidos de varios pasos o que no encajan en las otras intenciones. Lo resuelve otro asistente: dejá "respuesta" vacía.
+- consulta: preguntas o pedidos sobre sus suscripciones, tarjetas de crédito, cuotas, gastos o links guardados (también anotar una compra con tarjeta: "gasté 30 mil en el súper con la Visa", o cuánto pagó del resumen); el crédito de Claude, la IA de este bot ("cargué 10 dólares"); sus pagos del mes de los locales, la casa y sus cosas ("pagué la luz del Express 1", "me llegó la boleta del gas", "¿qué me falta pagar?", "¿cuánto pagué de alquiler este año?"); cuentas y porcentajes; información general o de actualidad (dólar, clima, noticias, "¿qué es…?"); y pedidos de varios pasos o que no encajan en las otras intenciones. Lo resuelve otro asistente: dejá "respuesta" vacía.
 - Para charla ("gracias", "jaja", "buen día") contestá corto y natural en "respuesta" (ej. "¡De nada! 🙌"). Para ayuda o si no entendés, en "respuesta" decí qué entendiste y qué podés hacer, en una o dos líneas.
 - confianza entre 0 y 1.
 
@@ -375,8 +375,8 @@ function unirTurnos(ms: Anthropic.MessageParam[]): Anthropic.MessageParam[] {
 
 export const EsquemaFoto = z.object({
   tipo: z
-    .enum(["factura", "turno", "entrada", "invitacion", "receta", "otro"])
-    .describe('"factura": servicio o cuenta a pagar con vencimiento (luz, gas, tarjeta)'),
+    .enum(["factura", "comprobante", "turno", "entrada", "invitacion", "receta", "otro"])
+    .describe('"factura": boleta o cuenta a pagar con vencimiento (luz, gas, tarjeta). "comprobante": un pago ya hecho (transferencia, ticket, recibo)'),
   descripcion: z.string().describe("Qué es, en una frase"),
   util: z.boolean().describe("true si tiene datos para armar un recordatorio"),
   titulo: z.string().nullable(),
@@ -387,10 +387,13 @@ export const EsquemaFoto = z.object({
   propuesta_avisos_previos_min: z.array(z.number()),
   mensaje: z.string().describe("Mensaje para el usuario proponiendo el recordatorio o preguntando qué hacer"),
   texto_visible: z.string().nullable().describe("Todo el texto legible de la imagen, tal cual"),
+  monto_numero: z.number().describe("El monto en números (0 si no hay)"),
+  pago_id: z.number().int().describe("Si es la boleta o el comprobante de uno de sus pagos de la lista: su id. Si no, 0"),
 });
 export type AnalisisFoto = z.infer<typeof EsquemaFoto>;
 
-export async function analizarFoto(cfg: Configuracion, imagen: Buffer, mime: string, epigrafe: string | null): Promise<AnalisisFoto> {
+/** pagos: lo que falta pagar del mes (Pagos), para reconocer una boleta o un comprobante. */
+export async function analizarFoto(cfg: Configuracion, imagen: Buffer, mime: string, epigrafe: string | null, pagos = ""): Promise<AnalisisFoto> {
   const t = ahora();
   const system = `Sos el asistente de recordatorios de ${cfg.nombreUsuario} por WhatsApp. Hablás en español rioplatense, breve.
 La fecha y hora actual es ${nombreDia(t.weekday)} ${t.toFormat("dd/MM/yyyy HH:mm")} (offset ${t.toFormat("ZZ")}). Hora por defecto: ${cfg.horaDefecto}.
@@ -401,7 +404,11 @@ Proponé cuándo avisar:
 - Si el texto al pie indica cuándo avisar, respetalo.
 En "mensaje" escribí la propuesta, ej.: "Veo una factura de luz que vence el 30/10 por $25.400. ¿Te lo recuerdo el 29/10 a las 10:00?".
 Si la foto no tiene datos útiles, util=false y en "mensaje" preguntá qué querés que haga con ella.
-No inventes datos que no se vean.`;
+No inventes datos que no se vean.${
+    pagos
+      ? `\nSus pagos del mes que faltan pagar (id | pago · lugar | cuenta | monto | vence):\n${pagos}\nSi la foto es la boleta o el comprobante de pago de uno de ellos (por la empresa, el número de cliente, el concepto o el monto), poné su id en pago_id.`
+      : ""
+  }`;
   const content: Anthropic.ContentBlockParam[] = [
     { type: "image", source: { type: "base64", media_type: mime as "image/jpeg", data: imagen.toString("base64") } },
     { type: "text", text: epigrafe ? `Texto al pie: ${epigrafe}` : "Sin texto al pie." },

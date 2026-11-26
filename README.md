@@ -30,6 +30,16 @@ Le escribís al bot como a una persona (*"recordame mañana a las 10 pagar la lu
 **Panel web** (claro, se adapta al celular, instalable como app)
 - **Inicio**: estado de WhatsApp en vivo, lo de hoy y mañana, pendientes sin confirmar, contadores y gasto de IA del mes.
 - **Recordatorios**: búsqueda, filtros (activos, pausados, cumplidos, no confirmados, recurrentes, con foto) y acciones (editar, pausar, reanudar, duplicar, marcar hecho, enviar ahora, borrar).
+- **Pagos**: todo lo que pagás mes a mes en tus locales, tu casa y tus cosas.
+  - *Configuración*: los lugares (negocio o personal) y lo que pagás siempre en cada uno (monto fijo o variable, día, cada cuánto,
+    cómo lo pagás, número de cliente, aviso). *Cargá con IA*: lo dictás como te sale y la IA arma la lista para revisar.
+  - *Este mes*: se arma solo con los fijos que tocan, las **suscripciones** que vencen y el **resumen de cada tarjeta** (sin
+    cargarlos dos veces). Vencido / por pagar / pagado; *Pagado* de un toque, en partes, con comprobante (foto o PDF, cifrado),
+    el monto de la boleta o *No se paga este mes*. Alertas (lo vencido, subas raras, contra el mes anterior) y el análisis de la IA.
+  - *Resumen*: los últimos 12 meses, por lugar, por categoría y negocio / personal, y el **CSV para el contador**.
+  - Por WhatsApp: *"pagué la luz del Express 1"*, *"¿qué me falta pagar?"*, la **foto del comprobante** (pregunta si es ese pago
+    y lo marca con la foto) o la **foto de la boleta** (anota el monto y el vencimiento). Avisa 3 días antes y el día que vence
+    (configurable), el día 1 manda cómo cerró el mes (con IA) y lo que viene, y a mitad de mes lo que falta.
 - **Calendario**: vistas de mes, semana y día; arrastrás para cambiar la fecha y tocás un hueco para crear.
 - **Editor**:
   - repetición visual (diaria, semanal con días, mensual, cada N días, anual o RRULE);

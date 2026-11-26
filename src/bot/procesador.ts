@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import fs from "node:fs/promises";
 import type { WAMessage } from "baileys";
 import { and, asc, desc, eq, gt, inArray } from "drizzle-orm";
 import { DateTime } from "luxon";
@@ -44,7 +45,9 @@ import {
 } from "../servicios/recordatorios.js";
 import { EMOJIS_CONFIRMACION, TEXTO_AYUDA, detectarComando, esAfirmativo, esNegativo, pedidoDeLinks, respuestaASuscripcion, type PedidoDeLinks } from "./comandos.js";
 import { extraerUrls, leerEnlace, textoSinUrls, type VistaPreviaWa } from "../servicios/enlaces.js";
-import { analizarEnlace, analizarFoto, interpretar, motivoFallaIA, responderConNotas, type Interpretacion } from "./ia.js";
+import { analizarEnlace, analizarFoto, interpretar, motivoFallaIA, responderConNotas, type AnalisisFoto, type Interpretacion } from "./ia.js";
+import { actualizarPagoDelMes, buscarPendientes, guardarComprobante, pagosPendientes, registrarPago, type ItemPago } from "../servicios/pagos.js";
+import { cuandoVence, diaDe } from "../servicios/vencimientos.js";
 import { anotarFallaIA, revisarIA, textoFallaIA } from "./estado-ia.js";
 import { ErrorAudio, transcribir } from "../servicios/audio.js";
 import { actualizarNota, borrarNota, crearNota, obtenerNota, relacionadas, todasLasNotas } from "../servicios/notas.js";
@@ -54,7 +57,7 @@ import { resumirVideo } from "./resumir-video.js";
 import { ErrorVideo, esLinkDeVideo, leerVideo, MAX_SEGUNDOS_VIDEO, textoErrorVideo, type FuenteVideo } from "../servicios/videos.js";
 import { buscarLinks, crearLink, listarLinks, urlValida, type Link } from "../servicios/links.js";
 import { recordarSuscripcionManana, renovarDesdeAviso } from "../servicios/suscripciones.js";
-import { normalizar } from "../lib/textos.js";
+import { normalizar, plata } from "../lib/textos.js";
 import { encuestaPorWaId, marcarRespondida, opcionElegida, OPCIONES_PROPUESTA, registrarEncuesta } from "../servicios/encuestas.js";
 import { cuandoBonito, textoPrevios } from "./formato.js";
 import { frases, sinFormato } from "./frases.js";
@@ -133,7 +136,12 @@ type DatosBorrador = {
   guardar?: { links: { concepto: string; url: string }[]; nota: { titulo: string; contenido: string; categoria: string } | null };
   /** Todo lo que se dice en el video resumido (se manda si piden "texto completo"). */
   transcripcion?: string | null;
+  /** Foto de un comprobante: de qué pago es (null: se preguntó cuál), cuánto y cuándo. */
+  pago?: { registroId: number | null; monto: number; fecha: string | null };
 };
+
+/** "¿Es el ABL de Casa?" después de la foto de un comprobante. */
+const OPCIONES_PAGO = ["✅ Sí, es ese", "❌ No, es otro"];
 
 /** El link normalizado, o null si no es un link web. */
 function urlSegura(url: string): string | null {
@@ -163,6 +171,15 @@ async function guardarBorrador(datos: DatosBorrador): Promise<number> {
   const ms = enGrupo() ? MINUTOS_BORRADOR_GRUPO * 60_000 : HORAS_BORRADOR * 3_600_000;
   const [b] = await db.insert(borradorPendiente).values({ tipo: "foto", datos, chat: chat(), expiraEn: new Date(Date.now() + ms) }).returning();
   return b.id;
+}
+
+/** Lo que falta pagar del mes, para que la IA reconozca una boleta o un comprobante en una foto. */
+async function textoPagosPendientes(): Promise<string> {
+  const pendientes = await pagosPendientes().catch(() => [] as ItemPago[]);
+  return pendientes
+    .slice(0, 60)
+    .map((i) => `${i.id} | ${i.nombre} · ${i.lugar} | ${i.cuenta || "-"} | ${plata(i.falta || i.monto, i.moneda)} | ${i.vence}`)
+    .join("\n");
 }
 
 // ───────────── Helpers de texto ─────────────
@@ -416,6 +433,13 @@ export class Procesador {
       }
       case "suscripcion":
         return this.contestarSuscripcion(a.suscripcionId, elegida === 0 ? "renovar" : "recordar");
+      case "pago": {
+        const b = await borradorActivo(a.borradorId);
+        if (!b?.datos.pago) return this.decir(frases.yaCerrado());
+        if (elegida === 0 && b.datos.pago.registroId) return this.pagoDeFoto(b.id, b.datos, b.datos.pago.registroId);
+        await guardarBorrador({ ...b.datos, pago: { ...b.datos.pago, registroId: null } });
+        return this.decir("Ok. ¿De cuál de tus pagos es? Decime, por ejemplo, «es la luz del Express 1».", { intencion: "falta_info" });
+      }
     }
   }
 
@@ -468,10 +492,17 @@ export class Procesador {
 
     let datosBorrador: DatosBorrador = { adjuntoId: adj.id, url };
     let respuesta: string;
+    let a: AnalisisFoto | null = null;
     try {
       const liviana = await imagenParaIa(datos);
-      const a = await analizarFoto(cfg, liviana.datos, liviana.mime, epigrafe);
+      a = await analizarFoto(cfg, liviana.datos, liviana.mime, epigrafe, enGrupo() ? "" : await textoPagosPendientes());
       await db.update(adjunto).set({ descripcionIa: a.descripcion, datosExtraidos: a }).where(eq(adjunto.id, adj.id));
+    } catch {
+      // Sin IA, se guarda igual y se pregunta cuándo recordarla.
+    }
+    // La boleta o el comprobante de uno de tus pagos del mes va a Pagos (no a recordatorios).
+    if (a && !enGrupo() && (a.tipo === "comprobante" || (a.tipo === "factura" && a.pago_id))) return this.fotoDePago(a, adj.id);
+    if (a) {
       const fecha = fechaDe(a.propuesta_fecha_hora);
       datosBorrador = {
         adjuntoId: adj.id,
@@ -488,11 +519,53 @@ export class Procesador {
             : null,
       };
       respuesta = a.mensaje;
-    } catch {
-      respuesta = "Guardé la foto 📎. ¿Cuándo querés que te la recuerde?";
-    }
+    } else respuesta = "Guardé la foto 📎. ¿Cuándo querés que te la recuerde?";
     const borradorId = await guardarBorrador(datosBorrador);
     await this.proponer(respuesta, borradorId, !!datosBorrador.propuesta, "propuesta_foto");
+  }
+
+  /** Boleta: anota el monto y el vencimiento del mes. Comprobante: pregunta si es ese pago (o cuál es) y lo marca con la foto. */
+  private async fotoDePago(a: AnalisisFoto, adjuntoId: number) {
+    const p = (await pagosPendientes()).find((i) => i.id === a.pago_id);
+    const fecha = fechaDe(a.fecha_evento);
+    const fechaIso = fecha ? aLocal(fecha).toISODate() : null;
+    if (a.tipo === "factura" && p) {
+      const r = await actualizarPagoDelMes(p.id, { ...(a.monto_numero > 0 ? { monto: a.monto_numero } : {}), ...(fechaIso ? { vence: fechaIso } : {}) });
+      await borrarAdjunto(adjuntoId);
+      return this.decir(`📄 Anoté la boleta de *${r.nombre} · ${r.lugar}*: ${plata(r.monto, r.moneda)}, ${cuandoVence(r.vence)}. Te aviso antes.`, { intencion: "pago_boleta" });
+    }
+    const borradorId = await guardarBorrador({ adjuntoId, pago: { registroId: p?.id ?? null, monto: a.monto_numero, fecha: fechaIso } });
+    const vi = `🧾 Veo un pago${a.monto_numero > 0 ? ` de ${plata(a.monto_numero)}` : ""}${fechaIso ? ` del ${diaDe(fechaIso).toFormat("dd/MM")}` : ""}.`;
+    if (!p) return this.decir(`${vi} ¿De cuál de tus pagos es? Decime, por ejemplo, «es la luz del Express 1».`, { intencion: "falta_info" });
+    const pregunta = `${vi} ¿Es ${p.nombre} · ${p.lugar} (${plata(p.falta || p.monto, p.moneda)})?`;
+    if (await this.encuesta(pregunta, OPCIONES_PAGO, { tipo: "pago", borradorId })) return;
+    return this.decir(`${pregunta} Respondé *sí* o decime cuál es.`, { intencion: "falta_info" });
+  }
+
+  /** El comprobante es de ese pago: lo marca pagado con el monto y la fecha de la foto, y guarda la foto cifrada. */
+  private async pagoDeFoto(borradorId: number, d: DatosBorrador, registroId: number) {
+    let hecho: ItemPago;
+    try {
+      hecho = await registrarPago(registroId, { ...(d.pago!.monto > 0 ? { monto: d.pago!.monto } : {}), ...(d.pago!.fecha ? { fecha: d.pago!.fecha } : {}) });
+    } catch (err) {
+      if (err instanceof ErrorUsuario) return this.decir(`🤔 ${err.message}`);
+      throw err;
+    }
+    const adj = d.adjuntoId ? await obtenerAdjunto(d.adjuntoId) : null;
+    if (adj) {
+      await guardarComprobante(registroId, await fs.readFile(adj.rutaArchivo), adj.mime);
+      await borrarAdjunto(adj.id);
+    }
+    await cerrarBorrador(borradorId);
+    const faltan = (await pagosPendientes()).filter((i) => i.periodo === hecho.periodo);
+    const parte = hecho.estado === "parcial" ? ` (en parte: faltan ${plata(hecho.falta, hecho.moneda)})` : "";
+    const resto = faltan.length
+      ? `Te falta: ${faltan
+          .slice(0, 5)
+          .map((i) => `${i.nombre} · ${i.lugar}`)
+          .join(", ")}${faltan.length > 5 ? "…" : ""}.`
+      : "Ya pagaste todo lo del mes 🙌";
+    return this.decir(`✅ Anotado: *${hecho.nombre} · ${hecho.lugar}* ${plata(hecho.pagado, hecho.moneda)}${parte}, con el comprobante.\n${resto}`, { intencion: "pago_registrado" });
   }
 
   /** Mensaje con la propuesta y, si hay una fecha propuesta, la encuesta para responder con un toque. */
@@ -585,6 +658,21 @@ export class Procesador {
 
     // 4) Respuesta rápida a una propuesta (foto o link).
     const borrador = await borradorActivo();
+    // El comprobante de un pago: "sí" (es ese), "no" (pregunta cuál) o cuál es ("es la luz del Express 1").
+    const pagoFoto = !enGrupo() ? borrador?.datos.pago : undefined;
+    if (borrador && pagoFoto) {
+      if (pagoFoto.registroId && esAfirmativo(texto)) return void (await anotar("pago_registrado"), await this.pagoDeFoto(borrador.id, borrador.datos, pagoFoto.registroId));
+      if (pagoFoto.registroId && esNegativo(texto)) {
+        await anotar("falta_info");
+        await guardarBorrador({ ...borrador.datos, pago: { ...pagoFoto, registroId: null } });
+        return this.decir("Ok. ¿De cuál de tus pagos es? Decime, por ejemplo, «es la luz del Express 1».", { intencion: "falta_info" });
+      }
+      const candidatos = await buscarPendientes(texto);
+      if (candidatos.length === 1) return void (await anotar("pago_registrado"), await this.pagoDeFoto(borrador.id, borrador.datos, candidatos[0].id));
+      if (candidatos.length > 1)
+        return this.decir(`¿Cuál de estos? ${candidatos.map((i) => `${i.nombre} · ${i.lugar}`).join(", ")}`, { intencion: "falta_info" });
+      // No coincide con ninguno: sigue como un mensaje cualquiera.
+    }
     if (borrador?.datos.transcripcion && PIDE_TEXTO_COMPLETO.test(normalizar(texto))) {
       await anotar("texto_completo");
       return this.decir(`📝 *Lo que se dice en el video:*\n${borrador.datos.transcripcion}`, { intencion: "texto_completo" });

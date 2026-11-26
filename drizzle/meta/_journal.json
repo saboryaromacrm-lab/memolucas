@@ -183,6 +183,13 @@
       "when": 1795637415587,
       "tag": "0025_bloc_imagen",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1795722829098,
+      "tag": "0026_pagos",
+      "breakpoints": true
     }
   ]
 }

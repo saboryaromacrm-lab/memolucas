@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { get } from "./api";
 
-export type TipoCambio = "recordatorios" | "whatsapp" | "configuracion" | "mensajes" | "logs" | "notas" | "suscripciones" | "tarjetas" | "links" | "bloc";
+export type TipoCambio = "recordatorios" | "whatsapp" | "configuracion" | "mensajes" | "logs" | "notas" | "suscripciones" | "tarjetas" | "links" | "bloc" | "pagos";
 type Oyente = (tipo: TipoCambio, datos: unknown) => void;
 
 // Una sola conexión SSE para toda la app; se reconecta sola.

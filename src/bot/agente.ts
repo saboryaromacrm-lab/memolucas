@@ -15,6 +15,8 @@ import { borrarSuscripcion, crearSuscripcion, listarSuscripciones, pagarSuscripc
 import { cargarCompra, listarTarjetas, marcarPago } from "../servicios/tarjetas.js";
 import { agregarAlBloc, verBloc } from "../servicios/bloc.js";
 import { cargarSaldoIA, fijarSaldoIA } from "../servicios/credito-ia.js";
+import { actualizarPagoDelMes, buscarPendientes, crearSuelto, historialPagos, listarLugares, pagosPendientes, registrarPago, verMes, type ItemPago } from "../servicios/pagos.js";
+import { periodoDe } from "../servicios/pagos-reglas.js";
 import { diasParaVencer } from "../servicios/vencimientos.js";
 import { buscarMensajesWa, cancelarProgramadoWa, DIAS_GUARDADO, enviarWa, fijarAliasWa, leerChatWa, listarChatsWa, programadosWa, type MensajeLeido } from "../servicios/wa-personal.js";
 import { ErrorVideo, esLinkDeVideo, leerVideo, textoErrorVideo } from "../servicios/videos.js";
@@ -32,6 +34,17 @@ const MENSAJES_DE_CONTEXTO = 16;
 const Fecha = z.string().describe("ISO 8601 con offset, ej. 2026-11-24T09:00:00-03:00");
 
 /** Lo que devuelve cada herramienta: JSON, o el error explicado (para que el modelo se lo diga al usuario). */
+/** Un pago, corto, para el asistente. */
+const resumirPago = (i: Pick<ItemPago, "id" | "nombre" | "lugar" | "vence" | "monto" | "pagado" | "moneda" | "estado"> & { vencido?: boolean }) => ({
+  id: i.id,
+  pago: `${i.nombre} · ${i.lugar}`,
+  vence: i.vence,
+  monto: i.monto,
+  pagado: i.pagado,
+  moneda: i.moneda,
+  estado: i.vencido ? "vencido" : i.estado,
+});
+
 async function seguro(fn: () => Promise<unknown>): Promise<string> {
   try {
     const r = await fn();
@@ -216,6 +229,90 @@ function herramientas(origen: Canal) {
       run: ({ pestana, texto }) => seguro(() => agregarAlBloc(pestana, texto)),
     }),
     betaZodTool({
+      name: "ver_pagos",
+      description:
+        "Los pagos de un mes de sus locales, su casa y sus cosas (Pagos): cada uno con lugar, vencimiento, monto, cuánto pagó y estado (pendiente, parcial, pagado, omitido), y los totales. Para \"¿qué me falta pagar?\".",
+      inputSchema: z.object({ mes: z.string().regex(/^\d{4}-\d{2}$/).optional().describe("AAAA-MM; sin mes, el actual") }),
+      run: ({ mes }) =>
+        seguro(async () => {
+          const m = await verMes(mes ?? periodoDe(hoyIso()));
+          return { mes: m.nombre, totales: m.totales, alertas: m.alertas, pagos: m.items.map(resumirPago) };
+        }),
+    }),
+    betaZodTool({
+      name: "registrar_pago",
+      description:
+        "Marca como pagado uno de los pagos del mes (\"pagué la luz del Express 1\"). pago: qué y dónde, como lo dijo. Sin monto, se toma lo que faltaba; con un monto menor queda pagado en parte. Si hay varios parecidos devuelve las opciones: preguntale cuál y volvé a llamar con el id.",
+      inputSchema: z.object({
+        pago: z.string().optional(),
+        id: z.number().int().optional().describe("El id, si ya sabés cuál es"),
+        monto: z.number().optional(),
+        fecha: z.string().optional().describe("AAAA-MM-DD; sin fecha, hoy"),
+        medio: z.string().optional().describe("Transferencia, Efectivo, Débito automático…"),
+      }),
+      run: (p) =>
+        seguro(async () => {
+          const candidatos = p.id ? [{ id: p.id }] : await buscarPendientes(p.pago ?? "");
+          if (!candidatos.length) return "Error: no encontré ese pago entre lo que falta pagar. Si no está entre sus pagos, cargalo con cargar_pago_suelto.";
+          if (candidatos.length > 1) return { elegir: (candidatos as ItemPago[]).map(resumirPago) };
+          const hecho = await registrarPago(candidatos[0].id, { monto: p.monto, fecha: p.fecha, medio: p.medio });
+          return { pagado: resumirPago(hecho), faltan: (await pagosPendientes()).filter((i) => i.periodo === hecho.periodo).map(resumirPago) };
+        }),
+    }),
+    betaZodTool({
+      name: "cargar_boleta",
+      description: "Anota la boleta o factura que le llegó de uno de sus pagos del mes (\"me llegó la luz del local 2, 96 mil, vence el 28\"): el monto y, si lo dijo, el vencimiento.",
+      inputSchema: z.object({ pago: z.string().optional(), id: z.number().int().optional(), monto: z.number(), vence: z.string().optional().describe("AAAA-MM-DD") }),
+      run: (p) =>
+        seguro(async () => {
+          const candidatos = p.id ? [{ id: p.id }] : await buscarPendientes(p.pago ?? "");
+          if (!candidatos.length) return "Error: no encontré ese pago entre lo que falta pagar.";
+          if (candidatos.length > 1) return { elegir: (candidatos as ItemPago[]).map(resumirPago) };
+          return resumirPago(await actualizarPagoDelMes(candidatos[0].id, { monto: p.monto, vence: p.vence }));
+        }),
+    }),
+    betaZodTool({
+      name: "cargar_pago_suelto",
+      description: "Anota un pago que no está entre los que paga siempre (un arreglo, una compra, una multa). ya_pagado=false si es para pagar en esa fecha.",
+      inputSchema: z.object({
+        nombre: z.string(),
+        lugar: z.string().optional().describe("Local, Casa, Auto, Personal…"),
+        categoria: z.string().optional(),
+        monto: z.number(),
+        moneda: z.enum(["ARS", "USD"]).optional(),
+        fecha: z.string().optional().describe("AAAA-MM-DD; sin fecha, hoy"),
+        medio: z.string().optional(),
+        ya_pagado: z.boolean().optional(),
+      }),
+      run: (p) =>
+        seguro(async () => {
+          const lugar = p.lugar ? (await listarLugares()).find((l) => normalizar(l.nombre) === normalizar(p.lugar!)) : undefined;
+          if (p.lugar && !lugar) return `Error: no tengo el lugar «${p.lugar}». Sus lugares: ${(await listarLugares()).map((l) => l.nombre).join(", ")}.`;
+          const r = await crearSuelto({
+            nombre: p.nombre,
+            lugarId: lugar?.id ?? null,
+            categoria: p.categoria ?? "Otros",
+            monto: p.monto,
+            moneda: p.moneda ?? "ARS",
+            fecha: p.fecha ?? hoyIso(),
+            medio: p.medio ?? "",
+            nota: "",
+            pagado: p.ya_pagado ?? true,
+          });
+          return resumirPago(r);
+        }),
+    }),
+    betaZodTool({
+      name: "historial_pagos",
+      description: "Lo pagado entre dos meses, con el total (\"¿cuánto pagué de luz este año?\", \"¿cuánto se fue en el Express 1?\"). buscar filtra por nombre, lugar o categoría.",
+      inputSchema: z.object({ desde: z.string().regex(/^\d{4}-\d{2}$/), hasta: z.string().regex(/^\d{4}-\d{2}$/), buscar: z.string().optional() }),
+      run: ({ desde, hasta, buscar }) =>
+        seguro(async () => {
+          const h = await historialPagos(desde, hasta, buscar);
+          return { total: h.total, pagos: h.items.slice(0, 80).map(resumirPago) };
+        }),
+    }),
+    betaZodTool({
       name: "credito_claude",
       description:
         "Anota el crédito de la cuenta de Claude (la IA de este bot), para avisarle antes de que se termine. tipo \"carga\": cargó ese monto y se suma (\"cargué 10 dólares\"). tipo \"saldo\": el saldo que ve en la consola (\"me quedan 12,50\"). Devuelve el saldo y para cuántos días alcanza al ritmo de ahora.",
@@ -321,7 +418,7 @@ function herramientas(origen: Canal) {
 const sistema = (nombre: string) => `Sos Memolucas, el asistente personal de ${nombre}: le hablás por WhatsApp y en su panel.
 Español rioplatense con voseo, cercano y práctico, frases cortas. Escribís para WhatsApp: *negrita* con un asterisco, _cursiva_, listas con •; sin tablas ni títulos con #.
 
-Tenés herramientas sobre sus cosas: agenda y recordatorios, notas, el Bloc (pestañas de texto largo), suscripciones, tarjetas de crédito (y lo que se estima del próximo resumen), links guardados, su WhatsApp personal (si lo vinculó), resumir videos (TikTok, reels, YouTube) y búsqueda en internet para información general o de actualidad.
+Tenés herramientas sobre sus cosas: agenda y recordatorios, notas, el Bloc (pestañas de texto largo), sus pagos del mes (Pagos: alquileres, servicios, impuestos y sueldos de sus locales, su casa y sus cosas), suscripciones, tarjetas de crédito (y lo que se estima del próximo resumen), links guardados, su WhatsApp personal (si lo vinculó), resumir videos (TikTok, reels, YouTube) y búsqueda en internet para información general o de actualidad.
 - Respondé con sus datos reales usando las herramientas; no inventes. Si algo no está, decilo.
 - Si un pedido es claro, hacelo directo. Si falta algo clave (por ejemplo la fecha), preguntá.
 - Para borrar: primero preguntá "¿Lo borro?" y recién cuando conteste que sí, llamá a borrar con confirmado=true.

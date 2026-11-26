@@ -1,0 +1,690 @@
+import { and, asc, count, eq, gte, inArray, isNotNull, lt, lte, ne, or } from "drizzle-orm";
+import { DateTime } from "luxon";
+import { db } from "../db/index.js";
+import { pagoAnalisis, pagoFijo, pagoLugar, pagoMes, suscripcion, tarjeta, type FrecuenciaPago, type PagoMes, type Suscripcion, type TipoLugar } from "../db/schema.js";
+import { abrir, cifrar, descifrar, sellar } from "../lib/cifrado.js";
+import { bus } from "../lib/eventos.js";
+import { hoyIso } from "../lib/fechas.js";
+import { normalizar } from "../lib/textos.js";
+import { almacenCifrado, comoWebp } from "./archivos-cifrados.js";
+import { actualizarConfig, obtenerConfig } from "./configuracion.js";
+import {
+  aCsv,
+  alertasDelMes,
+  esperadoDe,
+  estadoDe,
+  nombreMes,
+  periodoDe,
+  sumarMeses,
+  tocaEnMes,
+  totalPagado,
+  venceEn,
+  type FilaCsv,
+  type Moneda,
+  type ParteDePago,
+} from "./pagos-reglas.js";
+import { ErrorUsuario } from "./recordatorios.js";
+import { PERIODOS, renovarSuscripcion } from "./suscripciones.js";
+import { marcarPago } from "./tarjetas.js";
+
+// Pagos: lugares (locales, casa…), lo que se paga siempre en cada uno (los fijos) y cada pago de cada mes. El mes se
+// arma solo con los fijos que tocan, las suscripciones que vencen y los resúmenes de las tarjetas, sin cargarlos dos
+// veces; se suman los pagos sueltos.
+
+type DatosFijo = { nombre: string; monto: number; cuenta: string; nota: string };
+type DatosMes = { nombre: string; esperado: number; boleta: number | null; pagos: ParteDePago[]; cuenta: string; nota: string };
+
+const ILEGIBLE = "(no se pudo descifrar)";
+const abrirFijo = (c: string) => abrir<DatosFijo>(c, { nombre: ILEGIBLE, monto: 0, cuenta: "", nota: "" });
+const abrirMes = (c: string) => ({ boleta: null, pagos: [], cuenta: "", nota: "", ...abrir<Partial<DatosMes>>(c, { nombre: ILEGIBLE, esperado: 0 }) }) as DatosMes;
+
+const comprobantes = almacenCifrado("pagos");
+export const COMPROBANTE_MAX_BYTES = 15 * 1024 * 1024;
+
+const avisar = () => bus.avisar("pagos");
+const mesActual = () => periodoDe(hoyIso());
+
+// ───────────── Lugares ─────────────
+
+export async function listarLugares() {
+  const [lugares, fijos] = await Promise.all([
+    db.select().from(pagoLugar).orderBy(asc(pagoLugar.orden), asc(pagoLugar.id)),
+    db.select({ lugarId: pagoFijo.lugarId, n: count() }).from(pagoFijo).groupBy(pagoFijo.lugarId),
+  ]);
+  return lugares.map((l) => ({ ...l, fijos: fijos.find((f) => f.lugarId === l.id)?.n ?? 0 }));
+}
+
+export async function crearLugar(d: { nombre: string; tipo: TipoLugar }) {
+  const nombre = d.nombre.trim();
+  if (!nombre) throw new ErrorUsuario("Falta el nombre del lugar.");
+  const [{ n }] = await db.select({ n: count() }).from(pagoLugar);
+  const [l] = await db.insert(pagoLugar).values({ nombre, tipo: d.tipo, orden: n + 1 }).returning();
+  avisar();
+  return l;
+}
+
+export async function actualizarLugar(id: number, d: { nombre?: string; tipo?: TipoLugar }) {
+  if (d.nombre !== undefined && !d.nombre.trim()) throw new ErrorUsuario("Falta el nombre del lugar.");
+  await db
+    .update(pagoLugar)
+    .set({ ...(d.nombre !== undefined ? { nombre: d.nombre.trim() } : {}), ...(d.tipo ? { tipo: d.tipo } : {}) })
+    .where(eq(pagoLugar.id, id));
+  avisar();
+}
+
+export async function borrarLugar(id: number) {
+  const [[{ fijos }], [{ pagos }]] = await Promise.all([
+    db.select({ fijos: count() }).from(pagoFijo).where(eq(pagoFijo.lugarId, id)),
+    db.select({ pagos: count() }).from(pagoMes).where(eq(pagoMes.lugarId, id)),
+  ]);
+  if (fijos || pagos) throw new ErrorUsuario("Ese lugar tiene pagos cargados: pasalos a otro lugar o borralos antes.");
+  await db.delete(pagoLugar).where(eq(pagoLugar.id, id));
+  avisar();
+}
+
+// ───────────── Lo que se paga siempre (los fijos) ─────────────
+
+export type EntradaFijo = {
+  lugarId: number;
+  nombre: string;
+  categoria: string;
+  monto: number;
+  variable: boolean;
+  moneda: Moneda;
+  dia: number;
+  frecuencia: FrecuenciaPago;
+  desde?: string;
+  medio: string;
+  cuenta: string;
+  avisoDias: number | null;
+  nota: string;
+};
+
+const columnasFijo = (e: EntradaFijo) => ({
+  lugarId: e.lugarId,
+  categoria: e.categoria.trim() || "Otros",
+  frecuencia: e.frecuencia,
+  dia: Math.min(31, Math.max(1, Math.round(e.dia))),
+  moneda: e.moneda,
+  variable: e.variable,
+  medio: e.medio.trim(),
+  avisoDias: e.avisoDias,
+  datosCifrados: sellar({ nombre: e.nombre.trim(), monto: Math.max(0, e.monto), cuenta: e.cuenta.trim(), nota: e.nota.trim() } satisfies DatosFijo),
+});
+
+export async function listarFijos() {
+  const filas = await db.select().from(pagoFijo).orderBy(asc(pagoFijo.lugarId), asc(pagoFijo.dia), asc(pagoFijo.id));
+  return filas.map(({ datosCifrados, ...f }) => ({ ...f, ...abrirFijo(datosCifrados) }));
+}
+
+export async function crearFijo(e: EntradaFijo) {
+  if (!e.nombre.trim()) throw new ErrorUsuario("Falta el nombre del pago.");
+  const [f] = await db
+    .insert(pagoFijo)
+    .values({ ...columnasFijo(e), desde: e.desde ?? mesActual() })
+    .returning({ id: pagoFijo.id });
+  avisar();
+  return f;
+}
+
+/** Varios a la vez (lo que arma la IA). Los lugares nuevos se crean antes. */
+export async function crearFijos(lista: (Omit<EntradaFijo, "lugarId"> & { lugarId: number | null; lugarNuevo?: { nombre: string; tipo: TipoLugar } })[]) {
+  const nuevos = new Map<string, number>();
+  for (const e of lista) {
+    let lugarId = e.lugarId;
+    if (!lugarId && e.lugarNuevo) {
+      const clave = normalizar(e.lugarNuevo.nombre);
+      lugarId = nuevos.get(clave) ?? (await crearLugar(e.lugarNuevo)).id;
+      nuevos.set(clave, lugarId);
+    }
+    if (!lugarId) throw new ErrorUsuario(`Falta el lugar de «${e.nombre}».`);
+    await crearFijo({ ...e, lugarId });
+  }
+  return { creados: lista.length };
+}
+
+/**
+ * Los cambios llegan a los pagos de este mes en adelante que todavía no se pagaron (con la boleta cargada, el monto
+ * del mes queda); los meses que ya no tocan se sacan.
+ */
+export async function actualizarFijo(id: number, e: EntradaFijo) {
+  if (!e.nombre.trim()) throw new ErrorUsuario("Falta el nombre del pago.");
+  const [f] = await db
+    .update(pagoFijo)
+    .set({ ...columnasFijo(e), ...(e.desde ? { desde: e.desde } : {}), actualizadoEn: new Date() })
+    .where(eq(pagoFijo.id, id))
+    .returning();
+  if (!f) throw new ErrorUsuario("Ese pago ya no existe.");
+  for (const r of await pendientesDesdeHoy(id)) {
+    const d = abrirMes(r.datosCifrados);
+    if (!tocaEnMes(f, r.periodo) && d.boleta === null) {
+      await borrarFila(r);
+      continue;
+    }
+    const esperado = esperadoDe({ monto: e.monto, variable: e.variable }, await montosAnteriores(id, r.periodo));
+    await db
+      .update(pagoMes)
+      .set({
+        vence: venceEn(f.dia, r.periodo),
+        lugarId: f.lugarId,
+        categoria: f.categoria,
+        moneda: f.moneda,
+        medio: f.medio,
+        datosCifrados: sellar({ ...d, nombre: e.nombre.trim(), cuenta: e.cuenta.trim(), esperado } satisfies DatosMes),
+        actualizadoEn: new Date(),
+      })
+      .where(eq(pagoMes.id, r.id));
+  }
+  avisar();
+}
+
+/** Se borra el fijo y sus pagos de acá en adelante sin pagar; lo pagado queda en el historial. */
+export async function borrarFijo(id: number) {
+  for (const r of await pendientesDesdeHoy(id)) await borrarFila(r);
+  await db.delete(pagoFijo).where(eq(pagoFijo.id, id));
+  avisar();
+}
+
+const pendientesDesdeHoy = (fijoId: number) =>
+  db
+    .select()
+    .from(pagoMes)
+    .where(and(eq(pagoMes.fijoId, fijoId), gte(pagoMes.periodo, mesActual()), inArray(pagoMes.estado, ["pendiente", "omitido"])));
+
+/** Lo pagado en los meses anteriores de un fijo (para sugerir el monto de los variables). */
+async function montosAnteriores(fijoId: number, periodo: string): Promise<number[]> {
+  const filas = await db
+    .select()
+    .from(pagoMes)
+    .where(and(eq(pagoMes.fijoId, fijoId), lt(pagoMes.periodo, periodo), inArray(pagoMes.estado, ["pagado", "parcial"])))
+    .orderBy(asc(pagoMes.periodo));
+  return filas.map((r) => totalPagado(abrirMes(r.datosCifrados).pagos));
+}
+
+// ───────────── El mes ─────────────
+
+/** El primer mes que se arma solo: el de la primera vez que se abre Pagos (antes no hay nada que inventar). */
+async function primerMes(): Promise<string> {
+  const cfg = await obtenerConfig();
+  if (cfg.pagosDesde) return cfg.pagosDesde;
+  await actualizarConfig({ pagosDesde: mesActual() });
+  return mesActual();
+}
+
+/** Los vencimientos de una suscripción en ese mes (para atrás y para adelante desde el que tiene ahora). */
+export function vencimientosEnMes(s: Pick<Suscripcion, "fechaVto" | "frecuencia" | "fechaInicio">, periodo: string): string[] {
+  const inicio = DateTime.fromISO(`${periodo}-01`);
+  const fin = inicio.endOf("month");
+  const paso = PERIODOS[s.frecuencia];
+  const fechas: string[] = [];
+  let d = DateTime.fromISO(s.fechaVto);
+  while (d > fin) d = d.minus(paso);
+  for (; d >= inicio; d = d.minus(paso)) fechas.push(d.toISODate()!);
+  for (d = DateTime.fromISO(s.fechaVto).plus(paso); d <= fin; d = d.plus(paso)) if (d >= inicio) fechas.push(d.toISODate()!);
+  return [...new Set(fechas)].filter((f) => !s.fechaInicio || f >= s.fechaInicio).sort();
+}
+
+/** Arma el mes (no repite lo que ya está) y pone al día lo que sale de las suscripciones y las tarjetas. */
+export async function prepararMes(periodo: string) {
+  if (periodo < (await primerMes())) return;
+  const [existentes, fijos, suscripciones, tarjetas] = await Promise.all([
+    db.select().from(pagoMes).where(eq(pagoMes.periodo, periodo)),
+    db.select().from(pagoFijo),
+    db.select().from(suscripcion),
+    db.select().from(tarjeta),
+  ]);
+  const hoy = hoyIso();
+
+  for (const f of fijos) {
+    if (!tocaEnMes(f, periodo) || existentes.some((r) => r.fijoId === f.id)) continue;
+    const d = abrirFijo(f.datosCifrados);
+    await db
+      .insert(pagoMes)
+      .values({
+        periodo,
+        vence: venceEn(f.dia, periodo),
+        lugarId: f.lugarId,
+        categoria: f.categoria,
+        moneda: f.moneda,
+        fijoId: f.id,
+        medio: f.medio,
+        datosCifrados: sellar({ nombre: d.nombre, esperado: esperadoDe({ monto: d.monto, variable: f.variable }, await montosAnteriores(f.id, periodo)), boleta: null, pagos: [], cuenta: d.cuenta, nota: "" } satisfies DatosMes),
+      })
+      .onConflictDoNothing();
+  }
+
+  // Suscripciones: lo que venció antes de su vencimiento actual ya se renovó (se pagó).
+  for (const s of suscripciones) {
+    for (const vence of vencimientosEnMes(s, periodo)) {
+      const ya = existentes.find((r) => r.suscripcionId === s.id && r.vence === vence);
+      const renovada = vence < s.fechaVto;
+      if (!ya) {
+        await db
+          .insert(pagoMes)
+          .values({
+            periodo,
+            vence,
+            categoria: "Suscripciones",
+            moneda: s.moneda,
+            suscripcionId: s.id,
+            estado: renovada ? "pagado" : "pendiente",
+            pagadoEn: renovada ? vence : null,
+            datosCifrados: sellar({ nombre: s.nombre, esperado: s.monto, boleta: null, pagos: renovada ? [{ monto: s.monto, fecha: vence }] : [], cuenta: "", nota: "" } satisfies DatosMes),
+          })
+          .onConflictDoNothing();
+      } else if (renovada && ya.estado === "pendiente") {
+        const d = abrirMes(ya.datosCifrados);
+        await db
+          .update(pagoMes)
+          .set({ estado: "pagado", pagadoEn: hoy, datosCifrados: sellar({ ...d, pagos: [{ monto: d.esperado, fecha: hoy }] }) })
+          .where(eq(pagoMes.id, ya.id));
+      }
+    }
+  }
+
+  // Tarjetas: el resumen que vence este mes, con su saldo; si ya se marcó lo pagado en Tarjetas, queda pagado.
+  for (const t of tarjetas) {
+    if (!t.vencimiento || periodoDe(t.vencimiento) !== periodo) continue;
+    const saldos = abrir<{ saldo: number; pagado?: number | null }>(t.datosCifrados, { saldo: 0 });
+    const ya = existentes.find((r) => r.tarjetaId === t.id && r.vence === t.vencimiento);
+    const pagos: ParteDePago[] = saldos.pagado != null ? [{ monto: saldos.pagado, fecha: hoy }] : [];
+    if (!ya) {
+      await db
+        .insert(pagoMes)
+        .values({
+          periodo,
+          vence: t.vencimiento,
+          categoria: "Tarjetas",
+          tarjetaId: t.id,
+          estado: pagos.length ? estadoDe(saldos.saldo, pagos) : "pendiente",
+          pagadoEn: pagos.length ? hoy : null,
+          datosCifrados: sellar({ nombre: `${t.nombre}${t.ultimos4 ? ` ···${t.ultimos4}` : ""}`, esperado: saldos.saldo, boleta: null, pagos, cuenta: "", nota: "" } satisfies DatosMes),
+        })
+        .onConflictDoNothing();
+    } else {
+      const d = abrirMes(ya.datosCifrados);
+      const nuevosPagos = d.pagos.length || !pagos.length ? d.pagos : pagos;
+      if (d.esperado !== saldos.saldo || nuevosPagos !== d.pagos)
+        await db
+          .update(pagoMes)
+          .set({
+            estado: ya.estado === "omitido" ? "omitido" : nuevosPagos.length ? estadoDe(saldos.saldo, nuevosPagos) : "pendiente",
+            datosCifrados: sellar({ ...d, esperado: saldos.saldo, pagos: nuevosPagos }),
+          })
+          .where(eq(pagoMes.id, ya.id));
+    }
+  }
+}
+
+export type ItemPago = ReturnType<typeof aItem>;
+type Lugar = typeof pagoLugar.$inferSelect;
+
+function aItem(r: PagoMes, lugares: Lugar[], hoy: string) {
+  const d = abrirMes(r.datosCifrados);
+  const lugar = lugares.find((l) => l.id === r.lugarId);
+  const monto = d.boleta ?? d.esperado;
+  const pagado = totalPagado(d.pagos);
+  return {
+    id: r.id,
+    periodo: r.periodo,
+    vence: r.vence,
+    nombre: d.nombre,
+    lugarId: r.lugarId,
+    lugar: lugar?.nombre ?? (r.suscripcionId ? "Suscripciones" : r.tarjetaId ? "Tarjetas" : "Sin lugar"),
+    tipo: (lugar?.tipo ?? "personal") as TipoLugar,
+    categoria: r.categoria,
+    moneda: r.moneda,
+    estado: r.estado,
+    monto,
+    esperado: d.esperado,
+    boleta: d.boleta,
+    pagado,
+    falta: r.estado === "omitido" ? 0 : Math.max(0, monto - pagado),
+    pagos: d.pagos,
+    vencido: (r.estado === "pendiente" || r.estado === "parcial") && r.vence < hoy,
+    medio: r.medio,
+    pagadoEn: r.pagadoEn,
+    cuenta: d.cuenta,
+    nota: d.nota,
+    origen: r.fijoId ? "fijo" : r.suscripcionId ? "suscripcion" : r.tarjetaId ? "tarjeta" : "suelto",
+    fijoId: r.fijoId,
+    comprobante: r.comprobante ? (r.comprobanteMime ?? "image/webp") : null,
+  };
+}
+
+const sumaPorMoneda = (items: { moneda: Moneda; valor: number }[]) => ({
+  ARS: items.filter((i) => i.moneda === "ARS").reduce((s, i) => s + i.valor, 0),
+  USD: items.filter((i) => i.moneda === "USD").reduce((s, i) => s + i.valor, 0),
+});
+
+async function filasDe(desde: string, hasta: string) {
+  return db
+    .select()
+    .from(pagoMes)
+    .where(and(gte(pagoMes.periodo, desde), lte(pagoMes.periodo, hasta)))
+    .orderBy(asc(pagoMes.vence), asc(pagoMes.id));
+}
+
+/** El mes: cada pago con su estado, los totales, las alertas y el análisis de la IA (si lo hay). */
+export async function verMes(periodo: string) {
+  await prepararMes(periodo);
+  const hoy = hoyIso();
+  const [filas, anteriores, lugares, [analisis]] = await Promise.all([
+    filasDe(periodo, periodo),
+    filasDe(sumarMeses(periodo, -1), sumarMeses(periodo, -1)),
+    db.select().from(pagoLugar).orderBy(asc(pagoLugar.orden), asc(pagoLugar.id)),
+    db.select().from(pagoAnalisis).where(eq(pagoAnalisis.periodo, periodo)),
+  ]);
+  const items = filas.map((r) => aItem(r, lugares, hoy));
+  const vivos = items.filter((i) => i.estado !== "omitido");
+  const anterior = anteriores.map((r) => aItem(r, lugares, hoy)).filter((i) => i.estado !== "omitido");
+  const promedios = await Promise.all(
+    items.map(async (i) => {
+      if (!i.fijoId) return null;
+      const m = (await montosAnteriores(i.fijoId, periodo)).filter((x) => x > 0).slice(-3);
+      return m.length ? m.reduce((s, x) => s + x, 0) / m.length : null;
+    }),
+  );
+  return {
+    periodo,
+    nombre: nombreMes(periodo),
+    items,
+    totales: {
+      total: sumaPorMoneda(vivos.map((i) => ({ moneda: i.moneda, valor: i.monto }))),
+      pagado: sumaPorMoneda(vivos.map((i) => ({ moneda: i.moneda, valor: i.pagado }))),
+      falta: sumaPorMoneda(vivos.map((i) => ({ moneda: i.moneda, valor: i.falta }))),
+      cantidad: vivos.length,
+      pendientes: vivos.filter((i) => i.estado === "pendiente" || i.estado === "parcial").length,
+      vencidos: vivos.filter((i) => i.vencido).length,
+    },
+    alertas: alertasDelMes(
+      items.map((i, k) => ({ ...i, promedioAnterior: promedios[k] })),
+      hoy,
+      anterior.length ? sumaPorMoneda(anterior.map((i) => ({ moneda: i.moneda, valor: i.monto }))) : null,
+    ),
+    analisis: analisis ? { texto: descifrar(analisis.textoCifrado) ?? "", creadoEn: analisis.creadoEn } : null,
+    lugares,
+    primerMes: await primerMes(),
+  };
+}
+
+async function obtener(id: number) {
+  const [r] = await db.select().from(pagoMes).where(eq(pagoMes.id, id));
+  if (!r) throw new ErrorUsuario("Ese pago ya no está.");
+  return r;
+}
+
+async function itemDe(id: number) {
+  const lugares = await db.select().from(pagoLugar);
+  return aItem(await obtener(id), lugares, hoyIso());
+}
+
+/**
+ * Pagar: sin monto, lo que falta (un toque). Con monto menor, queda pagado en parte. Si sale de una suscripción, se
+ * renueva; si es el resumen de una tarjeta, queda marcado lo pagado en Tarjetas.
+ */
+export async function registrarPago(id: number, p: { monto?: number; fecha?: string; medio?: string } = {}) {
+  const r = await obtener(id);
+  if (r.estado === "pagado") throw new ErrorUsuario("Ese pago ya está marcado como pagado.");
+  const d = abrirMes(r.datosCifrados);
+  const monto = d.boleta ?? d.esperado;
+  const parte = p.monto ?? Math.max(0, monto - totalPagado(d.pagos));
+  if (parte < 0 || (parte === 0 && monto > 0)) throw new ErrorUsuario("Falta el monto que pagaste.");
+  const fecha = p.fecha ?? hoyIso();
+  const pagos = [...d.pagos, { monto: parte, fecha }];
+  const estado = estadoDe(monto, pagos);
+  await db
+    .update(pagoMes)
+    .set({ estado, pagadoEn: fecha, medio: p.medio?.trim() || r.medio, datosCifrados: sellar({ ...d, pagos }), actualizadoEn: new Date() })
+    .where(eq(pagoMes.id, id));
+  if (estado === "pagado" && r.suscripcionId) {
+    const [s] = await db.select().from(suscripcion).where(eq(suscripcion.id, r.suscripcionId));
+    if (s && s.fechaVto === r.vence) await renovarSuscripcion(s.id);
+  }
+  if (r.tarjetaId) await marcarPago(r.tarjetaId, totalPagado(pagos));
+  avisar();
+  return itemDe(id);
+}
+
+/** Desmarcar: vuelve a pendiente (sin las partes pagadas). */
+export async function desmarcarPago(id: number) {
+  const r = await obtener(id);
+  await db
+    .update(pagoMes)
+    .set({ estado: "pendiente", pagadoEn: null, datosCifrados: sellar({ ...abrirMes(r.datosCifrados), pagos: [] }), actualizadoEn: new Date() })
+    .where(eq(pagoMes.id, id));
+  avisar();
+}
+
+/** "No se paga este mes" (o deshacerlo). */
+export async function omitirPago(id: number, omitido: boolean) {
+  const r = await obtener(id);
+  const d = abrirMes(r.datosCifrados);
+  await db
+    .update(pagoMes)
+    .set({ estado: omitido ? "omitido" : estadoDe(d.boleta ?? d.esperado, d.pagos), actualizadoEn: new Date() })
+    .where(eq(pagoMes.id, id));
+  avisar();
+}
+
+/** El monto y el vencimiento de este mes (los de la boleta), y la nota. Con una fecha nueva, los avisos vuelven a salir. */
+export async function actualizarPagoDelMes(id: number, c: { monto?: number; vence?: string; nota?: string; medio?: string }) {
+  const r = await obtener(id);
+  const d = abrirMes(r.datosCifrados);
+  const nuevo = { ...d, ...(c.monto !== undefined ? { boleta: Math.max(0, c.monto) } : {}), ...(c.nota !== undefined ? { nota: c.nota.trim() } : {}) };
+  const venceCambia = c.vence !== undefined && c.vence !== r.vence;
+  await db
+    .update(pagoMes)
+    .set({
+      datosCifrados: sellar(nuevo),
+      ...(venceCambia ? { vence: c.vence, avisoPrevioEnviado: false, avisoDiaEnviado: false } : {}),
+      ...(c.medio !== undefined ? { medio: c.medio.trim() } : {}),
+      ...(r.estado !== "omitido" && nuevo.pagos.length ? { estado: estadoDe(nuevo.boleta ?? nuevo.esperado, nuevo.pagos) } : {}),
+      actualizadoEn: new Date(),
+    })
+    .where(eq(pagoMes.id, id));
+  avisar();
+  return itemDe(id);
+}
+
+export type EntradaSuelto = { nombre: string; lugarId: number | null; categoria: string; monto: number; moneda: Moneda; fecha: string; medio: string; nota: string; pagado: boolean };
+
+/** Un pago que no está entre los fijos: ya pagado, o para pagar en esa fecha. */
+export async function crearSuelto(e: EntradaSuelto) {
+  if (!e.nombre.trim()) throw new ErrorUsuario("Falta qué pagaste.");
+  if (!(e.monto > 0)) throw new ErrorUsuario("Falta el monto.");
+  const pagos = e.pagado ? [{ monto: e.monto, fecha: e.fecha }] : [];
+  const [r] = await db
+    .insert(pagoMes)
+    .values({
+      periodo: periodoDe(e.fecha),
+      vence: e.fecha,
+      lugarId: e.lugarId,
+      categoria: e.categoria.trim() || "Otros",
+      moneda: e.moneda,
+      estado: e.pagado ? "pagado" : "pendiente",
+      pagadoEn: e.pagado ? e.fecha : null,
+      medio: e.medio.trim(),
+      datosCifrados: sellar({ nombre: e.nombre.trim(), esperado: e.monto, boleta: null, pagos, cuenta: "", nota: e.nota.trim() } satisfies DatosMes),
+    })
+    .returning({ id: pagoMes.id });
+  avisar();
+  return itemDe(r.id);
+}
+
+async function borrarFila(r: PagoMes) {
+  await db.delete(pagoMes).where(eq(pagoMes.id, r.id));
+  if (r.comprobante) await comprobantes.borrar([r.comprobante]);
+}
+
+/** Solo los sueltos: los que salen de un fijo, una suscripción o una tarjeta se marcan "No se paga este mes". */
+export async function borrarPago(id: number) {
+  const r = await obtener(id);
+  if (r.fijoId || r.suscripcionId || r.tarjetaId) throw new ErrorUsuario("Este pago sale de lo que pagás siempre: usá «No se paga este mes».");
+  await borrarFila(r);
+  avisar();
+}
+
+// ───────────── Comprobantes ─────────────
+
+/** Foto (se comprime como las del Bloc) o PDF, cifrado. Reemplaza al anterior. */
+export async function guardarComprobante(id: number, datos: Buffer, mime: string) {
+  const r = await obtener(id);
+  let archivo: Buffer;
+  let tipo: string;
+  if (mime === "application/pdf") {
+    if (!datos.subarray(0, 5).toString("latin1").startsWith("%PDF")) throw new ErrorUsuario("Ese archivo no es un PDF.");
+    [archivo, tipo] = [datos, mime];
+  } else {
+    const webp = await comoWebp(datos, { ancho: 1600, alto: 1600 }).catch(() => {
+      throw new ErrorUsuario("No pude leer ese comprobante: mandá una foto, una captura o un PDF.");
+    });
+    [archivo, tipo] = [webp.data, "image/webp"];
+  }
+  const nombre = comprobantes.nuevoNombre();
+  await comprobantes.guardar(nombre, archivo);
+  await db.update(pagoMes).set({ comprobante: nombre, comprobanteMime: tipo, actualizadoEn: new Date() }).where(eq(pagoMes.id, id));
+  if (r.comprobante) await comprobantes.borrar([r.comprobante]);
+  avisar();
+}
+
+export async function leerComprobante(id: number) {
+  const r = await obtener(id);
+  const datos = r.comprobante ? await comprobantes.leer(r.comprobante) : null;
+  if (!datos) throw new ErrorUsuario("Ese pago no tiene comprobante.");
+  return { datos, mime: r.comprobanteMime ?? "image/webp" };
+}
+
+export async function borrarComprobante(id: number) {
+  const r = await obtener(id);
+  if (r.comprobante) await comprobantes.borrar([r.comprobante]);
+  await db.update(pagoMes).set({ comprobante: null, comprobanteMime: null }).where(eq(pagoMes.id, id));
+  avisar();
+}
+
+// ───────────── Resumen y exportación ─────────────
+
+type Totales = { ARS: number; USD: number };
+const agrupar = (items: ItemPago[], clave: (i: ItemPago) => string) => {
+  const grupos = new Map<string, { nombre: string; total: Totales; pagado: Totales }>();
+  for (const i of items) {
+    const g = grupos.get(clave(i)) ?? { nombre: clave(i), total: { ARS: 0, USD: 0 }, pagado: { ARS: 0, USD: 0 } };
+    g.total[i.moneda as Moneda] += i.monto;
+    g.pagado[i.moneda as Moneda] += i.pagado;
+    grupos.set(clave(i), g);
+  }
+  return [...grupos.values()].sort((a, b) => b.total.ARS - a.total.ARS || b.total.USD - a.total.USD);
+};
+
+/** Los últimos 12 meses (hasta "periodo"), y el mes y el año por lugar, por categoría y negocio / personal. */
+export async function resumenPagos(periodo: string) {
+  const desde = sumarMeses(periodo, -11);
+  const hoy = hoyIso();
+  // 11 meses para atrás siempre llegan al enero del año del mes: alcanzan para el año también.
+  const [filas, lugares] = await Promise.all([filasDe(desde, periodo), db.select().from(pagoLugar)]);
+  const items = filas.map((r) => aItem(r, lugares, hoy)).filter((i) => i.estado !== "omitido");
+  const meses = Array.from({ length: 12 }, (_, k) => {
+    const p = sumarMeses(desde, k);
+    const delMes = items.filter((i) => i.periodo === p);
+    return {
+      periodo: p,
+      total: sumaPorMoneda(delMes.map((i) => ({ moneda: i.moneda, valor: i.monto }))),
+      pagado: sumaPorMoneda(delMes.map((i) => ({ moneda: i.moneda, valor: i.pagado }))),
+    };
+  });
+  const corte = (lista: ItemPago[]) => ({
+    total: sumaPorMoneda(lista.map((i) => ({ moneda: i.moneda, valor: i.monto }))),
+    pagado: sumaPorMoneda(lista.map((i) => ({ moneda: i.moneda, valor: i.pagado }))),
+    porLugar: agrupar(lista, (i) => i.lugar),
+    porCategoria: agrupar(lista, (i) => i.categoria),
+    porTipo: agrupar(lista, (i) => (i.tipo === "negocio" ? "Negocio" : "Personal")),
+  });
+  return {
+    periodo,
+    meses,
+    mes: corte(items.filter((i) => i.periodo === periodo)),
+    anterior: corte(items.filter((i) => i.periodo === sumarMeses(periodo, -1))),
+    anio: { desde: `${periodo.slice(0, 4)}-01`, ...corte(items.filter((i) => i.periodo >= `${periodo.slice(0, 4)}-01`)) },
+  };
+}
+
+export async function exportarCsv(desde: string, hasta: string) {
+  const [filas, lugares] = await Promise.all([filasDe(desde, hasta), db.select().from(pagoLugar)]);
+  const hoy = hoyIso();
+  return aCsv(
+    filas.map((r): FilaCsv => {
+      const i = aItem(r, lugares, hoy);
+      return { ...i, tipo: i.tipo === "negocio" ? "Negocio" : "Personal", esperado: i.monto };
+    }),
+  );
+}
+
+// ───────────── Para el asistente, las fotos y los mensajes ─────────────
+
+/** Lo que falta pagar de este mes y del anterior (para reconocer un comprobante o una boleta). */
+export async function pagosPendientes() {
+  const hasta = mesActual();
+  await prepararMes(hasta);
+  const [filas, lugares] = await Promise.all([
+    db
+      .select()
+      .from(pagoMes)
+      .where(and(gte(pagoMes.periodo, sumarMeses(hasta, -1)), lte(pagoMes.periodo, sumarMeses(hasta, 1)), inArray(pagoMes.estado, ["pendiente", "parcial"]))),
+    db.select().from(pagoLugar),
+  ]);
+  return filas.map((r) => aItem(r, lugares, hoyIso()));
+}
+
+/** Los pendientes que coinciden con lo que dijo ("la luz del express 1"): primero los que tienen todas las palabras. */
+export async function buscarPendientes(texto: string) {
+  const palabras = normalizar(texto)
+    .split(/\s+/)
+    .filter((p) => p.length > 1 && !["de", "del", "la", "el", "los", "las", "en", "y", "pague", "pago"].includes(p));
+  const puntaje = (i: ItemPago) => {
+    const donde = normalizar(`${i.nombre} ${i.lugar} ${i.categoria} ${i.cuenta}`);
+    return palabras.filter((p) => donde.includes(p)).length;
+  };
+  const candidatos = (await pagosPendientes()).map((i) => ({ i, n: puntaje(i) })).filter((c) => c.n > 0);
+  const mejor = Math.max(0, ...candidatos.map((c) => c.n));
+  return candidatos.filter((c) => c.n === mejor).map((c) => c.i);
+}
+
+/** Lo pagado en un rango (para "¿cuánto pagué de luz este año?"), con el total. */
+export async function historialPagos(desde: string, hasta: string, buscar?: string) {
+  const [filas, lugares] = await Promise.all([filasDe(desde, hasta), db.select().from(pagoLugar)]);
+  const filtro = buscar ? normalizar(buscar) : "";
+  const items = filas
+    .map((r) => aItem(r, lugares, hoyIso()))
+    .filter((i) => i.pagado > 0 && (!filtro || filtro.split(/\s+/).every((p) => normalizar(`${i.nombre} ${i.lugar} ${i.categoria}`).includes(p))));
+  return { items, total: sumaPorMoneda(items.map((i) => ({ moneda: i.moneda, valor: i.pagado }))) };
+}
+
+export async function guardarAnalisis(periodo: string, texto: string) {
+  await db
+    .insert(pagoAnalisis)
+    .values({ periodo, textoCifrado: cifrar(texto) })
+    .onConflictDoUpdate({ target: pagoAnalisis.periodo, set: { textoCifrado: cifrar(texto), creadoEn: new Date() } });
+  avisar();
+}
+
+/** Los pagos de los fijos que hay que avisar (de este mes y el que viene, sin pagar). */
+export async function pagosParaAvisar() {
+  const hasta = sumarMeses(mesActual(), 1);
+  await prepararMes(mesActual());
+  const [filas, fijos, lugares] = await Promise.all([
+    db
+      .select()
+      .from(pagoMes)
+      .where(and(isNotNull(pagoMes.fijoId), lte(pagoMes.periodo, hasta), inArray(pagoMes.estado, ["pendiente", "parcial"]), or(eq(pagoMes.avisoPrevioEnviado, false), eq(pagoMes.avisoDiaEnviado, false)))),
+    db.select().from(pagoFijo),
+    db.select().from(pagoLugar),
+  ]);
+  return filas.map((r) => ({ fila: r, item: aItem(r, lugares, hoyIso()), avisoDias: fijos.find((f) => f.id === r.fijoId)?.avisoDias ?? null }));
+}
+
+export async function marcarAvisado(id: number, cual: "previo" | "dia") {
+  await db
+    .update(pagoMes)
+    .set(cual === "previo" ? { avisoPrevioEnviado: true } : { avisoPrevioEnviado: true, avisoDiaEnviado: true })
+    .where(and(eq(pagoMes.id, id), ne(pagoMes.estado, "pagado")));
+}

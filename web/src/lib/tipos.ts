@@ -267,3 +267,75 @@ export type Tarjeta = {
 };
 
 export type Link = { id: number; concepto: string; url: string };
+
+// ───────────── Pagos ─────────────
+
+export type Moneda = "ARS" | "USD";
+export type Totales = { ARS: number; USD: number };
+export type TipoLugar = "negocio" | "personal";
+export type EstadoPago = "pendiente" | "parcial" | "pagado" | "omitido";
+export type FrecuenciaPago = "mensual" | "bimestral" | "trimestral" | "cuatrimestral" | "semestral" | "anual" | "unica";
+
+export type LugarPago = { id: number; nombre: string; tipo: TipoLugar; orden: number; fijos?: number };
+
+export type ItemPago = {
+  id: number;
+  periodo: string;
+  vence: string;
+  nombre: string;
+  lugarId: number | null;
+  lugar: string;
+  tipo: TipoLugar;
+  categoria: string;
+  moneda: Moneda;
+  estado: EstadoPago;
+  monto: number;
+  esperado: number;
+  boleta: number | null;
+  pagado: number;
+  falta: number;
+  pagos: { monto: number; fecha: string }[];
+  vencido: boolean;
+  medio: string;
+  pagadoEn: string | null;
+  cuenta: string;
+  nota: string;
+  origen: "fijo" | "suscripcion" | "tarjeta" | "suelto";
+  fijoId: number | null;
+  /** Tipo del comprobante (image/webp o application/pdf), o null si no tiene. */
+  comprobante: string | null;
+};
+
+export type MesPagos = {
+  periodo: string;
+  nombre: string;
+  items: ItemPago[];
+  totales: { total: Totales; pagado: Totales; falta: Totales; cantidad: number; pendientes: number; vencidos: number };
+  alertas: string[];
+  analisis: { texto: string; creadoEn: string } | null;
+  lugares: LugarPago[];
+  primerMes: string;
+};
+
+export type GrupoPagos = { nombre: string; total: Totales; pagado: Totales };
+export type CortePagos = { total: Totales; pagado: Totales; porLugar: GrupoPagos[]; porCategoria: GrupoPagos[]; porTipo: GrupoPagos[] };
+export type ResumenPagos = { periodo: string; meses: { periodo: string; total: Totales; pagado: Totales }[]; mes: CortePagos; anterior: CortePagos; anio: CortePagos & { desde: string } };
+
+export type FijoPago = {
+  id: number;
+  lugarId: number;
+  nombre: string;
+  categoria: string;
+  monto: number;
+  variable: boolean;
+  moneda: Moneda;
+  dia: number;
+  frecuencia: FrecuenciaPago;
+  desde: string;
+  medio: string;
+  cuenta: string;
+  avisoDias: number | null;
+  nota: string;
+};
+
+export type ConfigPagos = { lugares: LugarPago[]; fijos: FijoPago[]; categorias: string[]; medios: string[]; diasAviso: number; mensajes: boolean };
