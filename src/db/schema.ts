@@ -107,6 +107,14 @@ export const configuracion = pgTable("configuracion", {
   iaSaldoDesde: ts("ia_saldo_desde"),
   iaSaldoAvisado: text("ia_saldo_avisado").$type<"7" | "2">(),
 
+  /** Pagos: primer mes que se arma solo (el de la primera vez que se abre), días de aviso y los mensajes del mes. */
+  pagosDesde: text("pagos_desde"),
+  pagosDiasAviso: integer("pagos_dias_aviso").notNull().default(3),
+  pagosMensajes: boolean("pagos_mensajes").notNull().default(true),
+  /** Mes del que ya se mandó el mensaje del día 1 y el de mitad de mes. */
+  pagosMensajeInicio: text("pagos_mensaje_inicio"),
+  pagosMensajeMitad: text("pagos_mensaje_mitad"),
+
   actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
 });
 
@@ -335,6 +343,93 @@ export const tarjetaConsumo = pgTable(
   (t) => [index("tarjeta_consumo_tarjeta_idx").on(t.tarjetaId)],
 );
 
+// ───────────── Pagos ─────────────
+// Lo que pagás mes a mes en cada lugar (locales, casa, auto…). Nombres, montos, números de cliente y notas van
+// cifrados (un JSON por fila en "datosCifrados"); a la vista quedan las fechas, lugares y categorías para ordenar.
+
+export type TipoLugar = "negocio" | "personal";
+
+export const pagoLugar = pgTable("pago_lugar", {
+  id: serial("id").primaryKey(),
+  nombre: text("nombre").notNull(),
+  tipo: text("tipo").$type<TipoLugar>().notNull().default("negocio"),
+  orden: integer("orden").notNull().default(0),
+  creadoEn: creadoEn(),
+});
+
+export type FrecuenciaPago = "mensual" | "bimestral" | "trimestral" | "cuatrimestral" | "semestral" | "anual" | "unica";
+
+/** Lo que se paga siempre (alquiler, luz, sueldos…): cada mes que le toca aparece solo en la lista del mes. */
+export const pagoFijo = pgTable("pago_fijo", {
+  id: serial("id").primaryKey(),
+  lugarId: integer("lugar_id")
+    .notNull()
+    .references(() => pagoLugar.id, { onDelete: "restrict" }),
+  categoria: text("categoria").notNull(),
+  frecuencia: text("frecuencia").$type<FrecuenciaPago>().notNull().default("mensual"),
+  /** Día del mes en que vence (si el mes es más corto, el último día). */
+  dia: integer("dia").notNull(),
+  /** Primer mes en que se paga ("2026-11"): de ahí cuenta la frecuencia. */
+  desde: text("desde").notNull(),
+  moneda: text("moneda").$type<"ARS" | "USD">().notNull().default("ARS"),
+  /** Variable (luz, gas): el monto es un estimado y se sugiere con lo de los meses anteriores. */
+  variable: boolean("variable").notNull().default(false),
+  medio: text("medio").notNull().default(""),
+  /** Días antes para avisar por WhatsApp: null = los de Configuración; -1 = no avisar. */
+  avisoDias: integer("aviso_dias"),
+  /** Nombre, monto, número de cliente o cuenta y nota. */
+  datosCifrados: text("datos_cifrados").notNull(),
+  creadoEn: creadoEn(),
+  actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
+});
+
+export type EstadoPago = "pendiente" | "parcial" | "pagado" | "omitido";
+
+/**
+ * Cada pago de cada mes: los que salen de los fijos, de las suscripciones y de los resúmenes de las tarjetas, y los
+ * sueltos. Guarda el nombre, el lugar y la categoría del momento (si después cambia el fijo, el historial no cambia).
+ */
+export const pagoMes = pgTable(
+  "pago_mes",
+  {
+    id: serial("id").primaryKey(),
+    periodo: text("periodo").notNull(),
+    vence: date("vence").notNull(),
+    lugarId: integer("lugar_id").references(() => pagoLugar.id, { onDelete: "restrict" }),
+    categoria: text("categoria").notNull(),
+    moneda: text("moneda").$type<"ARS" | "USD">().notNull().default("ARS"),
+    estado: text("estado").$type<EstadoPago>().notNull().default("pendiente"),
+    fijoId: integer("fijo_id").references(() => pagoFijo.id, { onDelete: "set null" }),
+    suscripcionId: integer("suscripcion_id").references(() => suscripcion.id, { onDelete: "set null" }),
+    tarjetaId: integer("tarjeta_id").references(() => tarjeta.id, { onDelete: "set null" }),
+    medio: text("medio").notNull().default(""),
+    /** Último pago (el de la parte que completó, si fue en partes). */
+    pagadoEn: date("pagado_en"),
+    avisoPrevioEnviado: boolean("aviso_previo_enviado").notNull().default(false),
+    avisoDiaEnviado: boolean("aviso_dia_enviado").notNull().default(false),
+    /** Comprobante (foto o PDF), cifrado en MEDIA/pagos. */
+    comprobante: text("comprobante"),
+    comprobanteMime: text("comprobante_mime"),
+    /** Nombre, monto esperado, el de la boleta, los pagos (monto y fecha de cada parte), cuenta y nota. */
+    datosCifrados: text("datos_cifrados").notNull(),
+    creadoEn: creadoEn(),
+    actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
+  },
+  (t) => [
+    index("pago_mes_periodo_idx").on(t.periodo),
+    uniqueIndex("pago_mes_fijo_idx").on(t.fijoId, t.periodo),
+    uniqueIndex("pago_mes_suscripcion_idx").on(t.suscripcionId, t.vence),
+    uniqueIndex("pago_mes_tarjeta_idx").on(t.tarjetaId, t.vence),
+  ],
+);
+
+/** El análisis de la IA de cada mes (al cerrarlo, o cuando se pide). */
+export const pagoAnalisis = pgTable("pago_analisis", {
+  periodo: text("periodo").primaryKey(),
+  textoCifrado: text("texto_cifrado").notNull(),
+  creadoEn: creadoEn(),
+});
+
 export type EstadoRecordatorio = "activo" | "pausado" | "cumplido" | "no_confirmado" | "borrado";
 export type ModoInsistencia = "global" | "propia" | "off";
 
@@ -458,7 +553,9 @@ export type AccionEncuesta =
   | { tipo: "aviso"; ocurrenciaId: number }
   | { tipo: "propuesta"; borradorId: number }
   | { tipo: "elegir"; ids: number[]; interpretacion: Record<string, unknown> }
-  | { tipo: "suscripcion"; suscripcionId: number };
+  | { tipo: "suscripcion"; suscripcionId: number }
+  /** "¿Es el ABL de Casa?" (foto de un comprobante): el borrador tiene el pago y la foto. */
+  | { tipo: "pago"; borradorId: number };
 
 /** Encuestas que manda el bot: la clave para descifrar los votos y qué hacer con cada opción. */
 export const encuesta = pgTable(
@@ -557,4 +654,5 @@ export type Nota = typeof nota.$inferSelect;
 export type Grupo = typeof grupo.$inferSelect;
 export type Suscripcion = typeof suscripcion.$inferSelect;
 export type Tarjeta = typeof tarjeta.$inferSelect;
+export type PagoMes = typeof pagoMes.$inferSelect;
 export type TarjetaCuota = typeof tarjetaCuota.$inferSelect;

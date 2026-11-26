@@ -15,6 +15,7 @@ import { Login } from "./paginas/Login";
 import { Logs } from "./paginas/Logs";
 import { Notas } from "./paginas/Notas";
 import { Bloc } from "./paginas/Bloc";
+import { Pagos } from "./paginas/Pagos";
 import { Recordatorios } from "./paginas/Recordatorios";
 import { Suscripciones } from "./paginas/Suscripciones";
 import { Tarjetas } from "./paginas/Tarjetas";
@@ -70,6 +71,7 @@ function Panel() {
         <Route path="/calendario" element={<Calendario />} />
         <Route path="/notas" element={<Notas />} />
         <Route path="/bloc" element={<Bloc />} />
+        <Route path="/pagos" element={<Pagos />} />
         <Route path="/calculadoras" element={<Calculadoras />} />
         <Route path="/suscripciones" element={<Suscripciones />} />
         <Route path="/tarjetas" element={<Tarjetas />} />

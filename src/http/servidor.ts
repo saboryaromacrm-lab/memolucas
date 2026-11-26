@@ -17,6 +17,7 @@ import { rutasAuth } from "./rutas/auth.js";
 import { rutasCalculadoras } from "./rutas/calculadoras.js";
 import { rutasLinks } from "./rutas/links.js";
 import { rutasBloc } from "./rutas/bloc.js";
+import { rutasPagos } from "./rutas/pagos.js";
 import { rutasConfiguracion } from "./rutas/configuracion.js";
 import { rutasEventos } from "./rutas/eventos.js";
 import { rutasNotas } from "./rutas/notas.js";
@@ -109,6 +110,7 @@ export async function crearServidor() {
       await privado.register(rutasCalculadoras);
       await privado.register(rutasLinks);
       await privado.register(rutasBloc);
+      await privado.register(rutasPagos);
       await privado.register(rutasAgente);
       await privado.register(rutasSuscripciones);
       await privado.register(rutasTarjetas);

@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { NavLink, useLocation } from "react-router";
-import { Bell, Calculator, CalendarDays, CreditCard, History, LayoutDashboard, Link2, ListChecks, LogOut, Menu, MessageCircle, NotebookPen, Plus, Repeat, ScrollText, Settings, Sparkles, StickyNote, X } from "lucide-react";
+import { Bell, Calculator, CalendarDays, CreditCard, History, LayoutDashboard, Link2, ListChecks, LogOut, Menu, MessageCircle, NotebookPen, Plus, Repeat, ScrollText, Settings, Sparkles, StickyNote, Wallet, X } from "lucide-react";
 import { post } from "../lib/api";
 import { useSuscripciones } from "../lib/suscripciones";
 import { useConexionVivo, useDatos } from "../lib/vivo";
@@ -16,6 +16,7 @@ const SECCIONES = [
   { a: "/notas", texto: "Notas", icono: StickyNote },
   { a: "/calendario", texto: "Calendario", icono: CalendarDays },
   { a: "/bloc", texto: "Bloc", icono: NotebookPen },
+  { a: "/pagos", texto: "Pagos", icono: Wallet },
   { a: "/calculadoras", texto: "Calculadoras", icono: Calculator },
   { a: "/suscripciones", texto: "Suscripciones", icono: Repeat },
   { a: "/tarjetas", texto: "Tarjetas", icono: CreditCard },

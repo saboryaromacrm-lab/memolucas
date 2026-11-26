@@ -1,12 +1,8 @@
-import crypto from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { and, asc, count, desc, eq, inArray, isNotNull, isNull, lt, notInArray, sql } from "drizzle-orm";
-import sharp from "sharp";
 import { db } from "../db/index.js";
 import { blocImagen, blocPestana, blocVersion } from "../db/schema.js";
-import { rutas } from "../entorno.js";
-import { cifrar, cifrarArchivo, descifrar, descifrarArchivo } from "../lib/cifrado.js";
+import { cifrar, descifrar } from "../lib/cifrado.js";
+import { almacenCifrado, comoWebp } from "./archivos-cifrados.js";
 import { bus } from "../lib/eventos.js";
 import { normalizar } from "../lib/textos.js";
 import { ErrorUsuario } from "./recordatorios.js";
@@ -182,8 +178,9 @@ const LADO_MAX = 1600;
 /** Las miniaturas se ven de 80 px de alto: se guardan al doble para pantallas nítidas. */
 const ALTO_MINI = 160;
 
-const carpetaImagenes = () => path.join(rutas.media, "bloc");
-const rutaImagen = (archivo: string, mini: boolean) => path.join(carpetaImagenes(), `${archivo}${mini ? "-mini" : ""}.bin`);
+const archivos = almacenCifrado("bloc");
+/** Cada imagen son dos archivos: la grande y la miniatura. */
+const nombreMini = (archivo: string) => `${archivo}-mini`;
 
 /** Pega una imagen en la pestaña: se gira según el celular, se comprime en WebP y se guarda cifrada con su miniatura. */
 export async function agregarImagen(pestanaId: number, datos: Buffer): Promise<ImagenBloc> {
@@ -191,16 +188,12 @@ export async function agregarImagen(pestanaId: number, datos: Buffer): Promise<I
   if (p.cerradaEn) throw new ErrorUsuario("Esa pestaña está en la papelera: restaurala para agregarle imágenes.");
   const [{ n }] = await db.select({ n: count() }).from(blocImagen).where(eq(blocImagen.pestanaId, pestanaId));
   if (n >= IMAGENES_MAX) throw new ErrorUsuario(`Cada pestaña lleva hasta ${IMAGENES_MAX} imágenes: borrá alguna o pegala en otra pestaña.`);
-  const [grande, mini] = await Promise.all([
-    sharp(datos).rotate().resize({ width: LADO_MAX, height: LADO_MAX, fit: "inside", withoutEnlargement: true }).webp({ quality: 82 }).toBuffer({ resolveWithObject: true }),
-    sharp(datos).rotate().resize({ width: ALTO_MINI * 3, height: ALTO_MINI, fit: "inside", withoutEnlargement: true }).webp({ quality: 75 }).toBuffer(),
-  ]).catch(() => {
+  const [grande, mini] = await Promise.all([comoWebp(datos, { ancho: LADO_MAX, alto: LADO_MAX }), comoWebp(datos, { ancho: ALTO_MINI * 3, alto: ALTO_MINI }, 75)]).catch(() => {
     throw new ErrorUsuario("No pude leer esa imagen: probá con una captura, un JPG o un PNG.");
   });
-  const archivo = `${Date.now()}-${crypto.randomBytes(8).toString("hex")}`;
-  await fs.mkdir(carpetaImagenes(), { recursive: true });
-  await fs.writeFile(rutaImagen(archivo, false), cifrarArchivo(grande.data));
-  await fs.writeFile(rutaImagen(archivo, true), cifrarArchivo(mini));
+  const archivo = archivos.nuevoNombre();
+  await archivos.guardar(archivo, grande.data);
+  await archivos.guardar(nombreMini(archivo), mini.data);
   const [f] = await db
     .insert(blocImagen)
     .values({ pestanaId, archivo, ancho: grande.info.width, alto: grande.info.height, bytes: grande.data.length })
@@ -218,7 +211,7 @@ async function obtenerImagen(id: number) {
 /** La imagen (o su miniatura) en WebP, descifrada. */
 export async function leerImagen(id: number, mini: boolean): Promise<Buffer> {
   const f = await obtenerImagen(id);
-  const datos = descifrarArchivo(await fs.readFile(rutaImagen(f.archivo, mini)).catch(() => Buffer.alloc(0)));
+  const datos = await archivos.leer(mini ? nombreMini(f.archivo) : f.archivo);
   if (!datos) throw new ErrorUsuario("No se pudo abrir esa imagen.");
   return datos;
 }
@@ -226,22 +219,16 @@ export async function leerImagen(id: number, mini: boolean): Promise<Buffer> {
 export async function borrarImagen(id: number) {
   const f = await obtenerImagen(id);
   await db.delete(blocImagen).where(eq(blocImagen.id, id));
-  await borrarArchivos([f.archivo]);
+  await archivos.borrar([f.archivo, nombreMini(f.archivo)]);
   bus.avisar("bloc");
-}
-
-async function borrarArchivos(archivos: string[]) {
-  for (const a of archivos) for (const mini of [false, true]) await fs.rm(rutaImagen(a, mini), { force: true });
 }
 
 /**
  * Después de borrar pestañas (sus imágenes se van de la base en cascada): borra los archivos que quedaron sin imagen.
  */
 async function borrarArchivosSinImagen() {
-  const nombres = await fs.readdir(carpetaImagenes()).catch(() => [] as string[]);
   const usados = new Set((await db.select({ archivo: blocImagen.archivo }).from(blocImagen)).map((i) => i.archivo));
-  const sueltos = new Set(nombres.map((n) => n.replace(/(-mini)?\.bin$/, "")).filter((a) => !usados.has(a)));
-  await borrarArchivos([...sueltos]);
+  await archivos.borrar((await archivos.nombres()).filter((n) => !usados.has(n.replace(/-mini$/, ""))));
 }
 
 // ───────────── Para el asistente ─────────────

@@ -18,7 +18,7 @@ import { cuandoVence, momentoAviso, sePuedeAvisar } from "./vencimientos.js";
 export type DatosSuscripcion = Pick<Suscripcion, "nombre" | "url" | "fechaInicio" | "fechaVto" | "monto" | "moneda" | "frecuencia" | "observacion"> &
   Partial<Pick<Suscripcion, "tarjetaId" | "sinTarjeta">>;
 
-const PERIODOS: Record<FrecuenciaSuscripcion, DurationLikeObject> = { "7dias": { days: 7 }, quincenal: { days: 15 }, mensual: { months: 1 }, anual: { years: 1 } };
+export const PERIODOS: Record<FrecuenciaSuscripcion, DurationLikeObject> = { "7dias": { days: 7 }, quincenal: { days: 15 }, mensual: { months: 1 }, anual: { years: 1 } };
 
 /** Renovar suma un período a la fecha de vencimiento (no a la de hoy). */
 export const sumarPeriodo = (fecha: string, f: FrecuenciaSuscripcion) => DateTime.fromISO(fecha).plus(PERIODOS[f]).toISODate()!;
