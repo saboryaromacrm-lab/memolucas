@@ -2,7 +2,8 @@ import { z } from "zod";
 import { normalizar, plata } from "../lib/textos.js";
 import { obtenerConfig } from "../servicios/configuracion.js";
 import { guardarAnalisis, listarLugares, resumenPagos, verMes } from "../servicios/pagos.js";
-import { CATEGORIAS, MEDIOS, nombreMes } from "../servicios/pagos-reglas.js";
+import type { FrecuenciaPago, TipoLugar } from "../db/schema.js";
+import { CATEGORIAS, MEDIOS, MESES_DE, nombreMes } from "../servicios/pagos-reglas.js";
 import { hoyIso } from "../lib/fechas.js";
 import { ErrorUsuario } from "../servicios/recordatorios.js";
 import { gastoDelMes, pedir } from "./ia.js";
@@ -17,18 +18,21 @@ async function conTope() {
   return cfg;
 }
 
+const FRECUENCIAS = Object.keys(MESES_DE) as FrecuenciaPago[];
+
 const EsquemaArmado = z.object({
   pagos: z.array(
     z.object({
       lugar: z.string().describe("El lugar tal cual figura en la lista; si es otro, su nombre"),
-      lugar_nuevo_tipo: z.enum(["negocio", "personal"]).describe('Solo si el lugar no está en la lista: "negocio" (un local) o "personal" (casa, auto…)'),
+      // Texto libre (no enum): la IA a veces lo deja vacío para los lugares que ya existen y eso no tiene que romper la lista.
+      lugar_nuevo_tipo: z.string().describe('"negocio" (un local) o "personal" (casa, auto…)'),
       nombre: z.string().describe("Qué se paga, corto: Alquiler, Luz, ABL, Sueldos…"),
       categoria: z.string().describe("Una de las categorías de la lista"),
       monto: z.number().describe("En números (650 mil = 650000). 0 si no lo dijo"),
       variable: z.boolean().describe("true si cambia mes a mes (luz, gas, agua) o dijo 'más o menos'"),
-      moneda: z.enum(["ARS", "USD"]),
+      moneda: z.string().describe('"ARS" (pesos) o "USD" (dólares)'),
       dia: z.number().int().describe("Día del mes en que vence (1 a 31). 'A mitad de mes' = 15; si no lo dijo, 10"),
-      frecuencia: z.enum(["mensual", "bimestral", "trimestral", "cuatrimestral", "semestral", "anual", "unica"]),
+      frecuencia: z.string().describe(`Una de: ${FRECUENCIAS.join(", ")}`),
       medio: z.string().describe('Cómo lo paga: Transferencia, Efectivo, Débito automático… "" si no lo dijo'),
       cuenta: z.string().describe('Número de cliente, partida o cuenta si lo dijo; si no, ""'),
       nota: z.string().describe('Otro dato útil que dijo; si no, ""'),
@@ -51,14 +55,14 @@ Un pago por cosa y por lugar ("luz y gas en casa" son dos). Si dice "en todos lo
       const lugar = lugares.find((l) => normalizar(l.nombre) === normalizar(p.lugar));
       return {
         lugarId: lugar?.id ?? null,
-        lugarNuevo: lugar ? undefined : { nombre: p.lugar.trim(), tipo: p.lugar_nuevo_tipo },
+        lugarNuevo: lugar ? undefined : { nombre: p.lugar.trim(), tipo: (/personal|casa|auto/i.test(`${p.lugar_nuevo_tipo} ${p.lugar}`) ? "personal" : "negocio") as TipoLugar },
         nombre: p.nombre,
         categoria: CATEGORIAS.includes(p.categoria) ? p.categoria : "Otros",
         monto: Math.max(0, p.monto),
         variable: p.variable,
-        moneda: p.moneda,
+        moneda: (/usd|d[oó]lar|u\$s|us\$/i.test(p.moneda) ? "USD" : "ARS") as "ARS" | "USD",
         dia: Math.min(31, Math.max(1, p.dia)),
-        frecuencia: p.frecuencia,
+        frecuencia: (FRECUENCIAS.find((f) => normalizar(p.frecuencia).startsWith(f.slice(0, 5))) ?? "mensual") as FrecuenciaPago,
         medio: p.medio,
         cuenta: p.cuenta,
         avisoDias: null,

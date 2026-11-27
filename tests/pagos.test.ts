@@ -240,14 +240,15 @@ describe("Pagos", () => {
   it("la IA arma la lista de lo que dictaste: usa tus lugares o propone los nuevos", async () => {
     pedir.mockResolvedValue({
       pagos: [
-        { lugar: "express 1", lugar_nuevo_tipo: "negocio", nombre: "Alquiler", categoria: "Alquiler", monto: 650000, variable: false, moneda: "ARS", dia: 5, frecuencia: "mensual", medio: "Transferencia", cuenta: "", nota: "" },
-        { lugar: "Fontana", lugar_nuevo_tipo: "negocio", nombre: "Luz", categoria: "Electricidad", monto: 0, variable: true, moneda: "ARS", dia: 15, frecuencia: "mensual", medio: "", cuenta: "", nota: "" },
+        // Para un lugar que ya existe la IA deja el tipo vacío, y escribe la moneda y la frecuencia a su manera: no rompe.
+        { lugar: "express 1", lugar_nuevo_tipo: "", nombre: "Alquiler", categoria: "Alquiler", monto: 650000, variable: false, moneda: "pesos", dia: 5, frecuencia: "Bimestral", medio: "Transferencia", cuenta: "", nota: "" },
+        { lugar: "Fontana", lugar_nuevo_tipo: "negocio", nombre: "Luz", categoria: "Electricidad", monto: 0, variable: true, moneda: "USD", dia: 15, frecuencia: "mensual", medio: "", cuenta: "", nota: "" },
       ],
     });
     const { fijos } = await armarFijosConIa("en el express 1 pago alquiler 650 mil el 5, y en Fontana la luz a mitad de mes");
-    expect(fijos.map((f) => [f.lugarId, f.lugarNuevo, f.categoria])).toEqual([
-      [express, undefined, "Alquiler"],
-      [null, { nombre: "Fontana", tipo: "negocio" }, "Otros"],
+    expect(fijos.map((f) => [f.lugarId, f.lugarNuevo, f.categoria, f.moneda, f.frecuencia])).toEqual([
+      [express, undefined, "Alquiler", "ARS", "bimestral"],
+      [null, { nombre: "Fontana", tipo: "negocio" }, "Otros", "USD", "mensual"],
     ]);
   });
 
