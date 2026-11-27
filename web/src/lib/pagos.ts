@@ -67,6 +67,12 @@ export function grupoDeAlcance(
 }
 
 const MESES_DE: Record<FrecuenciaPago, number> = { mensual: 1, bimestral: 2, trimestral: 3, cuatrimestral: 4, semestral: 6, anual: 12, unica: 0 };
-/** Lo que sale por mes, en promedio (lo bimestral, la mitad; lo de una sola vez no cuenta). */
-export const totalPorMes = (fijos: { monto: number; moneda: "ARS" | "USD"; frecuencia: FrecuenciaPago }[]): Totales =>
-  fijos.reduce((t, f) => (MESES_DE[f.frecuencia] ? { ...t, [f.moneda]: t[f.moneda] + f.monto / MESES_DE[f.frecuencia] } : t), { ARS: 0, USD: 0 });
+/**
+ * Lo que sale por mes, en promedio (lo bimestral, la mitad; lo de una sola vez no cuenta), con el estimado de cada uno
+ * (en los variables, el promedio de lo pagado). Los que no tienen monto se cuentan aparte: «$ X por mes · 2 sin monto».
+ */
+export function textoPorMes(fijos: { estimado: number; moneda: "ARS" | "USD"; frecuencia: FrecuenciaPago }[]): string {
+  const sinMonto = fijos.filter((f) => !(f.estimado > 0)).length;
+  const totales = fijos.reduce((t, f) => (MESES_DE[f.frecuencia] && f.estimado > 0 ? { ...t, [f.moneda]: t[f.moneda] + f.estimado / MESES_DE[f.frecuencia] } : t), { ARS: 0, USD: 0 });
+  return [sinMonto < fijos.length ? `${plataTotales(totales)} por mes` : "", sinMonto ? `${sinMonto} sin monto` : ""].filter(Boolean).join(" · ");
+}

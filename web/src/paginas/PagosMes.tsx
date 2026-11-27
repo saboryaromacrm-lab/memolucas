@@ -8,6 +8,7 @@ import { ahora } from "../lib/fechas";
 import { aCampo, aNumero, plata } from "../lib/numeros";
 import { diaMes, plataTotales } from "../lib/pagos";
 import type { ConfigPagos, FormaPago, ItemPago, MesPagos, PartePago, PropuestaMes } from "../lib/tipos";
+import { ElegirCategoria } from "./PagosFijo";
 import { RevisionIa, type FilaIa } from "./PagosRevisionIa";
 import { useDatos } from "../lib/vivo";
 
@@ -396,7 +397,7 @@ function ModalDelMes({ i, onCerrar }: { i: ItemPago; onCerrar: () => void }) {
 
 function ModalSuelto({ config, periodo, onCerrar }: { config: ConfigPagos; periodo: string; onCerrar: () => void }) {
   const hoy = ahora().toISODate()!;
-  const [f, setF] = useState({ nombre: "", lugarId: "general-personal", categoria: "Otros", monto: "", moneda: "ARS", fecha: hoy.startsWith(periodo) ? hoy : `${periodo}-01`, nota: "", pagado: true });
+  const [f, setF] = useState({ nombre: "", lugarId: "general-personal", categoria: config.categorias.some((c) => c.nombre === "Otros") ? "Otros" : (config.categorias[0]?.nombre ?? "Otros"), monto: "", moneda: "ARS", fecha: hoy.startsWith(periodo) ? hoy : `${periodo}-01`, nota: "", pagado: true });
   const [formaId, setFormaId] = useState<number | null>(null);
   const accion = useAccion();
   const campo = (k: keyof typeof f) => ({ value: String(f[k]), onChange: (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value }) });
@@ -444,15 +445,10 @@ function ModalSuelto({ config, periodo, onCerrar }: { config: ConfigPagos; perio
             <option value="general-negocio">General · negocio</option>
           </select>
         </label>
-        <label className="block">
+        <div className="block">
           <span className="etiqueta">Categoría</span>
-          <input className="campo" list="categorias-pago" {...campo("categoria")} />
-          <datalist id="categorias-pago">
-            {config.categorias.map((c) => (
-              <option key={c.id} value={c.nombre} />
-            ))}
-          </datalist>
-        </label>
+          <ElegirCategoria categorias={config.categorias} valor={f.categoria} onCambio={(categoria) => setF({ ...f, categoria })} />
+        </div>
         <label className="block">
           <span className="etiqueta">Monto</span>
           <input className="campo" inputMode="decimal" placeholder="0,00" {...campo("monto")} />

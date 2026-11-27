@@ -239,7 +239,7 @@ function cambio(a: FijoPropuesto, b: FijoPropuesto, campo: CampoFijo) {
   return a[clave] !== b[clave];
 }
 
-const comoEntrada = ({ id: _, desde: __, ...f }: Fijo): FijoPropuesto => f;
+const comoEntrada = ({ id: _, desde: __, estimado: ___, ...f }: Fijo): FijoPropuesto => f;
 
 /**
  * Lo que dictaste o pegaste, armado contra lo que ya tenés cargado: pagos nuevos, cambios a los que están y los que

@@ -4,10 +4,31 @@ import { Boton, Interruptor, Modal, useAccion } from "../componentes/ui";
 import { post, put } from "../lib/api";
 import { aCampo, aNumero, plata } from "../lib/numeros";
 import { FRECUENCIAS_PAGO, nombreMes, periodoActual } from "../lib/pagos";
-import type { AlcancePago, ConfigPagos, FijoPago, FijoPropuesto, FrecuenciaPago, LugarPago, Moneda, TipoLugar } from "../lib/tipos";
+import type { AlcancePago, CategoriaPago, ConfigPagos, FijoPago, FijoPropuesto, FrecuenciaPago, LugarPago, Moneda, TipoLugar } from "../lib/tipos";
 
 /** Elegido en «Un lugar»: un lugar nuevo (se crea al guardar). */
 const NUEVO = "nuevo";
+/** Elegido en «Categoría»: una nueva (se suma sola a la lista al guardar). */
+const NUEVA = "__nueva";
+
+/** Elegir la categoría de tu lista, o escribir una nueva (se suma sola a la lista al guardar). */
+export function ElegirCategoria({ categorias, valor, onCambio }: { categorias: CategoriaPago[]; valor: string; onCambio: (categoria: string) => void }) {
+  // Una que no está en la lista (la propuso la IA, por ejemplo) se muestra como nueva.
+  const [nueva, setNueva] = useState(() => !!valor && !categorias.some((c) => c.nombre === valor));
+  return (
+    <>
+      <select className="campo" value={nueva ? NUEVA : valor} onChange={(e) => (e.target.value === NUEVA ? (setNueva(true), onCambio("")) : (setNueva(false), onCambio(e.target.value)))} aria-label="Categoría">
+        {categorias.map((c) => (
+          <option key={c.id} value={c.nombre}>
+            {c.nombre}
+          </option>
+        ))}
+        <option value={NUEVA}>+ Nueva categoría…</option>
+      </select>
+      {nueva && <input className="campo mt-2" autoFocus placeholder="Nombre de la categoría nueva" value={valor} onChange={(e) => onCambio(e.target.value)} aria-label="Nombre de la categoría nueva" />}
+    </>
+  );
+}
 
 /**
  * El formulario de un pago fijo, con todos sus datos. Sin onPropuesta guarda en el servidor (nuevo o editado); con
@@ -34,7 +55,7 @@ export function ModalFijo({
   const [f, setF] = useState({
     lugarId: inicial?.lugarNuevo ? NUEVO : String(base?.lugarId ?? lugarInicial ?? config.lugares[0]?.id ?? ""),
     nombre: base?.nombre ?? "",
-    categoria: base?.categoria ?? "Servicios",
+    categoria: base?.categoria ?? config.categorias[0]?.nombre ?? "Otros",
     monto: aCampo(base?.monto ?? 0, true),
     variable: base?.variable ?? false,
     moneda: (base?.moneda ?? "ARS") as Moneda,
@@ -60,7 +81,7 @@ export function ModalFijo({
   const elegidos = Object.keys(reparto).map(Number);
   const suma = elegidos.reduce((s, id) => s + (aNumero(reparto[id]) ?? 0), 0);
   const repartoValido = elegidos.length >= 2 && (!conPorcentajes || Math.abs(suma - 100) < 0.01);
-  const valido = f.nombre.trim() && (!f.conVencimiento || (Number(f.dia) >= 1 && Number(f.dia) <= 31)) && (alcance === "lugar" ? !!f.lugarId && (f.lugarId !== NUEVO || !!lugarNuevo.nombre.trim()) : alcance === "repartido" ? repartoValido : true);
+  const valido = f.nombre.trim() && f.categoria.trim() && (!f.conVencimiento || (Number(f.dia) >= 1 && Number(f.dia) <= 31)) && (alcance === "lugar" ? !!f.lugarId && (f.lugarId !== NUEVO || !!lugarNuevo.nombre.trim()) : alcance === "repartido" ? repartoValido : true);
   const alternar = (id: number) => setReparto((r) => (id in r ? Object.fromEntries(Object.entries(r).filter(([k]) => Number(k) !== id)) : { ...r, [id]: "" }));
   const conLugarNuevo = alcance === "lugar" && f.lugarId === NUEVO;
   const guardar = async () => {
@@ -96,7 +117,7 @@ export function ModalFijo({
     <Modal
       abierto
       onCerrar={onCerrar}
-      titulo={onPropuesta ? (inicial ? `Revisar ${inicial.nombre}` : "Agregar un pago") : fijo ? `Editar ${fijo.nombre}` : "Nuevo pago fijo"}
+      titulo={onPropuesta ? (inicial ? `Revisar ${inicial.nombre}` : "Agregar un pago") : fijo ? `Editar ${fijo.nombre}` : "Nuevo pago"}
       ancho="max-w-lg"
       pie={
         <>
@@ -199,15 +220,35 @@ export function ModalFijo({
             </div>
           )}
         </div>
-        <label className="col-span-2 block">
+        <div className="col-span-2">
           <span className="etiqueta">Categoría</span>
-          <input className="campo" list="categorias-fijo" {...campo("categoria")} />
-          <datalist id="categorias-fijo">
-            {config.categorias.map((c) => (
-              <option key={c.id} value={c.nombre} />
+          <ElegirCategoria categorias={config.categorias} valor={f.categoria} onCambio={(categoria) => setF({ ...f, categoria })} />
+        </div>
+        <div className="col-span-2">
+          <span className="etiqueta">Monto</span>
+          <div className="grid grid-cols-2 gap-1 rounded-lg bg-slate-100 p-1" role="radiogroup" aria-label="Fijo o variable">
+            {(
+              [
+                [false, "Fijo"],
+                [true, "Variable"],
+              ] as const
+            ).map(([variable, texto]) => (
+              <button
+                key={texto}
+                type="button"
+                role="radio"
+                aria-checked={f.variable === variable}
+                onClick={() => setF({ ...f, variable })}
+                className={`min-h-9 rounded-md text-sm font-medium ${f.variable === variable ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-800"}`}
+              >
+                {texto}
+              </button>
             ))}
-          </datalist>
-        </label>
+          </div>
+          <span className="mt-1 block text-[11px] text-slate-500">
+            {f.variable ? "Cambia mes a mes (luz, gas, agua): poné un monto aproximado; después sugiere el promedio de lo que pagaste." : "Siempre el mismo monto (alquiler, cuota, abono)."}
+          </span>
+        </div>
         <label className="block">
           <span className="etiqueta">{f.variable ? "Monto aproximado" : "Monto"}</span>
           <input className="campo" inputMode="decimal" placeholder="0,00" {...campo("monto")} />
@@ -218,10 +259,6 @@ export function ModalFijo({
             <option value="ARS">Pesos ($)</option>
             <option value="USD">Dólares (US$)</option>
           </select>
-        </label>
-        <label className="col-span-2 flex items-center gap-2 text-sm text-slate-700">
-          <input type="checkbox" className="size-4 accent-marca-oscuro" checked={f.variable} onChange={(e) => setF({ ...f, variable: e.target.checked })} />
-          Cambia mes a mes (luz, gas, agua): sugiere el promedio de lo que pagaste
         </label>
         <div className="col-span-2">
           <Interruptor
