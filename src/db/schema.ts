@@ -365,7 +365,37 @@ export const pagoLugar = pgTable("pago_lugar", {
   creadoEn: creadoEn(),
 });
 
-export type TipoFormaPago = "transferencia" | "efectivo" | "debito_automatico" | "billetera" | "credito" | "debito" | "otro";
+/** tercero: «Lo pagó: …» (otra persona lo pagó por vos: queda en su cuenta corriente). */
+export type TipoFormaPago = "transferencia" | "efectivo" | "debito_automatico" | "billetera" | "credito" | "debito" | "otro" | "tercero";
+
+/**
+ * Personas que pagan cosas por vos (la contadora, un socio…): cada una tiene su cuenta corriente. Lo que pagan va con
+ * la forma de pago «Lo pagó: …» (se crea sola); lo que vos les pagás, en pago_persona_pago.
+ */
+export const pagoPersona = pgTable("pago_persona", {
+  id: serial("id").primaryKey(),
+  nombre: text("nombre").notNull(),
+  /** El saldo al empezar (lo que le debías; negativo, lo que tenías a favor). */
+  datosCifrados: text("datos_cifrados").notNull(),
+  creadoEn: creadoEn(),
+});
+
+/** Lo que le pagaste a una persona (transferencia, efectivo…): baja lo que le debés. No es un gasto: el gasto es lo que ella pagó. */
+export const pagoPersonaPago = pgTable(
+  "pago_persona_pago",
+  {
+    id: serial("id").primaryKey(),
+    personaId: integer("persona_id")
+      .notNull()
+      .references(() => pagoPersona.id, { onDelete: "cascade" }),
+    fecha: date("fecha").notNull(),
+    formaId: integer("forma_id").references(() => pagoForma.id, { onDelete: "set null" }),
+    /** Monto y nota. */
+    datosCifrados: text("datos_cifrados").notNull(),
+    creadoEn: creadoEn(),
+  },
+  (t) => [index("pago_persona_pago_persona_idx").on(t.personaId)],
+);
 
 /**
  * Con qué se paga (Transferencia Galicia, Efectivo, Visa Santander…). Las tarjetas de la sección Tarjetas aparecen solas
@@ -380,6 +410,10 @@ export const pagoForma = pgTable("pago_forma", {
   tarjetaId: integer("tarjeta_id")
     .unique()
     .references(() => tarjeta.id, { onDelete: "set null" }),
+  /** «Lo pagó: …»: la persona que lo pagó por vos (aparece sola, una por persona). */
+  personaId: integer("persona_id")
+    .unique()
+    .references(() => pagoPersona.id, { onDelete: "cascade" }),
   creadoEn: creadoEn(),
 });
 

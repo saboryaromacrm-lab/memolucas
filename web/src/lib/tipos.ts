@@ -370,9 +370,22 @@ export type CampoFijo = "nombre" | "alcance" | "categoria" | "monto" | "variable
 /** totalImagen: el total general que figura en la imagen o el PDF (null si no hay). */
 export type PropuestaPagos = { nuevos: FijoPropuesto[]; cambios: { id: number; despues: FijoPropuesto; campos: CampoFijo[] }[]; borrar: number[]; totalImagen: number | null; mensaje: string };
 
-export type TipoFormaPago = "transferencia" | "efectivo" | "debito_automatico" | "billetera" | "credito" | "debito" | "otro";
+/** tercero: «Lo pagó: …» (otra persona lo pagó por vos; se crea sola con cada cuenta). */
+export type TipoFormaPago = "transferencia" | "efectivo" | "debito_automatico" | "billetera" | "credito" | "debito" | "otro" | "tercero";
 /** Con qué se paga. tarjetaId: la de una tarjeta de Tarjetas (aparece sola). Archivada: ya no se elige, pero el historial la nombra. */
-export type FormaPago = { id: number; nombre: string; tipo: TipoFormaPago; orden: number; archivada: boolean; tarjetaId: number | null };
+export type FormaPago = { id: number; nombre: string; tipo: TipoFormaPago; orden: number; archivada: boolean; tarjetaId: number | null; personaId: number | null };
+/** La cuenta con una persona que paga cosas por vos. saldo: lo que le debés (negativo, a favor). */
+export type CuentaPersona = {
+  id: number;
+  nombre: string;
+  formaId: number | null;
+  saldoInicial: number;
+  saldo: number;
+  movimientos: (
+    | { tipo: "pago"; fecha: string; monto: number; detalle: string; periodo: string; pagoId: number }
+    | { tipo: "lePagaste"; id: number; fecha: string; monto: number; nota: string; forma: string | null }
+  )[];
+};
 /** notasIa: lo que la IA de Pagos tiene que saber de tus negocios. */
 export type ConfigPagos = { lugares: LugarPago[]; fijos: FijoPago[]; formas: FormaPago[]; categorias: string[]; diasAviso: number; mensajes: boolean; notasIa: string };
 /** Lo que leyó la IA para un mes: a qué pago va cada monto (también los que ya tenían ese monto), los pagos nuevos y el total que figura. */

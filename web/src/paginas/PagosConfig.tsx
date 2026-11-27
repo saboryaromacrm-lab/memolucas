@@ -292,7 +292,10 @@ function Formas({ formas }: { formas: FormaPago[] }) {
     [ids[k], ids[k + paso]] = [ids[k + paso], ids[k]];
     void accion(() => put("/api/pagos/formas/orden", { ids }));
   };
-  const opcionesTipo = Object.entries(TIPOS_FORMA).map(([v, t]) => (
+  // «Lo pagó: …» no se carga acá: se crea sola con cada cuenta (Pagos → Cuentas).
+  const opcionesTipo = Object.entries(TIPOS_FORMA)
+    .filter(([v]) => v !== "tercero")
+    .map(([v, t]) => (
     <option key={v} value={v}>
       {t.texto}
     </option>
@@ -304,7 +307,7 @@ function Formas({ formas }: { formas: FormaPago[] }) {
         {activas.map((f, k) => (
           <li key={f.id} className="flex items-center gap-2 border-t border-slate-100 py-1.5 pl-4 pr-1 text-sm text-slate-700 first:border-t-0">
             <IconoForma tipo={f.tipo} className="size-4 text-slate-400" />
-            <span className="min-w-0 flex-1 truncate" title={f.tarjetaId ? "De Tarjetas: el nombre se cambia allá" : TIPOS_FORMA[f.tipo].texto}>
+            <span className="min-w-0 flex-1 truncate" title={f.tarjetaId ? "De Tarjetas: el nombre se cambia allá" : f.personaId ? "De Cuentas: se maneja allá" : TIPOS_FORMA[f.tipo].texto}>
               {f.nombre}
             </span>
             <MenuAcciones
@@ -312,8 +315,8 @@ function Formas({ formas }: { formas: FormaPago[] }) {
               acciones={[
                 k > 0 && { texto: "Subir", icono: <ArrowUp />, onClick: () => mover(k, -1) },
                 k < activas.length - 1 && { texto: "Bajar", icono: <ArrowDown />, onClick: () => mover(k, 1) },
-                !f.tarjetaId && { texto: "Editar", icono: <Pencil />, onClick: () => setEditando(f) },
-                {
+                !f.tarjetaId && !f.personaId && { texto: "Editar", icono: <Pencil />, onClick: () => setEditando(f) },
+                !f.personaId && {
                   texto: "Sacar de la lista",
                   icono: <Trash2 />,
                   peligro: true,

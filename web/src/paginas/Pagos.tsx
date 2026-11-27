@@ -4,13 +4,15 @@ import { Boton, Encabezado } from "../componentes/ui";
 import { nombreMes, periodoActual, sumarMeses } from "../lib/pagos";
 import { useRecordado } from "../lib/recordado";
 import { PagosConfig } from "./PagosConfig";
+import { PagosCuentas } from "./PagosCuentas";
 import { PagosMes } from "./PagosMes";
 import { PagosResumen } from "./PagosResumen";
 
-type Vista = "mes" | "resumen" | "config";
+type Vista = "mes" | "resumen" | "cuentas" | "config";
 const VISTAS: [Vista, string][] = [
   ["mes", "Este mes"],
   ["resumen", "Resumen"],
+  ["cuentas", "Cuentas"],
   ["config", "Configuración"],
 ];
 
@@ -26,7 +28,7 @@ export function Pagos() {
         titulo="Pagos"
         subtitulo="Todo lo que pagás, mes a mes. Se arma solo con lo que cargaste en Configuración."
         acciones={
-          vista.v !== "config" && (
+          (vista.v === "mes" || vista.v === "resumen") && (
             <>
               <div className="flex items-center gap-1">
                 <Boton chico aria-label="Mes anterior" onClick={() => setPeriodo(sumarMeses(periodo, -1))}>
@@ -48,12 +50,12 @@ export function Pagos() {
           )
         }
       />
-      <div className="mb-5 flex gap-1 border-b border-slate-200">
+      <div className="mb-5 flex gap-1 overflow-x-auto border-b border-slate-200">
         {VISTAS.map(([v, texto]) => (
           <button
             key={v}
             onClick={() => setVista({ v })}
-            className={`-mb-px border-b-2 px-3 py-2.5 text-sm font-medium ${vista.v === v ? "border-marca-oscuro text-marca-oscuro" : "border-transparent text-slate-500 hover:text-slate-800"}`}
+            className={`-mb-px shrink-0 whitespace-nowrap border-b-2 px-3 py-2.5 text-sm font-medium ${vista.v === v ? "border-marca-oscuro text-marca-oscuro" : "border-transparent text-slate-500 hover:text-slate-800"}`}
           >
             {texto}
           </button>
@@ -61,6 +63,7 @@ export function Pagos() {
       </div>
       {vista.v === "mes" && <PagosMes periodo={periodo} nuevo={nuevo} onCerrarNuevo={() => setNuevo(false)} onConfigurar={() => setVista({ v: "config" })} />}
       {vista.v === "resumen" && <PagosResumen periodo={periodo} />}
+      {vista.v === "cuentas" && <PagosCuentas />}
       {vista.v === "config" && <PagosConfig />}
     </div>
   );

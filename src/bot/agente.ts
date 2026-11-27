@@ -3,7 +3,7 @@ import { betaZodTool } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { z } from "zod";
 import type { Canal } from "../db/schema.js";
 import { ahora, aLocal, hoyIso, zona } from "../lib/fechas.js";
-import { normalizar } from "../lib/textos.js";
+import { normalizar, plata } from "../lib/textos.js";
 import { obtenerConfig } from "../servicios/configuracion.js";
 import { listarRango } from "./rangos.js";
 import { textoListado, textoTodos } from "../servicios/listados.js";
@@ -16,6 +16,7 @@ import { cargarCompra, listarTarjetas, marcarPago } from "../servicios/tarjetas.
 import { agregarAlBloc, verBloc } from "../servicios/bloc.js";
 import { cargarSaldoIA, fijarSaldoIA } from "../servicios/credito-ia.js";
 import { actualizarPagoDelMes, buscarPendientes, crearSuelto, historialPagos, listarLugares, pagosPendientes, registrarPago, verMes, type ItemPago } from "../servicios/pagos.js";
+import { buscarPersona, listarCuentas, pagarAPersona } from "../servicios/pagos-cuentas.js";
 import { buscarForma, formasActivas } from "../servicios/pagos-formas.js";
 import { periodoDe } from "../servicios/pagos-reglas.js";
 import { diasParaVencer } from "../servicios/vencimientos.js";
@@ -258,7 +259,7 @@ function herramientas(origen: Canal, despues: Despues) {
         id: z.number().int().optional().describe("El id, si ya sabés cuál es"),
         monto: z.number().optional(),
         fecha: z.string().optional().describe("AAAA-MM-DD; sin fecha, hoy"),
-        forma: z.string().optional().describe("Con qué pagó, como lo dijo: transferencia, efectivo, la visa…"),
+        forma: z.string().optional().describe("Con qué pagó, como lo dijo: transferencia, efectivo, la visa… Si lo pagó otra persona por él (\"la contadora pagó el F-931\"), el nombre de esa persona"),
       }),
       run: (p) =>
         seguro(async () => {
@@ -279,6 +280,37 @@ function herramientas(origen: Canal, despues: Despues) {
           }
           const hecho = await registrarPago(item.id, { monto: p.monto, fecha: p.fecha, formaId });
           return { pagado: resumirPago(hecho), faltan: (await pagosPendientes()).filter((i) => i.periodo === hecho.periodo).map(resumirPago) };
+        }),
+    }),
+    betaZodTool({
+      name: "ver_cuentas",
+      description:
+        "Las cuentas con personas que pagan cosas por él (la contadora, un socio…): cuánto les debe (saldo positivo) o tiene a favor (negativo) y los últimos movimientos (\"¿cuánto le debo a la contadora?\").",
+      inputSchema: z.object({ persona: z.string().optional().describe("Sin persona: todas") }),
+      run: ({ persona }) =>
+        seguro(async () => {
+          const cuentas = await listarCuentas();
+          const p = persona ? await buscarPersona(persona) : undefined;
+          if (persona && !p) return `Error: no tiene una cuenta con «${persona}». Sus cuentas: ${cuentas.map((c) => c.nombre).join(", ") || "ninguna"}.`;
+          return cuentas
+            .filter((c) => !p || c.id === p.id)
+            .map((c) => ({ persona: c.nombre, saldo: c.saldo, ultimos: c.movimientos.slice(0, 8).map((m) => ({ fecha: m.fecha, monto: m.monto, que: m.tipo === "pago" ? `pagó ${m.detalle}` : `le pagaste${m.forma ? ` (${m.forma})` : ""}` })) }));
+        }),
+    }),
+    betaZodTool({
+      name: "pagar_a_persona",
+      description:
+        "Anota que él le pagó a una persona de sus cuentas (\"le transferí 500 mil a la contadora\", \"le di 100 mil en efectivo a la contadora\"): baja lo que le debe. No es un gasto nuevo. forma: con qué le pagó (transferencia, efectivo…); si no lo dijo, preguntale.",
+      inputSchema: z.object({ persona: z.string(), monto: z.number(), forma: z.string().optional(), fecha: z.string().optional().describe("AAAA-MM-DD; sin fecha, hoy"), nota: z.string().optional() }),
+      run: (p) =>
+        seguro(async () => {
+          const persona = await buscarPersona(p.persona);
+          if (!persona) return `Error: no tiene una cuenta con «${p.persona}». Sus cuentas: ${(await listarCuentas()).map((c) => c.nombre).join(", ") || "ninguna"} (se crean en el panel, en Pagos → Cuentas).`;
+          const forma = p.forma ? await buscarForma(p.forma) : undefined;
+          if (!forma || forma.tipo === "tercero") return `Error: falta con qué le pagó. Sus formas de pago: ${(await formasActivas()).filter((f) => f.tipo !== "tercero").map((f) => f.nombre).join(", ")}. Preguntale y volvé a llamar con forma.`;
+          await pagarAPersona(persona.id, { monto: p.monto, fecha: p.fecha ?? hoyIso(), formaId: forma.id, nota: p.nota ?? "" });
+          const c = (await listarCuentas()).find((x) => x.id === persona.id)!;
+          return { anotado: `${plata(p.monto)} a ${persona.nombre} con ${forma.nombre}`, saldo: c.saldo, queda: c.saldo > 0 ? `le debe ${plata(c.saldo)}` : c.saldo < 0 ? `tiene ${plata(-c.saldo)} a favor` : "están al día" };
         }),
     }),
     betaZodTool({

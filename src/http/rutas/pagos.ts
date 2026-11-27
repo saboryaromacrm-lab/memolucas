@@ -28,6 +28,7 @@ import {
   resumenPagos,
   verMes,
 } from "../../servicios/pagos.js";
+import { actualizarPersona, borrarPagoAPersona, borrarPersona, crearPersona, listarCuentas, pagarAPersona } from "../../servicios/pagos-cuentas.js";
 import { actualizarForma, borrarForma, crearForma, listarFormas, ordenarFormas, TIPOS_FORMA } from "../../servicios/pagos-formas.js";
 import { CATEGORIAS, periodoDe } from "../../servicios/pagos-reglas.js";
 import { hoyIso } from "../../lib/fechas.js";
@@ -175,8 +176,15 @@ export const rutasPagos: FastifyPluginAsync = async (app) => {
     const { periodo, montos, nuevos } = z
       .object({
         periodo: Periodo,
-        montos: z.array(z.union([z.object({ fijoId: z.number().int().positive(), monto: Monto }), z.object({ itemId: z.number().int().positive(), monto: Monto })])).max(500),
-        nuevos: z.array(Propuesto).max(200),
+        montos: z
+          .array(
+            z.union([
+              z.object({ fijoId: z.number().int().positive(), monto: Monto, pagadoCon: IdForma.optional() }),
+              z.object({ itemId: z.number().int().positive(), monto: Monto, pagadoCon: IdForma.optional() }),
+            ]),
+          )
+          .max(500),
+        nuevos: z.array(Propuesto.extend({ pagadoCon: IdForma.optional() })).max(200),
       })
       .parse(req.body);
     return aplicarMes(periodo, { montos, nuevos });
@@ -206,6 +214,27 @@ export const rutasPagos: FastifyPluginAsync = async (app) => {
   );
   app.delete("/pagos/:id", async (req) => {
     await borrarPago(Id.parse(req.params).id);
+    return { ok: true };
+  });
+
+  // ── Cuentas con personas que pagan cosas por vos (la contadora, un socio…) ──
+  const Persona = z.object({ nombre: z.string().max(60), saldoInicial: z.number().min(-1e12).max(1e12) });
+  app.get("/pagos/cuentas", async () => listarCuentas());
+  app.post("/pagos/cuentas", async (req) => crearPersona(Persona.parse(req.body)));
+  app.put("/pagos/cuentas/:id", async (req) => {
+    await actualizarPersona(Id.parse(req.params).id, Persona.partial().parse(req.body));
+    return { ok: true };
+  });
+  app.delete("/pagos/cuentas/:id", async (req) => {
+    await borrarPersona(Id.parse(req.params).id);
+    return { ok: true };
+  });
+  /** Le pagaste (transferencia, efectivo…). */
+  app.post("/pagos/cuentas/:id/pagos", async (req) =>
+    pagarAPersona(Id.parse(req.params).id, z.object({ monto: Monto, fecha: Fecha, formaId: IdForma, nota: z.string().max(500).default("") }).parse(req.body)),
+  );
+  app.delete("/pagos/cuentas/pagos/:id", async (req) => {
+    await borrarPagoAPersona(Id.parse(req.params).id);
     return { ok: true };
   });
 

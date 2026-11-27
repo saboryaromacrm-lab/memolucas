@@ -21,7 +21,8 @@ export type FilaIa =
   | { tipo: "cambio"; antes: FijoPago; fijo: FijoPropuesto; ia: FijoPropuesto }
   | { tipo: "borrar"; antes: FijoPago }
   | { tipo: "monto"; destino: Destino; monto: number; antes: number | null; pagado: boolean; original: string; ia: Destino | null };
-type Fila = FilaIa & { clave: number; elegido: boolean };
+/** pagadoCon: ya está pagado con esa forma («Lo pagó: Contadora»): al aplicar queda pagado. */
+type Fila = FilaIa & { clave: number; elegido: boolean; pagadoCon?: number };
 
 type Alcanzable = { alcance: AlcancePago; lugarId: number | null; tipo: TipoLugar | null; reparto: RepartoPago | null; lugarNuevo?: { nombre: string } };
 
@@ -87,6 +88,8 @@ export function RevisionIa({
   const [recordar, setRecordar] = useState<string | null>(null);
   const accion = useAccion();
   const siguiente = Math.max(0, ...filas.map((f) => f.clave)) + 1;
+  // Quienes pagan cosas por vos (Cuentas): en el mes se puede marcar que ya lo pagaron.
+  const terceros = modo === "mes" ? config.formas.filter((f) => f.tipo === "tercero" && !f.archivada) : [];
 
   const alcTexto = (a: Alcanzable) => (a.lugarNuevo ? a.lugarNuevo.nombre : describirAlcance(a, config.lugares));
   const fijoDe = (id: number) => config.fijos.find((f) => f.id === id);
@@ -136,13 +139,13 @@ export function RevisionIa({
   const alGuardarFormulario = (fijo: FijoPropuesto) => {
     const clave = editando?.clave ?? null;
     if (clave === null) return setFilas((fs) => [...fs, { tipo: "nuevo", fijo, ia: null, clave: siguiente, elegido: true }]);
-    cambiar(clave, (f) => (f.tipo === "nuevo" || f.tipo === "cambio" ? { ...f, fijo } : f.tipo === "monto" ? { tipo: "nuevo", fijo, ia: null, clave: f.clave, elegido: true } : f));
+    cambiar(clave, (f) => (f.tipo === "nuevo" || f.tipo === "cambio" ? { ...f, fijo } : f.tipo === "monto" ? { tipo: "nuevo", fijo, ia: null, clave: f.clave, elegido: true, pagadoCon: f.pagadoCon } : f));
   };
   /** «Usar ese»: en vez de crear un duplicado, va al que ya tenés. */
   const usarExistente = (fila: Fila & { tipo: "nuevo" }, existente: FijoPago) =>
     cambiar(fila.clave, () =>
       modo === "mes"
-        ? { tipo: "monto", destino: { fijoId: existente.id }, monto: fila.fijo.monto, antes: null, pagado: false, original: fila.fijo.original ?? fila.fijo.nombre, ia: null, clave: fila.clave, elegido: true }
+        ? { tipo: "monto", destino: { fijoId: existente.id }, monto: fila.fijo.monto, antes: null, pagado: false, original: fila.fijo.original ?? fila.fijo.nombre, ia: null, clave: fila.clave, elegido: true, pagadoCon: fila.pagadoCon }
         : { tipo: "cambio", antes: existente, fijo: { ...comoPropuesta(existente), monto: fila.fijo.monto }, ia: comoPropuesta(existente), clave: fila.clave, elegido: true },
     );
   /** «Es un pago nuevo»: el monto deja de ir a un pago que ya tenés y se arma uno nuevo (se abre el formulario). */
@@ -223,8 +226,12 @@ export function RevisionIa({
             () =>
               post("/api/pagos/mes/aplicar", {
                 periodo,
-                montos: elegidas.flatMap((f) => (f.tipo === "monto" && f.monto !== f.antes ? [{ ...("fijoId" in f.destino ? { fijoId: f.destino.fijoId } : { itemId: f.destino.itemId }), monto: f.monto }] : [])),
-                nuevos: elegidas.flatMap((f) => (f.tipo === "nuevo" ? [f.fijo] : [])),
+                montos: elegidas.flatMap((f) =>
+                  f.tipo === "monto" && (f.monto !== f.antes || f.pagadoCon)
+                    ? [{ ...("fijoId" in f.destino ? { fijoId: f.destino.fijoId } : { itemId: f.destino.itemId }), monto: f.monto, ...(f.pagadoCon ? { pagadoCon: f.pagadoCon } : {}) }]
+                    : [],
+                ),
+                nuevos: elegidas.flatMap((f) => (f.tipo === "nuevo" ? [{ ...f.fijo, ...(f.pagadoCon ? { pagadoCon: f.pagadoCon } : {}) }] : [])),
               }),
             `Listo: cargado en ${nombreMes(periodo).toLowerCase()}`,
           );
@@ -372,6 +379,24 @@ export function RevisionIa({
                     <div className="text-xs text-slate-400">
                       En la imagen: «{original}»{f.tipo === "nuevo" && f.ia ? ` ${plata(f.ia.monto, f.ia.moneda)}` : ""}
                     </div>
+                  )}
+                  {terceros.length > 0 && (f.tipo === "monto" || f.tipo === "nuevo") && !(f.tipo === "monto" && f.pagado) && (
+                    <label className="flex flex-wrap items-center gap-1.5 text-xs text-slate-600">
+                      Ya lo pagó:
+                      <select
+                        className="campo h-8 w-auto py-0 text-xs"
+                        value={f.pagadoCon ?? ""}
+                        onChange={(e) => cambiar(f.clave, (x) => ({ ...x, pagadoCon: e.target.value ? Number(e.target.value) : undefined }))}
+                        aria-label="Ya lo pagó"
+                      >
+                        <option value="">nadie (queda para pagar)</option>
+                        {terceros.map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.nombre.replace(/^Lo pagó: /, "")}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
                   )}
                   {dup && (
                     <div className="flex flex-wrap items-center gap-2 text-xs text-amber-700">
