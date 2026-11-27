@@ -1,6 +1,8 @@
+import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { normalizar, plata } from "../lib/textos.js";
 import { obtenerConfig } from "../servicios/configuracion.js";
+import { comoWebp } from "../servicios/archivos-cifrados.js";
 import { guardarAnalisis, listarFijos, listarLugares, resumenPagos, verMes, type Alcance, type FijoPropuesto } from "../servicios/pagos.js";
 import type { FrecuenciaPago, TipoLugar } from "../db/schema.js";
 import { elegirForma, formasActivas, type FormaPago } from "../servicios/pagos-formas.js";
@@ -20,6 +22,38 @@ async function conTope() {
 }
 
 const FRECUENCIAS = Object.keys(MESES_DE) as FrecuenciaPago[];
+
+/** Un archivo para que lo lea la IA: una foto o captura (se achica) o un PDF. */
+export type ArchivoIa = { datos: Buffer; mime: string };
+export const ARCHIVO_IA_MAX_BYTES = 15 * 1024 * 1024;
+
+/** Lo que se le manda a la IA: el archivo (si hay) y el texto. */
+async function contenido(texto: string, archivo?: ArchivoIa): Promise<Anthropic.ContentBlockParam[]> {
+  const bloques: Anthropic.ContentBlockParam[] = [];
+  if (archivo) {
+    if (archivo.datos.length > ARCHIVO_IA_MAX_BYTES) throw new ErrorUsuario("El archivo pesa más de 15 MB.");
+    if (archivo.mime === "application/pdf") {
+      if (!archivo.datos.subarray(0, 5).toString("latin1").startsWith("%PDF")) throw new ErrorUsuario("Ese archivo no es un PDF.");
+      bloques.push({ type: "document", source: { type: "base64", media_type: "application/pdf", data: archivo.datos.toString("base64") } });
+    } else {
+      // Achicada alcanza para leer una tabla, y cuesta menos.
+      const imagen = await comoWebp(archivo.datos, { ancho: 1600, alto: 1600 }, 90).catch(() => {
+        throw new ErrorUsuario("No pude leer esa imagen: mandá una foto, una captura o un PDF.");
+      });
+      bloques.push({ type: "image", source: { type: "base64", media_type: "image/webp", data: imagen.data.toString("base64") } });
+    }
+  }
+  bloques.push({ type: "text", text: texto.trim() || "(Sin texto: leé el archivo.)" });
+  return bloques;
+}
+
+const ALCANCES = `Cada pago corresponde a:
+- "lugar": lo de un local o la casa (alquiler, luz, gas, internet, ABL de ese lugar).
+- "repartido": lo que es de varios locales a la vez y se paga una sola vez (contador, abogado, sistema, seguridad, publicidad): repartir_entre vacío = todos los negocios.
+- "general": lo que no tiene lugar físico (tarjeta de crédito, cuota del auto, préstamos, celular, prepaga): tipo "personal" salvo que diga que es del negocio.`;
+
+/** Lo que te dijo de sus negocios (Configuración de Pagos), para el sistema de la IA. */
+const notasDe = (notas: string) => (notas.trim() ? `\nLo que te dijo de sus negocios (respetalo siempre):\n${notas.trim()}\n` : "");
 
 /** Lo que la IA puede cambiar de un pago que ya está cargado (también es lo que la pantalla muestra como «antes → después»). */
 export const CAMPOS_FIJO = ["nombre", "alcance", "categoria", "monto", "variable", "moneda", "vence", "aviso", "frecuencia", "forma", "cuenta", "nota"] as const;
@@ -201,17 +235,14 @@ const comoEntrada = ({ id: _, desde: __, ...f }: Fijo): FijoPropuesto => f;
  * Lo que dictaste o pegaste, armado contra lo que ya tenés cargado: pagos nuevos, cambios a los que están y los que
  * pediste borrar. No guarda nada: lo revisás y se aplica con `aplicarFijos`.
  */
-export async function armarFijosConIa(texto: string) {
+export async function armarFijosConIa(texto: string, archivo?: ArchivoIa) {
   const cfg = await conTope();
   const [lugares, fijos, formas] = await Promise.all([listarLugares(), listarFijos(), formasActivas()]);
-  const system = `Llevás la lista de pagos que ${cfg.nombreUsuario} hace siempre (sus locales, su casa, sus cosas). Te escribe o dicta como le sale: puede querer agregar pagos, cambiar los que tiene o borrarlos.
+  const system = `Llevás la lista de pagos que ${cfg.nombreUsuario} hace siempre (sus locales, su casa, sus cosas). Te escribe o dicta como le sale, o te pasa una foto o un PDF: puede querer agregar pagos, cambiar los que tiene o borrarlos.
 Lugares que ya tiene: ${lugares.map((l) => `${l.nombre} (${l.tipo})`).join(", ") || "ninguno"}.
 Categorías: ${CATEGORIAS.join(", ")}.
-Formas de pago que tiene: ${formas.map((f) => f.nombre).join(", ") || "ninguna"}.
-Cada pago corresponde a:
-- "lugar": lo de un local o la casa (alquiler, luz, gas, internet, ABL de ese lugar).
-- "repartido": lo que es de varios locales a la vez y se paga una sola vez (contador, abogado, sistema, seguridad, publicidad): repartir_entre vacío = todos los negocios.
-- "general": lo que no tiene lugar físico (tarjeta de crédito, cuota del auto, préstamos, celular, prepaga): tipo "personal" salvo que diga que es del negocio.
+Formas de pago que tiene: ${formas.map((f) => f.nombre).join(", ") || "ninguna"}.${notasDe(cfg.pagosNotasIa)}
+${ALCANCES}
 
 Pagos que ya tiene cargados:
 ${fijos.map((f) => textoFijo(f, lugares, formas)).join("\n") || "ninguno"}
@@ -222,7 +253,7 @@ Qué hacer:
 - Lo que pide borrar va en "borrar". Nunca borres ni cambies algo que no pidió.
 - Si nombra un pago que ya está, es un cambio (no uno nuevo). No inventes montos ni datos que no dijo.
 ${FORMATOS}`;
-  const r = await pedir(cfg, EsquemaArmado, system, [{ role: "user", content: texto }]);
+  const r = await pedir(cfg, EsquemaArmado, system, [{ role: "user", content: await contenido(texto, archivo) }]);
 
   const porId = new Map(fijos.map((f) => [f.id, f]));
   const pedidos = new Map<number, { campo: CampoFijo; valor: string }[]>();
@@ -240,6 +271,59 @@ ${FORMATOS}`;
   const nuevos = r.nuevos.map((p) => nuevoDesde(p, lugares, formas));
   const vacio = !nuevos.length && !cambios.length && !borrar.length;
   return { nuevos, cambios, borrar, mensaje: r.mensaje.trim() || (vacio ? "No encontré nada para agregar, cambiar ni borrar. Probá decirlo de otra forma." : "") };
+}
+
+const EsquemaMes = z.object({
+  montos: z.array(z.object({ id: z.number().int().describe("El id (#) del pago del mes"), monto: z.number() })).describe("Los renglones que son pagos del mes que ya están, con el monto que figura"),
+  nuevos: z.array(Concepto).describe("Los renglones que no están entre los pagos del mes: se crean como pago fijo, con el monto que figura"),
+  total: z.number().describe("El total general que figura (no un subtotal); 0 si no hay"),
+  mensaje: z.string().describe('Lo que no pudiste leer o no entendiste, corto y con voseo. Si leíste todo: ""'),
+});
+
+/**
+ * Los montos de un mes a partir de un archivo o un texto (el resumen de impuestos de la contadora, por ejemplo): a qué
+ * pago del mes va cada monto, qué pagos hay que crear y si la suma da el total que figura. No guarda nada: lo revisás
+ * y se aplica con `aplicarMes`.
+ */
+export async function cargarMesConIa(periodo: string, texto: string, archivo?: ArchivoIa) {
+  const cfg = await conTope();
+  const [lugares, formas, mes] = await Promise.all([listarLugares(), formasActivas(), verMes(periodo)]);
+  const items = mes.items.filter((i) => i.estado !== "omitido");
+  const system = `Cargás los montos de ${mes.nombre.toLowerCase()} en los pagos de ${cfg.nombreUsuario} (sus locales, su casa, sus cosas), a partir de lo que te pasa: una foto, captura o PDF (por ejemplo el resumen de impuestos que le manda la contadora) o un texto.
+Lugares que tiene: ${lugares.map((l) => `${l.nombre} (${l.tipo})`).join(", ") || "ninguno"}.
+Categorías: ${CATEGORIAS.join(", ")}.
+Formas de pago que tiene: ${formas.map((f) => f.nombre).join(", ") || "ninguna"}.${notasDe(cfg.pagosNotasIa)}
+${ALCANCES}
+
+Pagos de este mes (id | pago · a qué corresponde | monto actual | estado):
+${items.map((i) => `#${i.id} | ${i.nombre} · ${i.alcance === "repartido" ? i.partes.map((p) => p.lugar).join(", ") : i.lugar} | ${i.monto} ${i.moneda} | ${i.estado}`).join("\n") || "ninguno"}
+
+Qué hacer:
+- Cada renglón con un monto es un pago. Los subtotales y el total no son pagos: el total general va en "total".
+- Un título o bloque con el nombre de un negocio dice a qué corresponden los renglones de abajo.
+- Si el renglón es uno de los pagos del mes (el mismo concepto y del mismo negocio), va en "montos" con su id. Si no, va en "nuevos".
+- Los nuevos: nombre corto y legible, en mayúsculas y minúsculas y sin la sigla del negocio ("F-931 SYA" → "F-931", "CENTRO EMPL COMERCIO" → "Centro de Empleados de Comercio"); mensuales y variables (los impuestos y cargas cambian cada mes); dia 0 salvo que figure el vencimiento.
+- Montos en números, sin redondear ($ 2.896.003,34 = 2896003.34). No inventes nada que no figure.`;
+  const r = await pedir(cfg, EsquemaMes, system, [{ role: "user", content: await contenido(texto, archivo) }]);
+
+  const porId = new Map(items.map((i) => [i.id, i]));
+  const vistos = new Set<number>();
+  const montos = r.montos.filter((m) => porId.has(m.id) && m.monto >= 0 && !vistos.has(m.id) && !!vistos.add(m.id));
+  const nuevos = r.nuevos.map((p) => nuevoDesde(p, lugares, formas));
+  const suma = [...montos, ...nuevos].reduce((t, x) => t + x.monto, 0);
+  const cambios = montos
+    .map((m) => ({ ...m, item: porId.get(m.id)! }))
+    .filter(({ monto, item }) => Math.abs(monto - item.monto) >= 0.01)
+    .map(({ id, monto, item }) => ({ id, monto, antes: item.monto, nombre: item.nombre, lugar: item.lugar, pagado: item.estado === "pagado" }));
+  const vacio = !cambios.length && !nuevos.length;
+  return {
+    cambios,
+    nuevos,
+    /** Los que ya tenían ese monto. */
+    iguales: montos.length - cambios.length,
+    control: r.total > 0 ? { suma: Math.round(suma * 100) / 100, total: r.total } : null,
+    mensaje: r.mensaje.trim() || (vacio && !montos.length ? "No encontré montos para cargar. Probá con otra foto o decilo con texto." : ""),
+  };
 }
 
 const EsquemaAnalisis = z.object({ vinetas: z.array(z.string()).describe("De 3 a 6 viñetas cortas") });

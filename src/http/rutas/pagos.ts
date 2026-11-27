@@ -1,12 +1,13 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { analizarMesPagos, armarFijosConIa } from "../../bot/ia-pagos.js";
+import { analizarMesPagos, ARCHIVO_IA_MAX_BYTES, armarFijosConIa, cargarMesConIa, type ArchivoIa } from "../../bot/ia-pagos.js";
 import { actualizarConfig, obtenerConfig } from "../../servicios/configuracion.js";
 import {
   actualizarFijo,
   aplicarFijos,
   actualizarLugar,
   actualizarPagoDelMes,
+  aplicarMes,
   borrarComprobante,
   borrarFijo,
   borrarLugar,
@@ -64,6 +65,17 @@ const Fijo = Alcance.extend({
   nota: z.string().max(500),
 });
 
+/** Lo que se le pasa a la IA: texto y, opcional, una foto o un PDF (en base64). */
+const PedidoIa = z
+  .object({
+    texto: z.string().max(8000).default(""),
+    archivo: z.object({ mime: z.string().regex(/^(image\/[\w.+-]+|application\/pdf)$/, "Mandá una foto o un PDF."), base64: z.string() }).optional(),
+  })
+  .refine((p) => p.texto.trim().length >= 3 || p.archivo, "Escribí qué querés o pegá una foto o un PDF.");
+const archivoDe = (a?: { mime: string; base64: string }): ArchivoIa | undefined => (a ? { mime: a.mime, datos: Buffer.from(a.base64, "base64") } : undefined);
+/** El archivo viaja en base64 (un tercio más grande). */
+const LIMITE_IA = Math.ceil(ARCHIVO_IA_MAX_BYTES * 1.4) + 64 * 1024;
+
 const mesDe = (query: unknown) => z.object({ periodo: Periodo.optional() }).parse(query).periodo ?? periodoDe(hoyIso());
 
 export const rutasPagos: FastifyPluginAsync = async (app) => {
@@ -82,11 +94,23 @@ export const rutasPagos: FastifyPluginAsync = async (app) => {
   // ── Configuración: lugares, fijos y ajustes ──
   app.get("/pagos/config", async () => {
     const cfg = await obtenerConfig();
-    return { lugares: await listarLugares(), fijos: await listarFijos(), formas: await listarFormas(), categorias: CATEGORIAS, diasAviso: cfg.pagosDiasAviso, mensajes: cfg.pagosMensajes };
+    return {
+      lugares: await listarLugares(),
+      fijos: await listarFijos(),
+      formas: await listarFormas(),
+      categorias: CATEGORIAS,
+      diasAviso: cfg.pagosDiasAviso,
+      mensajes: cfg.pagosMensajes,
+      notasIa: cfg.pagosNotasIa,
+    };
   });
   app.put("/pagos/ajustes", async (req) => {
-    const a = z.object({ diasAviso: z.number().int().min(0).max(30), mensajes: z.boolean() }).partial().parse(req.body);
-    await actualizarConfig({ ...(a.diasAviso !== undefined ? { pagosDiasAviso: a.diasAviso } : {}), ...(a.mensajes !== undefined ? { pagosMensajes: a.mensajes } : {}) });
+    const a = z.object({ diasAviso: z.number().int().min(0).max(30), mensajes: z.boolean(), notasIa: z.string().max(4000) }).partial().parse(req.body);
+    await actualizarConfig({
+      ...(a.diasAviso !== undefined ? { pagosDiasAviso: a.diasAviso } : {}),
+      ...(a.mensajes !== undefined ? { pagosMensajes: a.mensajes } : {}),
+      ...(a.notasIa !== undefined ? { pagosNotasIa: a.notasIa.trim() } : {}),
+    });
     return { ok: true };
   });
 
@@ -133,10 +157,26 @@ export const rutasPagos: FastifyPluginAsync = async (app) => {
   });
 
   // ── IA ──
-  app.post("/pagos/ia/armar", async (req) => armarFijosConIa(z.object({ texto: z.string().min(3).max(8000) }).parse(req.body).texto));
+  app.post("/pagos/ia/armar", { bodyLimit: LIMITE_IA }, async (req) => {
+    const p = PedidoIa.parse(req.body);
+    return armarFijosConIa(p.texto, archivoDe(p.archivo));
+  });
+  /** Los montos de un mes leídos de una foto, un PDF o un texto (el resumen de la contadora): para revisar. */
+  app.post("/pagos/ia/mes", { bodyLimit: LIMITE_IA }, async (req) => {
+    const p = PedidoIa.and(z.object({ periodo: Periodo })).parse(req.body);
+    return cargarMesConIa(p.periodo, p.texto, archivoDe(p.archivo));
+  });
   app.post("/pagos/ia/analizar", async (req) => ({ texto: await analizarMesPagos(z.object({ periodo: Periodo }).parse(req.body).periodo) }));
 
   // ── Los pagos del mes ──
+  /** Lo que leyó la IA y revisaste: los montos van a los pagos del mes y lo que faltaba se crea. */
+  app.post("/pagos/mes/aplicar", async (req) => {
+    const Propuesto = Fijo.extend({ lugarNuevo: Lugar.optional() });
+    const { periodo, montos, nuevos } = z
+      .object({ periodo: Periodo, montos: z.array(z.object({ id: z.number().int().positive(), monto: Monto })).max(500), nuevos: z.array(Propuesto).max(200) })
+      .parse(req.body);
+    return aplicarMes(periodo, { montos, nuevos });
+  });
   app.post("/pagos", async (req) =>
     crearSuelto(
       z

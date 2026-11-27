@@ -111,6 +111,8 @@ export const configuracion = pgTable("configuracion", {
   pagosDesde: text("pagos_desde"),
   pagosDiasAviso: integer("pagos_dias_aviso").notNull().default(3),
   pagosMensajes: boolean("pagos_mensajes").notNull().default(true),
+  /** Lo que la IA de Pagos tiene que saber de tus negocios (qué locales son de qué empresa, cómo se reparte algo…). */
+  pagosNotasIa: text("pagos_notas_ia").notNull().default(""),
   /** Mes del que ya se mandó el mensaje del día 1 y el de mitad de mes. */
   pagosMensajeInicio: text("pagos_mensaje_inicio"),
   pagosMensajeMitad: text("pagos_mensaje_mitad"),

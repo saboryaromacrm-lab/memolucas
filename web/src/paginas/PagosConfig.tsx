@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { ArrowDown, ArrowUp, Building2, Home, Pencil, Plus, Sparkles, Trash2 } from "lucide-react";
+import { archivoParaIa, CampoIa } from "../componentes/CampoIa";
 import { ElegirForma, IconoForma, TIPOS_FORMA } from "../componentes/FormasPago";
 import { Boton, Cargando, Interruptor, MenuAcciones, Modal, useAccion } from "../componentes/ui";
 import { del, post, put } from "../lib/api";
@@ -150,6 +151,7 @@ const cantidad = (n: number, uno: string, varios: string) => (n ? [`${n} ${n ===
 
 function CargarConIa({ config }: { config: ConfigPagos }) {
   const [texto, setTexto] = useState("");
+  const [archivo, setArchivo] = useState<File | null>(null);
   const [armando, setArmando] = useState(false);
   const [items, setItems] = useState<ItemIa[] | null>(null);
   const [mensaje, setMensaje] = useState("");
@@ -174,7 +176,7 @@ function CargarConIa({ config }: { config: ConfigPagos }) {
   const armar = async () => {
     setArmando(true);
     setMensaje("");
-    const r = await accion(() => post<PropuestaPagos>("/api/pagos/ia/armar", { texto }));
+    const r = await accion(async () => post<PropuestaPagos>("/api/pagos/ia/armar", { texto, archivo: archivo ? await archivoParaIa(archivo) : undefined }));
     setArmando(false);
     if (!r) return;
     const cargado = (id: number) => config.fijos.find((f) => f.id === id);
@@ -206,6 +208,7 @@ function CargarConIa({ config }: { config: ConfigPagos }) {
     if (await accion(() => post("/api/pagos/fijos/aplicar", { nuevos, cambios, borrar }), `Listo: ${listo.join(", ")}`)) {
       cerrar();
       setTexto("");
+      setArchivo(null);
     }
   };
   const elegirTodos = (elegido: boolean) => items && setItems(items.map((i) => ({ ...i, elegido })));
@@ -216,16 +219,29 @@ function CargarConIa({ config }: { config: ConfigPagos }) {
         <Sparkles className="size-4" /> Cargá o cambiá con IA
       </h2>
       <p className="mt-1 text-sm text-slate-600">
-        Escribí o dictá lo que pagás o lo que querés cambiar, como te salga. La IA arma los cambios y los revisás antes de guardar (cuesta unos centavos).
+        Escribí o dictá lo que pagás o lo que querés cambiar, como te salga, o pegá una foto o un PDF. La IA arma los cambios y los revisás antes de guardar (cuesta unos centavos).
       </p>
-      <textarea
-        className="campo mt-2 min-h-24"
-        value={texto}
-        onChange={(e) => setTexto(e.target.value)}
-        placeholder="En el Express 1 pago alquiler 650 mil el 5 y la luz más o menos 70 mil… · Sacale el vencimiento a todo · El alquiler de Fontana subió a 850 mil · Borrá el gimnasio"
-      />
+      <div className="mt-2">
+        <CampoIa
+          texto={texto}
+          onTexto={setTexto}
+          archivo={archivo}
+          onArchivo={setArchivo}
+          placeholder="En el Express 1 pago alquiler 650 mil el 5 y la luz más o menos 70 mil… · Sacale el vencimiento a todo · El alquiler de Fontana subió a 850 mil · Borrá el gimnasio"
+        />
+      </div>
+      <details className="mt-2 text-sm">
+        <summary className="cursor-pointer text-slate-600">Lo que la IA tiene que saber de tus negocios</summary>
+        <textarea
+          className="campo mt-2 min-h-20"
+          defaultValue={config.notasIa}
+          placeholder="Qué locales son de qué empresa, cómo se reparte algo, cómo le decís a cada cosa…"
+          onBlur={(e) => e.target.value.trim() !== config.notasIa && void accion(() => put("/api/pagos/ajustes", { notasIa: e.target.value }), "Guardado")}
+        />
+        <span className="text-xs text-slate-500">La IA lo tiene en cuenta cada vez que arma, cambia o carga pagos (también con fotos y PDF).</span>
+      </details>
       <div className="mt-2 flex flex-wrap items-center gap-3">
-        <Boton variante="primario" icono={<Sparkles className="size-4" />} cargando={armando} disabled={texto.trim().length < 3} onClick={() => void armar()}>
+        <Boton variante="primario" icono={<Sparkles className="size-4" />} cargando={armando} disabled={texto.trim().length < 3 && !archivo} onClick={() => void armar()}>
           Armar con IA
         </Boton>
         {mensaje && !items && <p className="text-sm text-amber-700">{mensaje}</p>}

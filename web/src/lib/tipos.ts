@@ -368,4 +368,13 @@ export type PropuestaPagos = { nuevos: FijoPropuesto[]; cambios: { id: number; d
 export type TipoFormaPago = "transferencia" | "efectivo" | "debito_automatico" | "billetera" | "credito" | "debito" | "otro";
 /** Con qué se paga. tarjetaId: la de una tarjeta de Tarjetas (aparece sola). Archivada: ya no se elige, pero el historial la nombra. */
 export type FormaPago = { id: number; nombre: string; tipo: TipoFormaPago; orden: number; archivada: boolean; tarjetaId: number | null };
-export type ConfigPagos = { lugares: LugarPago[]; fijos: FijoPago[]; formas: FormaPago[]; categorias: string[]; diasAviso: number; mensajes: boolean };
+/** notasIa: lo que la IA de Pagos tiene que saber de tus negocios. */
+export type ConfigPagos = { lugares: LugarPago[]; fijos: FijoPago[]; formas: FormaPago[]; categorias: string[]; diasAviso: number; mensajes: boolean; notasIa: string };
+/** Lo que leyó la IA para un mes: montos que cambian, pagos nuevos (con el monto del mes) y el control con el total que figura. */
+export type PropuestaMes = {
+  cambios: { id: number; monto: number; antes: number; nombre: string; lugar: string; pagado: boolean }[];
+  nuevos: FijoPropuesto[];
+  iguales: number;
+  control: { suma: number; total: number } | null;
+  mensaje: string;
+};
