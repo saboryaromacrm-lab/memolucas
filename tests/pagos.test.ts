@@ -310,10 +310,10 @@ describe("Pagos", () => {
       mensaje: "",
       nuevos: [
         // Para un lugar que ya existe la IA deja el tipo vacío, y escribe la moneda y la frecuencia a su manera: no rompe.
-        { alcance: "lugar", lugar: "express 1", tipo: "", repartir_entre: [], nombre: "Alquiler", categoria: "Alquiler", monto: 650000, variable: false, moneda: "pesos", dia: 5, frecuencia: "Bimestral", forma: "transferencia", cuenta: "", nota: "" },
-        { alcance: "lugar", lugar: "Fontana", tipo: "negocio", repartir_entre: [], nombre: "Luz", categoria: "Electricidad", monto: 0, variable: true, moneda: "USD", dia: 15, frecuencia: "mensual", forma: "", cuenta: "", nota: "" },
-        { alcance: "repartido", lugar: "", tipo: "", repartir_entre: [], nombre: "Contador", categoria: "Honorarios", monto: 85000, variable: false, moneda: "ARS", dia: 10, frecuencia: "mensual", forma: "", cuenta: "", nota: "" },
-        { alcance: "general", lugar: "", tipo: "personal", repartir_entre: [], nombre: "Cuota Fiat", categoria: "Préstamos y cuotas", monto: 300000, variable: false, moneda: "ARS", dia: 0, frecuencia: "mensual", forma: "", cuenta: "", nota: "" },
+        { alcance: "lugar", lugar: "express 1", tipo: "", repartir_entre: [], nombre: "Alquiler", categoria: "Alquiler", monto: 650000, variable: false, moneda: "pesos", dia: 5, frecuencia: "Bimestral", forma: "transferencia", cuenta: "", nota: "", como_figura: "" },
+        { alcance: "lugar", lugar: "Fontana", tipo: "negocio", repartir_entre: [], nombre: "Luz", categoria: "Electricidad", monto: 0, variable: true, moneda: "USD", dia: 15, frecuencia: "mensual", forma: "", cuenta: "", nota: "", como_figura: "" },
+        { alcance: "repartido", lugar: "", tipo: "", repartir_entre: [], nombre: "Contador", categoria: "Honorarios", monto: 85000, variable: false, moneda: "ARS", dia: 10, frecuencia: "mensual", forma: "", cuenta: "", nota: "", como_figura: "" },
+        { alcance: "general", lugar: "", tipo: "personal", repartir_entre: [], nombre: "Cuota Fiat", categoria: "Préstamos y cuotas", monto: 300000, variable: false, moneda: "ARS", dia: 0, frecuencia: "mensual", forma: "", cuenta: "", nota: "", como_figura: "" },
       ],
     });
     const { nuevos: fijos } = await armarFijosConIa("en el express 1 pago alquiler 650 mil el 5, y en Fontana la luz a mitad de mes");
@@ -390,13 +390,13 @@ describe("Pagos", () => {
     const ips = await item("2026-11", "IPS");
     pedir.mockResolvedValue({
       montos: [
-        { id: f931.id, monto: 493430 },
-        { id: ips.id, monto: 26930 }, // Mismo monto: no se muestra como cambio.
-        { id: f931.id, monto: 1 }, // Repetido: se toma el primero.
-        { id: 999, monto: 5 }, // No existe: se ignora.
+        { id: f931.id, monto: 493430, como_figura: "F-931" },
+        { id: ips.id, monto: 26930, como_figura: "IPS" }, // Mismo monto: igual se muestra (cuenta para el total).
+        { id: f931.id, monto: 1, como_figura: "F-931" }, // Repetido: se toma el primero.
+        { id: 999, monto: 5, como_figura: "?" }, // No existe: se ignora.
       ],
       nuevos: [
-        { alcance: "lugar", lugar: "Coffit", tipo: "negocio", repartir_entre: [], nombre: "UTHGRA", categoria: "Sueldos y cargas", monto: 35412, variable: true, moneda: "ARS", dia: 0, frecuencia: "mensual", forma: "", cuenta: "", nota: "" },
+        { alcance: "lugar", lugar: "Coffit", tipo: "negocio", repartir_entre: [], nombre: "UTHGRA", categoria: "Sueldos y cargas", monto: 35412, variable: true, moneda: "ARS", dia: 0, frecuencia: "mensual", forma: "", cuenta: "", nota: "", como_figura: "UTHGRA" },
       ],
       total: 556000,
       mensaje: "",
@@ -408,19 +408,28 @@ describe("Pagos", () => {
     expect(mensajes[0].content[0]).toMatchObject({ type: "image", source: { media_type: "image/webp" } });
     expect(system).toContain(`#${f931.id} | F-931 · Coffit | 450000 ARS | pendiente`);
     expect(system).toContain("Coffit es otro negocio.");
-    expect(r.cambios).toEqual([{ id: f931.id, monto: 493430, antes: 450000, nombre: "F-931", lugar: "Coffit", pagado: false }]);
-    expect(r.iguales).toBe(1);
-    expect(r.nuevos.map((n) => [n.nombre, n.lugarId, n.monto, n.variable, n.dia])).toEqual([["UTHGRA", coffit, 35412, true, null]]);
-    // La suma no da el total: la pantalla avisa.
-    expect(r.control).toEqual({ suma: 493430 + 26930 + 35412, total: 556000 });
+    const fijoF931 = (await listarFijos()).find((f) => f.nombre === "F-931")!.id;
+    expect(r.montos).toEqual([
+      { fijoId: fijoF931, monto: 493430, antes: 450000, nombre: "F-931", lugar: "Coffit", pagado: false, original: "F-931" },
+      expect.objectContaining({ monto: 26930, antes: 26930, original: "IPS" }),
+    ]);
+    expect(r.nuevos.map((n) => [n.nombre, n.lugarId, n.monto, n.variable, n.dia, n.original])).toEqual([["UTHGRA", coffit, 35412, true, null, "UTHGRA"]]);
+    expect(r.totalImagen).toBe(556000);
 
     // Se aplica: el monto va al pago del mes y lo nuevo queda como fijo desde ese mes.
     const { app, headers } = await panelConSesion();
-    const res = await app.inject({ method: "POST", url: "/api/pagos/mes/aplicar", headers, payload: { periodo: "2026-11", montos: [{ id: f931.id, monto: 493430 }], nuevos: r.nuevos } });
+    const res = await app.inject({ method: "POST", url: "/api/pagos/mes/aplicar", headers, payload: { periodo: "2026-11", montos: [{ fijoId: fijoF931, monto: 493430 }], nuevos: r.nuevos } });
     expect(res.json()).toEqual({ cambiados: 1, creados: 1 });
     expect(await item("2026-11", "F-931")).toMatchObject({ monto: 493430, boleta: 493430 });
     expect(await item("2026-11", "UTHGRA")).toMatchObject({ monto: 35412, lugar: "Coffit", vence: null });
     expect((await item("2026-12", "UTHGRA")).monto).toBe(35412);
+    // Con el mes cambiado en la revisión, el monto va al pago de ese concepto en ese mes.
+    await app.inject({ method: "POST", url: "/api/pagos/mes/aplicar", headers, payload: { periodo: "2026-12", montos: [{ fijoId: fijoF931, monto: 510000 }], nuevos: [] } });
+    expect((await item("2026-12", "F-931")).monto).toBe(510000);
+    expect((await item("2026-11", "F-931")).monto).toBe(493430);
+    // Un pago puntual de otro mes no se puede: avisa en vez de cargarlo mal.
+    const otro = await app.inject({ method: "POST", url: "/api/pagos/mes/aplicar", headers, payload: { periodo: "2026-12", montos: [{ itemId: f931.id, monto: 1 }], nuevos: [] } });
+    expect(otro.json().error).toContain("no está en diciembre 2026");
     // Sin texto ni archivo no se puede; un PDF falso tampoco.
     expect((await app.inject({ method: "POST", url: "/api/pagos/ia/mes", headers, payload: { periodo: "2026-11", texto: "" } })).statusCode).toBe(400);
     const pdf = await app.inject({ method: "POST", url: "/api/pagos/ia/mes", headers, payload: { periodo: "2026-11", archivo: { mime: "application/pdf", base64: Buffer.from("hola").toString("base64") } } });

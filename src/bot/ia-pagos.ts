@@ -75,6 +75,7 @@ const Concepto = z.object({
   forma: z.string().describe('Con qué lo paga: una de sus formas de pago, tal cual figura. "" si no lo dijo'),
   cuenta: z.string().describe('Número de cliente, partida o cuenta si lo dijo; si no, ""'),
   nota: z.string().describe('Otro dato útil que dijo; si no, ""'),
+  como_figura: z.string().describe('El renglón tal cual figura en la imagen o el texto ("F-931 SYA"); "" si no viene de un renglón'),
 });
 
 const EsquemaArmado = z.object({
@@ -89,6 +90,7 @@ const EsquemaArmado = z.object({
     )
     .describe("Un renglón por cada campo que cambia de cada pago de la lista"),
   borrar: z.array(z.number().int()).describe("Los id (#) de los pagos de la lista que pidió borrar"),
+  total: z.number().describe("Si te pasó un resumen con un total general (no un subtotal), ese total; si no, 0"),
   mensaje: z.string().describe('Lo que no pudiste hacer y por qué (no entendiste, no encontraste lo que nombró), corto y con voseo. Si hiciste todo: ""'),
 });
 
@@ -139,6 +141,7 @@ const nuevoDesde = (p: z.infer<typeof Concepto>, lugares: Lugar[], formas: Forma
   cuenta: p.cuenta,
   avisoDias: null,
   nota: p.nota,
+  ...(p.como_figura.trim() ? { original: p.como_figura.trim() } : {}),
 });
 
 const textoAlcance = (f: Alcance, lugares: Lugar[]) => {
@@ -270,11 +273,19 @@ ${FORMATOS}`;
   });
   const nuevos = r.nuevos.map((p) => nuevoDesde(p, lugares, formas));
   const vacio = !nuevos.length && !cambios.length && !borrar.length;
-  return { nuevos, cambios, borrar, mensaje: r.mensaje.trim() || (vacio ? "No encontré nada para agregar, cambiar ni borrar. Probá decirlo de otra forma." : "") };
+  return {
+    nuevos,
+    cambios,
+    borrar,
+    totalImagen: r.total > 0 ? r.total : null,
+    mensaje: r.mensaje.trim() || (vacio ? "No encontré nada para agregar, cambiar ni borrar. Probá decirlo de otra forma." : ""),
+  };
 }
 
 const EsquemaMes = z.object({
-  montos: z.array(z.object({ id: z.number().int().describe("El id (#) del pago del mes"), monto: z.number() })).describe("Los renglones que son pagos del mes que ya están, con el monto que figura"),
+  montos: z
+    .array(z.object({ id: z.number().int().describe("El id (#) del pago del mes"), monto: z.number(), como_figura: z.string().describe("El renglón tal cual figura") }))
+    .describe("Los renglones que son pagos del mes que ya están, con el monto que figura"),
   nuevos: z.array(Concepto).describe("Los renglones que no están entre los pagos del mes: se crean como pago fijo, con el monto que figura"),
   total: z.number().describe("El total general que figura (no un subtotal); 0 si no hay"),
   mensaje: z.string().describe('Lo que no pudiste leer o no entendiste, corto y con voseo. Si leíste todo: ""'),
@@ -308,21 +319,21 @@ Qué hacer:
 
   const porId = new Map(items.map((i) => [i.id, i]));
   const vistos = new Set<number>();
-  const montos = r.montos.filter((m) => porId.has(m.id) && m.monto >= 0 && !vistos.has(m.id) && !!vistos.add(m.id));
+  const montos = r.montos
+    .filter((m) => porId.has(m.id) && m.monto >= 0 && !vistos.has(m.id) && !!vistos.add(m.id))
+    .map((m) => {
+      const i = porId.get(m.id)!;
+      // A qué va: al concepto de todos los meses (así sirve aunque cambies el mes) o, si no sale de uno, a ese pago.
+      return { ...(i.fijoId ? { fijoId: i.fijoId } : { itemId: i.id }), monto: m.monto, antes: i.monto, nombre: i.nombre, lugar: i.lugar, pagado: i.estado === "pagado", original: m.como_figura.trim() };
+    });
   const nuevos = r.nuevos.map((p) => nuevoDesde(p, lugares, formas));
-  const suma = [...montos, ...nuevos].reduce((t, x) => t + x.monto, 0);
-  const cambios = montos
-    .map((m) => ({ ...m, item: porId.get(m.id)! }))
-    .filter(({ monto, item }) => Math.abs(monto - item.monto) >= 0.01)
-    .map(({ id, monto, item }) => ({ id, monto, antes: item.monto, nombre: item.nombre, lugar: item.lugar, pagado: item.estado === "pagado" }));
-  const vacio = !cambios.length && !nuevos.length;
   return {
-    cambios,
+    periodo,
+    /** Todo lo que leyó, también lo que ya tenía ese monto (así la suma se compara con el total). */
+    montos,
     nuevos,
-    /** Los que ya tenían ese monto. */
-    iguales: montos.length - cambios.length,
-    control: r.total > 0 ? { suma: Math.round(suma * 100) / 100, total: r.total } : null,
-    mensaje: r.mensaje.trim() || (vacio && !montos.length ? "No encontré montos para cargar. Probá con otra foto o decilo con texto." : ""),
+    totalImagen: r.total > 0 ? r.total : null,
+    mensaje: r.mensaje.trim() || (!montos.length && !nuevos.length ? "No encontré montos para cargar. Probá con otra foto o decilo con texto." : ""),
   };
 }
 

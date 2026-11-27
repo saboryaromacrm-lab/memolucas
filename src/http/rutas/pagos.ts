@@ -173,7 +173,11 @@ export const rutasPagos: FastifyPluginAsync = async (app) => {
   app.post("/pagos/mes/aplicar", async (req) => {
     const Propuesto = Fijo.extend({ lugarNuevo: Lugar.optional() });
     const { periodo, montos, nuevos } = z
-      .object({ periodo: Periodo, montos: z.array(z.object({ id: z.number().int().positive(), monto: Monto })).max(500), nuevos: z.array(Propuesto).max(200) })
+      .object({
+        periodo: Periodo,
+        montos: z.array(z.union([z.object({ fijoId: z.number().int().positive(), monto: Monto }), z.object({ itemId: z.number().int().positive(), monto: Monto })])).max(500),
+        nuevos: z.array(Propuesto).max(200),
+      })
       .parse(req.body);
     return aplicarMes(periodo, { montos, nuevos });
   });

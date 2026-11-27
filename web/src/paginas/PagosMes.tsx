@@ -1,13 +1,14 @@
 import { useRef, useState, type ReactNode } from "react";
-import { AlertTriangle, Ban, Check, CheckCircle2, FileText, Paperclip, Pencil, RotateCcw, Sparkles, Trash2, Undo2, Upload, Wallet } from "lucide-react";
+import { AlertTriangle, Ban, Check, FileText, Paperclip, Pencil, RotateCcw, Sparkles, Trash2, Undo2, Upload, Wallet } from "lucide-react";
 import { archivoParaIa, CampoIa } from "../componentes/CampoIa";
 import { ElegirForma } from "../componentes/FormasPago";
 import { Boton, Cargando, Deslizable, MenuAcciones, Modal, Vacio, useAccion } from "../componentes/ui";
 import { api, del, post, put } from "../lib/api";
 import { ahora } from "../lib/fechas";
 import { aCampo, aNumero, plata } from "../lib/numeros";
-import { describirAlcance, diaMes, nombreMes, plataTotales } from "../lib/pagos";
-import type { ConfigPagos, FijoPropuesto, FormaPago, ItemPago, MesPagos, PartePago, PropuestaMes } from "../lib/tipos";
+import { diaMes, plataTotales } from "../lib/pagos";
+import type { ConfigPagos, FormaPago, ItemPago, MesPagos, PartePago, PropuestaMes } from "../lib/tipos";
+import { RevisionIa, type FilaIa } from "./PagosRevisionIa";
 import { useDatos } from "../lib/vivo";
 
 type Filtro = { tipo: "todos" } | { tipo: "negocio" | "personal" } | { tipo: "lugar"; lugar: string };
@@ -462,132 +463,58 @@ function ModalSuelto({ config, periodo, onCerrar }: { config: ConfigPagos; perio
   );
 }
 
-/** Cada cosa que leyó la IA, con su casilla. */
-type ItemMes = ({ tipo: "cambio"; cambio: PropuestaMes["cambios"][number] } | { tipo: "nuevo"; fijo: FijoPropuesto }) & { elegido: boolean };
-
 /**
- * Cargar con IA: una foto, un PDF o un texto (el resumen de impuestos de la contadora) y la IA pone cada monto en el
- * pago del mes; lo que no estaba lo propone como pago fijo nuevo. Se revisa todo antes de aplicar.
+ * Cargar con IA: el mes, una foto, un PDF o un texto (el resumen de impuestos de la contadora). La IA arma a qué pago
+ * va cada monto y qué pagos hay que crear, y se revisa todo en la revisión antes de aplicar.
  */
-function ModalCargarMes({ periodo, config, onCerrar }: { periodo: string; config: ConfigPagos; onCerrar: () => void }) {
+function ModalCargarMes({ periodo: periodoInicial, config, onCerrar }: { periodo: string; config: ConfigPagos; onCerrar: () => void }) {
+  const [periodo, setPeriodo] = useState(periodoInicial);
   const [texto, setTexto] = useState("");
   const [archivo, setArchivo] = useState<File | null>(null);
   const [leyendo, setLeyendo] = useState(false);
-  const [leido, setLeido] = useState<{ items: ItemMes[]; iguales: number; control: PropuestaMes["control"]; mensaje: string } | null>(null);
+  const [leido, setLeido] = useState<PropuestaMes | null>(null);
   const accion = useAccion();
   const leer = async () => {
     setLeyendo(true);
     const r = await accion(async () => post<PropuestaMes>("/api/pagos/ia/mes", { periodo, texto, archivo: archivo ? await archivoParaIa(archivo) : undefined }));
     setLeyendo(false);
-    if (r)
-      setLeido({
-        items: [...r.cambios.map((cambio) => ({ tipo: "cambio" as const, cambio, elegido: true })), ...r.nuevos.map((fijo) => ({ tipo: "nuevo" as const, fijo, elegido: true }))],
-        iguales: r.iguales,
-        control: r.control,
-        mensaje: r.mensaje,
-      });
+    if (r) setLeido(r);
   };
-  const elegidos = leido?.items.filter((i) => i.elegido) ?? [];
-  const aplicar = async () => {
-    const montos = elegidos.flatMap((i) => (i.tipo === "cambio" ? [{ id: i.cambio.id, monto: i.cambio.monto }] : []));
-    const nuevos = elegidos.flatMap((i) => (i.tipo === "nuevo" ? [i.fijo] : []));
-    if (await accion(() => post("/api/pagos/mes/aplicar", { periodo, montos, nuevos }), `Listo: ${elegidos.length} ${elegidos.length === 1 ? "pago cargado" : "pagos cargados"} en ${nombreMes(periodo).toLowerCase()}`)) onCerrar();
-  };
-  const marcar = (k: number, elegido: boolean) => leido && setLeido({ ...leido, items: leido.items.map((x, j) => (j === k ? { ...x, elegido } : x)) });
-  const todos = (elegido: boolean) => leido && setLeido({ ...leido, items: leido.items.map((x) => ({ ...x, elegido })) });
-  const coincide = leido?.control && Math.abs(leido.control.suma - leido.control.total) < 1;
 
+  if (leido) {
+    const filas: FilaIa[] = [
+      ...leido.montos.map(({ monto, antes, nombre, lugar, pagado, original, ...a }) => {
+        const destino = "fijoId" in a ? { fijoId: a.fijoId } : { itemId: a.itemId, nombre, lugar };
+        return { tipo: "monto" as const, destino, monto, antes, pagado, original, ia: destino };
+      }),
+      ...leido.nuevos.map((fijo) => ({ tipo: "nuevo" as const, fijo, ia: fijo })),
+    ];
+    return <RevisionIa modo="mes" config={config} filas={filas} periodo={leido.periodo} periodoLeido={leido.periodo} totalImagen={leido.totalImagen} mensaje={leido.mensaje} onCerrar={() => setLeido(null)} onListo={onCerrar} />;
+  }
   return (
     <Modal
       abierto
       onCerrar={onCerrar}
-      titulo={`Cargar con IA · ${nombreMes(periodo)}`}
-      ancho="max-w-3xl"
+      titulo="Cargar con IA"
+      ancho="max-w-2xl"
       pie={
         <>
-          <Boton onClick={leido ? () => setLeido(null) : onCerrar}>{leido ? "Volver" : "Cancelar"}</Boton>
-          {leido ? (
-            <Boton variante="primario" disabled={!elegidos.length} onClick={() => void aplicar()}>
-              Aplicar {elegidos.length}
-            </Boton>
-          ) : (
-            <Boton variante="primario" icono={<Sparkles className="size-4" />} cargando={leyendo} disabled={texto.trim().length < 3 && !archivo} onClick={() => void leer()}>
-              Leer con IA
-            </Boton>
-          )}
+          <Boton onClick={onCerrar}>Cancelar</Boton>
+          <Boton variante="primario" icono={<Sparkles className="size-4" />} cargando={leyendo} disabled={texto.trim().length < 3 && !archivo} onClick={() => void leer()}>
+            Leer con IA
+          </Boton>
         </>
       }
     >
-      {!leido ? (
-        <>
-          <p className="mb-3 text-sm text-slate-500">
-            Pegá o elegí la foto o el PDF (por ejemplo, el resumen de impuestos de la contadora), o escribí los montos. Cada monto va al pago de {nombreMes(periodo).toLowerCase()}; lo que no
-            tengas cargado se propone como pago nuevo. Revisás todo antes de guardar (cuesta unos centavos).
-          </p>
-          <CampoIa texto={texto} onTexto={setTexto} archivo={archivo} onArchivo={setArchivo} placeholder="Opcional: algo que la IA tenga que saber («es lo de octubre», «el IVA diferido va a Fontana»…)" />
-        </>
-      ) : (
-        <div className="space-y-3">
-          {leido.control &&
-            (coincide ? (
-              <p className="flex items-center gap-1.5 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-                <CheckCircle2 className="size-4 shrink-0" /> La suma da {plata(leido.control.total)}, igual que el total: no falta nada.
-              </p>
-            ) : (
-              <p className="flex items-center gap-1.5 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                <AlertTriangle className="size-4 shrink-0" /> La suma da {plata(leido.control.suma)} y el total dice {plata(leido.control.total)}: revisá que no falte o sobre nada.
-              </p>
-            ))}
-          {leido.mensaje && <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">{leido.mensaje}</p>}
-          {leido.items.length > 0 && (
-            <>
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-sm text-slate-500">
-                  Destildá lo que no va.{leido.iguales > 0 && ` ${leido.iguales} ya ${leido.iguales === 1 ? "tenía" : "tenían"} ese monto.`}
-                </p>
-                <div className="flex gap-1">
-                  <Boton variante="fantasma" chico onClick={() => todos(true)}>
-                    Elegir todos
-                  </Boton>
-                  <Boton variante="fantasma" chico onClick={() => todos(false)}>
-                    Ninguno
-                  </Boton>
-                </div>
-              </div>
-              <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
-                {leido.items.map((it, k) => (
-                  <li key={k} className="flex items-start gap-3 px-3 py-2.5 text-sm">
-                    <input type="checkbox" className="mt-1 size-4 accent-marca-oscuro" checked={it.elegido} onChange={(e) => marcar(k, e.target.checked)} aria-label={it.tipo === "cambio" ? it.cambio.nombre : it.fijo.nombre} />
-                    {it.tipo === "cambio" ? (
-                      <div className="min-w-0 flex-1">
-                        <div className="font-medium text-slate-900">
-                          <span className="mr-1.5 rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-sky-800">Monto</span>
-                          {it.cambio.nombre} · {it.cambio.lugar}
-                          {it.cambio.pagado && <span className="ml-1.5 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-amber-800">Ya pagado</span>}
-                        </div>
-                        <div className="text-xs text-slate-500">
-                          <span className="text-slate-400 line-through">{plata(it.cambio.antes)}</span> → <span className="font-medium text-slate-800">{plata(it.cambio.monto)}</span>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="min-w-0 flex-1">
-                        <div className="font-medium text-slate-900">
-                          <span className="mr-1.5 rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-800">Nuevo</span>
-                          {it.fijo.nombre} · {it.fijo.lugarNuevo ? it.fijo.lugarNuevo.nombre : describirAlcance(it.fijo, config.lugares)}
-                          {it.fijo.lugarNuevo && <span className="ml-1.5 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-amber-800">Lugar nuevo</span>}
-                        </div>
-                        <div className="text-xs text-slate-500">
-                          {[it.fijo.categoria, plata(it.fijo.monto, it.fijo.moneda), it.fijo.variable ? "variable" : "fijo", it.fijo.dia ? `vence el ${it.fijo.dia}` : "sin vencimiento", "todos los meses desde este"].join(" · ")}
-                        </div>
-                      </div>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
-        </div>
-      )}
+      <label className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
+        <span className="font-medium text-slate-800">¿En qué mes van estos montos?</span>
+        <input className="campo h-9 w-auto py-0" type="month" value={periodo} onChange={(e) => e.target.value && setPeriodo(e.target.value)} aria-label="Mes" />
+        <span className="text-xs text-slate-500">El mes en que se pagan (lo de octubre suele pagarse en noviembre).</span>
+      </label>
+      <p className="mb-3 text-sm text-slate-500">
+        Pegá o elegí la foto o el PDF (por ejemplo, el resumen de impuestos de la contadora), o escribí los montos. Revisás y corregís todo antes de guardar (cuesta unos centavos).
+      </p>
+      <CampoIa texto={texto} onTexto={setTexto} archivo={archivo} onArchivo={setArchivo} placeholder="Opcional: algo que la IA tenga que saber («es lo de octubre», «el IVA diferido va a Fontana»…)" />
     </Modal>
   );
 }
