@@ -417,6 +417,14 @@ export const pagoForma = pgTable("pago_forma", {
   creadoEn: creadoEn(),
 });
 
+/** Las categorías de Pagos (Alquiler, Servicios…): se editan en Configuración. Los pagos guardan el nombre. */
+export const pagoCategoria = pgTable("pago_categoria", {
+  id: serial("id").primaryKey(),
+  nombre: text("nombre").notNull(),
+  orden: integer("orden").notNull().default(0),
+  creadoEn: creadoEn(),
+});
+
 export type FrecuenciaPago = "mensual" | "bimestral" | "trimestral" | "cuatrimestral" | "semestral" | "anual" | "unica";
 /**
  * A qué corresponde un pago: un lugar (el alquiler del local), repartido entre varios (el contador, entre los locales)

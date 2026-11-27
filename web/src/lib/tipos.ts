@@ -387,7 +387,9 @@ export type CuentaPersona = {
   )[];
 };
 /** notasIa: lo que la IA de Pagos tiene que saber de tus negocios. */
-export type ConfigPagos = { lugares: LugarPago[]; fijos: FijoPago[]; formas: FormaPago[]; categorias: string[]; diasAviso: number; mensajes: boolean; notasIa: string };
+/** Una categoría de tu lista: fijos, los pagos fijos que la usan; usos, también los de cada mes. */
+export type CategoriaPago = { id: number; nombre: string; orden: number; fijos: number; usos: number };
+export type ConfigPagos = { lugares: LugarPago[]; fijos: FijoPago[]; formas: FormaPago[]; categorias: CategoriaPago[]; diasAviso: number; mensajes: boolean; notasIa: string };
 /** Lo que leyó la IA para un mes: a qué pago va cada monto (también los que ya tenían ese monto), los pagos nuevos y el total que figura. */
 export type PropuestaMes = {
   periodo: string;

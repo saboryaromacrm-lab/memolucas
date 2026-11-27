@@ -239,6 +239,13 @@
       "when": 1795801518295,
       "tag": "0033_cuentas_personas",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1795803748527,
+      "tag": "0034_categorias_pagos",
+      "breakpoints": true
     }
   ]
 }

@@ -38,3 +38,35 @@ export function describirAlcance(a: { alcance: AlcancePago; lugarId: number | nu
   }
   return nombre(a.lugarId);
 }
+
+/** Un grupo de una lista agrupada: su clave, el título y el orden en que va. */
+export type Grupo = { clave: string; titulo: string; orden: number };
+
+/** Agrupa en el orden de cada grupo (y por título si empatan), sin cambiar el orden de adentro. */
+export function agrupar<T>(items: T[], de: (t: T) => Grupo) {
+  const grupos = new Map<string, Grupo & { items: T[] }>();
+  for (const t of items) {
+    const g = de(t);
+    const actual = grupos.get(g.clave) ?? { ...g, items: [] };
+    actual.items.push(t);
+    grupos.set(g.clave, actual);
+  }
+  return [...grupos.values()].sort((a, b) => a.orden - b.orden || a.titulo.localeCompare(b.titulo));
+}
+
+/** A qué corresponde, como grupo: los lugares en el orden de tu lista, después los nuevos, los repartidos y lo general. */
+export function grupoDeAlcance(
+  a: { alcance: AlcancePago; lugarId: number | null; tipo: TipoLugar | null; reparto: RepartoPago | null; lugarNuevo?: { nombre: string } },
+  lugares: LugarPago[],
+): Grupo {
+  if (a.lugarNuevo) return { clave: `n:${a.lugarNuevo.nombre}`, titulo: `${a.lugarNuevo.nombre} (lugar nuevo)`, orden: 900 };
+  if (a.alcance === "repartido") return { clave: `r:${(a.reparto ?? []).map((r) => r.lugarId).sort().join(",")}`, titulo: describirAlcance(a, lugares), orden: 1000 };
+  if (a.alcance === "general") return { clave: `g:${a.tipo}`, titulo: describirAlcance(a, lugares), orden: 2000 };
+  const k = lugares.findIndex((l) => l.id === a.lugarId);
+  return { clave: `l:${a.lugarId}`, titulo: describirAlcance(a, lugares), orden: k < 0 ? 899 : k };
+}
+
+const MESES_DE: Record<FrecuenciaPago, number> = { mensual: 1, bimestral: 2, trimestral: 3, cuatrimestral: 4, semestral: 6, anual: 12, unica: 0 };
+/** Lo que sale por mes, en promedio (lo bimestral, la mitad; lo de una sola vez no cuenta). */
+export const totalPorMes = (fijos: { monto: number; moneda: "ARS" | "USD"; frecuencia: FrecuenciaPago }[]): Totales =>
+  fijos.reduce((t, f) => (MESES_DE[f.frecuencia] ? { ...t, [f.moneda]: t[f.moneda] + f.monto / MESES_DE[f.frecuencia] } : t), { ARS: 0, USD: 0 });

@@ -33,6 +33,7 @@ import {
 } from "../src/servicios/pagos.js";
 import { avisarPagos, mensajesDelMesPagos } from "../src/servicios/pagos-avisos.js";
 import { borrarForma, crearForma, listarFormas } from "../src/servicios/pagos-formas.js";
+import { borrarCategoria, crearCategoria, listarCategorias, renombrarCategoria } from "../src/servicios/pagos-categorias.js";
 import { borrarPersona, crearPersona, listarCuentas, pagarAPersona } from "../src/servicios/pagos-cuentas.js";
 import { crearSuscripcion, pagarSuscripcionCon } from "../src/servicios/suscripciones.js";
 import { actualizarTarjeta, borrarTarjeta, crearTarjeta, SIN_SALDOS } from "../src/servicios/tarjetas.js";
@@ -82,6 +83,7 @@ describe("Pagos", () => {
     pedir.mockReset();
     analizarFoto.mockReset();
     fijarAzar(() => 0);
+    for (const c of ["Alquiler", "Servicios", "Impuestos y tasas", "Sueldos y cargas", "Honorarios", "Préstamos y cuotas", "Otros"]) await crearCategoria(c);
     transferencia = (await crearForma({ nombre: "Transferencia", tipo: "transferencia" })).id;
     efectivo = (await crearForma({ nombre: "Efectivo", tipo: "efectivo" })).id;
     express = (await crearLugar({ nombre: "Express 1", tipo: "negocio" })).id;
@@ -512,6 +514,28 @@ describe("Pagos", () => {
       ["Transferencia", 50000],
       ["Efectivo", 8000],
     ]);
+  });
+
+  it("categorías: la lista es tuya; renombrar cambia todos los pagos y borrar pide a cuál pasarlos", async () => {
+    const alquiler = (await listarCategorias()).find((c) => c.nombre === "Alquiler")!;
+    await crearFijo(fijo(express, { nombre: "Alquiler local", categoria: "Alquiler", monto: 650000 }));
+    await crearFijo(fijo(casa, { nombre: "Alquiler casa", categoria: "alquiler", monto: 400000 })); // Se escribe distinto: es la misma.
+    await verMes("2026-11");
+    // Una que no estaba se suma sola a la lista.
+    await crearFijo(fijo(casa, { nombre: "Jardinero", categoria: "Mantenimiento", monto: 30000 }));
+    expect((await listarCategorias()).map((c) => c.nombre)).toContain("Mantenimiento");
+    await expect(crearCategoria(" ALQUILER ")).rejects.toThrow("Ya tenés la categoría «Alquiler».");
+
+    await renombrarCategoria(alquiler.id, "Alquileres");
+    expect((await verMes("2026-11")).items.filter((i) => i.categoria === "Alquileres").map((i) => i.nombre).sort()).toEqual(["Alquiler casa", "Alquiler local"]);
+    expect((await listarCategorias()).find((c) => c.id === alquiler.id)).toMatchObject({ nombre: "Alquileres", fijos: 2, usos: 4 });
+
+    const mantenimiento = (await listarCategorias()).find((c) => c.nombre === "Mantenimiento")!;
+    await expect(borrarCategoria(mantenimiento.id)).rejects.toThrow("tiene pagos: elegí a qué categoría pasarlos");
+    const otros = (await listarCategorias()).find((c) => c.nombre === "Otros")!;
+    await borrarCategoria(mantenimiento.id, otros.id);
+    expect((await item("2026-11", "Jardinero")).categoria).toBe("Otros");
+    expect((await listarCategorias()).some((c) => c.nombre === "Mantenimiento")).toBe(false);
   });
 
   it("cuentas con personas: lo que pagó la contadora es gasto una vez y se debe; lo que le pagás baja la deuda", async () => {

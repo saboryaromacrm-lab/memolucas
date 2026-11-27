@@ -6,7 +6,8 @@ import { comoWebp } from "../servicios/archivos-cifrados.js";
 import { guardarAnalisis, listarFijos, listarLugares, resumenPagos, verMes, type Alcance, type FijoPropuesto } from "../servicios/pagos.js";
 import type { FrecuenciaPago, TipoLugar } from "../db/schema.js";
 import { elegirForma, formasActivas, type FormaPago } from "../servicios/pagos-formas.js";
-import { CATEGORIAS, MESES_DE, nombreMes, type Moneda } from "../servicios/pagos-reglas.js";
+import { nombresDeCategorias } from "../servicios/pagos-categorias.js";
+import { MESES_DE, nombreMes, type Moneda } from "../servicios/pagos-reglas.js";
 import { hoyIso } from "../lib/fechas.js";
 import { ErrorUsuario } from "../servicios/recordatorios.js";
 import { gastoDelMes, pedir } from "./ia.js";
@@ -128,10 +129,13 @@ function numeroDe(texto: string) {
 }
 
 /** Un pago nuevo, tal como lo escribió la IA, listo para revisar. */
-const nuevoDesde = (p: z.infer<typeof Concepto>, lugares: Lugar[], formas: FormaPago[]): FijoPropuesto => ({
+/** La categoría de tu lista con ese nombre (sin importar mayúsculas ni tildes); si no está, «Otros». */
+const categoriaDe = (categorias: string[], nombre: string) => categorias.find((c) => normalizar(c) === normalizar(nombre));
+
+const nuevoDesde = (p: z.infer<typeof Concepto>, lugares: Lugar[], formas: FormaPago[], categorias: string[]): FijoPropuesto => ({
   ...resolverAlcance(lugares, p.alcance, p.lugar, p.tipo, p.repartir_entre),
   nombre: p.nombre,
-  categoria: CATEGORIAS.includes(p.categoria) ? p.categoria : "Otros",
+  categoria: categoriaDe(categorias, p.categoria) ?? "Otros",
   monto: Math.max(0, p.monto),
   variable: p.variable,
   moneda: monedaDe(p.moneda),
@@ -181,14 +185,17 @@ const FORMATOS = `Formatos del valor de cada campo en "cambios":
 - frecuencia: una de ${FRECUENCIAS.join(", ")}.`;
 
 /** Aplica un campo que cambió la IA. Lo que no se entiende se ignora (devuelve null). */
-function conCampo(f: FijoPropuesto, campo: CampoFijo, valor: string, lugares: Lugar[], formas: FormaPago[]): FijoPropuesto | null {
+function conCampo(f: FijoPropuesto, campo: CampoFijo, valor: string, lugares: Lugar[], formas: FormaPago[], categorias: string[]): FijoPropuesto | null {
   const v = valor.trim();
   const numero = numeroDe(v);
   switch (campo) {
     case "nombre":
       return v ? { ...f, nombre: v } : null;
     case "categoria":
-      return CATEGORIAS.includes(v) ? { ...f, categoria: v } : null;
+    {
+      const categoria = categoriaDe(categorias, v);
+      return categoria ? { ...f, categoria } : null;
+    }
     case "forma": {
       if (!v) return { ...f, formaId: null };
       const forma = elegirForma(formas, v);
@@ -240,10 +247,10 @@ const comoEntrada = ({ id: _, desde: __, ...f }: Fijo): FijoPropuesto => f;
  */
 export async function armarFijosConIa(texto: string, archivo?: ArchivoIa) {
   const cfg = await conTope();
-  const [lugares, fijos, formas] = await Promise.all([listarLugares(), listarFijos(), formasActivas()]);
+  const [lugares, fijos, formas, categorias] = await Promise.all([listarLugares(), listarFijos(), formasActivas(), nombresDeCategorias()]);
   const system = `Llevás la lista de pagos que ${cfg.nombreUsuario} hace siempre (sus locales, su casa, sus cosas). Te escribe o dicta como le sale, o te pasa una foto o un PDF: puede querer agregar pagos, cambiar los que tiene o borrarlos.
 Lugares que ya tiene: ${lugares.map((l) => `${l.nombre} (${l.tipo})`).join(", ") || "ninguno"}.
-Categorías: ${CATEGORIAS.join(", ")}.
+Categorías (usá una de estas): ${categorias.join(", ")}.
 Formas de pago que tiene: ${formas.map((f) => f.nombre).join(", ") || "ninguna"}.${notasDe(cfg.pagosNotasIa)}
 ${ALCANCES}
 
@@ -267,11 +274,11 @@ ${FORMATOS}`;
   const borrar = [...new Set(r.borrar)].filter((id) => porId.has(id) && !pedidos.has(id));
   const cambios = [...pedidos].flatMap(([id, lista]) => {
     const antes = comoEntrada(porId.get(id)!);
-    const despues = lista.reduce((f, { campo, valor }) => conCampo(f, campo, valor, lugares, formas) ?? f, antes);
+    const despues = lista.reduce((f, { campo, valor }) => conCampo(f, campo, valor, lugares, formas, categorias) ?? f, antes);
     const campos = CAMPOS_FIJO.filter((c) => cambio(antes, despues, c));
     return campos.length ? [{ id, despues, campos }] : [];
   });
-  const nuevos = r.nuevos.map((p) => nuevoDesde(p, lugares, formas));
+  const nuevos = r.nuevos.map((p) => nuevoDesde(p, lugares, formas, categorias));
   const vacio = !nuevos.length && !cambios.length && !borrar.length;
   return {
     nuevos,
@@ -298,11 +305,11 @@ const EsquemaMes = z.object({
  */
 export async function cargarMesConIa(periodo: string, texto: string, archivo?: ArchivoIa) {
   const cfg = await conTope();
-  const [lugares, formas, mes] = await Promise.all([listarLugares(), formasActivas(), verMes(periodo)]);
+  const [lugares, formas, mes, categorias] = await Promise.all([listarLugares(), formasActivas(), verMes(periodo), nombresDeCategorias()]);
   const items = mes.items.filter((i) => i.estado !== "omitido");
   const system = `Cargás los montos de ${mes.nombre.toLowerCase()} en los pagos de ${cfg.nombreUsuario} (sus locales, su casa, sus cosas), a partir de lo que te pasa: una foto, captura o PDF (por ejemplo el resumen de impuestos que le manda la contadora) o un texto.
 Lugares que tiene: ${lugares.map((l) => `${l.nombre} (${l.tipo})`).join(", ") || "ninguno"}.
-Categorías: ${CATEGORIAS.join(", ")}.
+Categorías (usá una de estas): ${categorias.join(", ")}.
 Formas de pago que tiene: ${formas.map((f) => f.nombre).join(", ") || "ninguna"}.${notasDe(cfg.pagosNotasIa)}
 ${ALCANCES}
 
@@ -326,7 +333,7 @@ Qué hacer:
       // A qué va: al concepto de todos los meses (así sirve aunque cambies el mes) o, si no sale de uno, a ese pago.
       return { ...(i.fijoId ? { fijoId: i.fijoId } : { itemId: i.id }), monto: m.monto, antes: i.monto, nombre: i.nombre, lugar: i.lugar, pagado: i.estado === "pagado", original: m.como_figura.trim() };
     });
-  const nuevos = r.nuevos.map((p) => nuevoDesde(p, lugares, formas));
+  const nuevos = r.nuevos.map((p) => nuevoDesde(p, lugares, formas, categorias));
   return {
     periodo,
     /** Todo lo que leyó, también lo que ya tenía ese monto (así la suma se compara con el total). */

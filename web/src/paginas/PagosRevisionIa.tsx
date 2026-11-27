@@ -1,9 +1,9 @@
 import { useState } from "react";
-import { AlertTriangle, CheckCircle2, Pencil, Plus } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ChevronDown, Pencil, Plus } from "lucide-react";
 import { Boton, Modal, useAccion } from "../componentes/ui";
 import { post, put } from "../lib/api";
 import { aCampo, aNumero, plata } from "../lib/numeros";
-import { describirAlcance, FRECUENCIAS_PAGO, nombreMes } from "../lib/pagos";
+import { agrupar, describirAlcance, FRECUENCIAS_PAGO, grupoDeAlcance, nombreMes } from "../lib/pagos";
 import { sinTildes } from "../lib/textos";
 import type { AlcancePago, CampoFijo, ConfigPagos, FijoPago, FijoPropuesto, RepartoPago, TipoLugar } from "../lib/tipos";
 import { ModalFijo } from "./PagosFijo";
@@ -86,6 +86,7 @@ export function RevisionIa({
   const [filas, setFilas] = useState<Fila[]>(() => iniciales.map((f, k) => ({ ...f, clave: k, elegido: f.tipo !== "borrar" })));
   const [editando, setEditando] = useState<{ clave: number | null; inicial?: FijoPropuesto } | null>(null);
   const [recordar, setRecordar] = useState<string | null>(null);
+  const [plegados, setPlegados] = useState<Set<string>>(new Set());
   const accion = useAccion();
   const siguiente = Math.max(0, ...filas.map((f) => f.clave)) + 1;
   // Quienes pagan cosas por vos (Cuentas): en el mes se puede marcar que ya lo pagaron.
@@ -241,6 +242,134 @@ export function RevisionIa({
     else onListo();
   };
 
+  // Agrupado por a qué corresponde (los lugares en tu orden, después repartidos y general) y adentro por categoría.
+  const alcanceDe = (f: Fila): Alcanzable | null =>
+    f.tipo === "monto" ? ("fijoId" in f.destino ? (fijoDe(f.destino.fijoId) ?? null) : null) : f.tipo === "borrar" ? f.antes : f.fijo;
+  const grupoDeFila = (f: Fila) => {
+    const a = alcanceDe(f);
+    if (a) return grupoDeAlcance(a, config.lugares);
+    const lugar = f.tipo === "monto" && "itemId" in f.destino ? f.destino.lugar : "Otros";
+    return { clave: `i:${lugar}`, titulo: lugar, orden: 950 };
+  };
+  const categoriaDe = (f: Fila) =>
+    f.tipo === "monto" ? ("fijoId" in f.destino ? (fijoDe(f.destino.fijoId)?.categoria ?? "Sin categoría") : "Sin categoría") : f.tipo === "borrar" ? f.antes.categoria : f.fijo.categoria;
+  const plegar = (clave: string) => setPlegados((p) => (p.has(clave) ? new Set([...p].filter((x) => x !== clave)) : new Set([...p, clave])));
+
+  const renglon = (f: Fila) => {
+    const [insignia, color] = INSIGNIA[f.tipo];
+    const fuera = fueraDeMes(f);
+    const dup = f.tipo === "nuevo" ? parecido(f.fijo) : undefined;
+    const original = f.tipo === "monto" ? f.original : f.tipo === "borrar" ? "" : (f.fijo.original ?? "");
+    return (
+      <li key={f.clave} className={`flex items-start gap-3 px-3 py-2.5 text-sm ${fuera ? "opacity-60" : ""}`}>
+        <input
+          type="checkbox"
+          className="mt-1 size-4 accent-marca-oscuro"
+          checked={f.elegido && !fuera}
+          disabled={fuera}
+          onChange={(e) => cambiar(f.clave, (x) => ({ ...x, elegido: e.target.checked }))}
+          aria-label={`${insignia}: ${f.tipo === "monto" ? nombreDestino(f.destino) : f.tipo === "borrar" ? f.antes.nombre : f.fijo.nombre}`}
+        />
+        <div className="min-w-0 flex-1 space-y-0.5">
+          {f.tipo === "monto" ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${color}`}>{insignia}</span>
+              <select
+                className="campo order-last h-9 min-w-0 basis-full py-0 text-sm sm:order-none sm:basis-0 sm:flex-1"
+                value={"fijoId" in f.destino ? `f:${f.destino.fijoId}` : `i:${f.destino.itemId}`}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v === "nuevo") return pasarANuevo(f);
+                  cambiar(f.clave, (x) => (x.tipo === "monto" ? { ...x, destino: v.startsWith("f:") ? { fijoId: Number(v.slice(2)) } : x.destino, antes: null } : x));
+                }}
+                aria-label="A qué pago va"
+              >
+                {"itemId" in f.destino && <option value={`i:${f.destino.itemId}`}>{nombreDestino(f.destino)}</option>}
+                {[...config.fijos]
+                  .sort((a, b) => a.nombre.localeCompare(b.nombre))
+                  .map((x) => (
+                    <option key={x.id} value={`f:${x.id}`}>
+                      {x.nombre} · {alcTexto(x)}
+                    </option>
+                  ))}
+                <option value="nuevo">➕ Es un pago nuevo…</option>
+              </select>
+              <input
+                className="campo h-9 min-w-0 flex-1 py-0 text-right tabular-nums sm:w-36 sm:flex-none"
+                inputMode="decimal"
+                defaultValue={aCampo(f.monto, true)}
+                onBlur={(e) => {
+                  const n = aNumero(e.target.value);
+                  if (n !== null) cambiar(f.clave, (x) => (x.tipo === "monto" ? { ...x, monto: n } : x));
+                }}
+                aria-label="Monto"
+              />
+            </div>
+          ) : (
+            <div className="font-medium text-slate-900">
+              <span className={`mr-1.5 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${color}`}>{insignia}</span>
+              {/* El lugar está en el encabezado del grupo. */}
+              {f.tipo === "nuevo" ? f.fijo.nombre : f.antes.nombre}
+              {f.tipo === "nuevo" && f.fijo.lugarNuevo && <span className="ml-1.5 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-amber-800">Lugar nuevo</span>}
+            </div>
+          )}
+
+          {f.tipo === "nuevo" && <div className="text-xs text-slate-500">{detalle(f.fijo)}</div>}
+          {f.tipo === "cambio" &&
+            camposCambiados(f.antes, f.fijo).map((c) => (
+              <div key={c} className="text-xs text-slate-500">
+                {ETIQUETA_CAMPO[c]}: <span className="text-slate-400 line-through">{valorCampo(c, comoPropuesta(f.antes))}</span> → <span className="font-medium text-slate-800">{valorCampo(c, f.fijo)}</span>
+              </div>
+            ))}
+          {f.tipo === "borrar" && <div className="text-xs text-red-600">Se borra con sus pagos pendientes; lo pagado queda en el historial.</div>}
+          {f.tipo === "monto" && (
+            <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
+              {f.antes !== null && periodo === periodoLeido && (f.antes === f.monto ? <span>Ya tenía ese monto (sin cambios)</span> : <span>Antes: {plata(f.antes)}</span>)}
+              {f.pagado && <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-amber-800">Ya pagado</span>}
+              {fuera && <span className="text-amber-700">Es un pago puntual de {nombreMes(periodoLeido!).toLowerCase()}: no se puede cargar en otro mes.</span>}
+            </div>
+          )}
+          {original && (
+            <div className="text-xs text-slate-400">
+              En la imagen: «{original}»{f.tipo === "nuevo" && f.ia ? ` ${plata(f.ia.monto, f.ia.moneda)}` : ""}
+            </div>
+          )}
+          {terceros.length > 0 && (f.tipo === "monto" || f.tipo === "nuevo") && !(f.tipo === "monto" && f.pagado) && (
+            <label className="flex flex-wrap items-center gap-1.5 text-xs text-slate-600">
+              Ya lo pagó:
+              <select
+                className="campo h-8 w-auto py-0 text-xs"
+                value={f.pagadoCon ?? ""}
+                onChange={(e) => cambiar(f.clave, (x) => ({ ...x, pagadoCon: e.target.value ? Number(e.target.value) : undefined }))}
+                aria-label="Ya lo pagó"
+              >
+                <option value="">nadie (queda para pagar)</option>
+                {terceros.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.nombre.replace(/^Lo pagó: /, "")}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {dup && (
+            <div className="flex flex-wrap items-center gap-2 text-xs text-amber-700">
+              <AlertTriangle className="size-3.5" /> Ya tenés «{dup.nombre} · {alcTexto(dup)}».
+              <button type="button" className="font-medium underline" onClick={() => usarExistente(f as Fila & { tipo: "nuevo" }, dup)}>
+                Usar ese en vez de crear otro
+              </button>
+            </div>
+          )}
+        </div>
+        {(f.tipo === "nuevo" || f.tipo === "cambio") && (
+          <button type="button" onClick={() => setEditando({ clave: f.clave, inicial: f.fijo })} aria-label="Corregir" title="Corregir cualquier dato" className="flex size-9 shrink-0 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100">
+            <Pencil className="size-4" />
+          </button>
+        )}
+      </li>
+    );
+  };
+
   if (recordar !== null)
     return (
       <Modal
@@ -301,121 +430,40 @@ export function RevisionIa({
           </div>
         </div>
 
-        <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
-          {filas.map((f) => {
-            const [insignia, color] = INSIGNIA[f.tipo];
-            const fuera = fueraDeMes(f);
-            const dup = f.tipo === "nuevo" ? parecido(f.fijo) : undefined;
-            const original = f.tipo === "monto" ? f.original : f.tipo === "borrar" ? "" : (f.fijo.original ?? "");
+        <div className="space-y-3">
+          {agrupar(filas, grupoDeFila).map((g) => {
+            const elegidas = g.items.filter((f) => f.elegido).length;
+            const abierto = !plegados.has(g.clave);
             return (
-              <li key={f.clave} className={`flex items-start gap-3 px-3 py-2.5 text-sm ${fuera ? "opacity-60" : ""}`}>
-                <input
-                  type="checkbox"
-                  className="mt-1 size-4 accent-marca-oscuro"
-                  checked={f.elegido && !fuera}
-                  disabled={fuera}
-                  onChange={(e) => cambiar(f.clave, (x) => ({ ...x, elegido: e.target.checked }))}
-                  aria-label={`${insignia}: ${f.tipo === "monto" ? nombreDestino(f.destino) : f.tipo === "borrar" ? f.antes.nombre : f.fijo.nombre}`}
-                />
-                <div className="min-w-0 flex-1 space-y-0.5">
-                  {f.tipo === "monto" ? (
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${color}`}>{insignia}</span>
-                      <select
-                        className="campo order-last h-9 min-w-0 basis-full py-0 text-sm sm:order-none sm:basis-0 sm:flex-1"
-                        value={"fijoId" in f.destino ? `f:${f.destino.fijoId}` : `i:${f.destino.itemId}`}
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          if (v === "nuevo") return pasarANuevo(f);
-                          cambiar(f.clave, (x) => (x.tipo === "monto" ? { ...x, destino: v.startsWith("f:") ? { fijoId: Number(v.slice(2)) } : x.destino, antes: null } : x));
-                        }}
-                        aria-label="A qué pago va"
-                      >
-                        {"itemId" in f.destino && <option value={`i:${f.destino.itemId}`}>{nombreDestino(f.destino)}</option>}
-                        {[...config.fijos]
-                          .sort((a, b) => a.nombre.localeCompare(b.nombre))
-                          .map((x) => (
-                            <option key={x.id} value={`f:${x.id}`}>
-                              {x.nombre} · {alcTexto(x)}
-                            </option>
-                          ))}
-                        <option value="nuevo">➕ Es un pago nuevo…</option>
-                      </select>
-                      <input
-                        className="campo h-9 min-w-0 flex-1 py-0 text-right tabular-nums sm:w-36 sm:flex-none"
-                        inputMode="decimal"
-                        defaultValue={aCampo(f.monto, true)}
-                        onBlur={(e) => {
-                          const n = aNumero(e.target.value);
-                          if (n !== null) cambiar(f.clave, (x) => (x.tipo === "monto" ? { ...x, monto: n } : x));
-                        }}
-                        aria-label="Monto"
-                      />
-                    </div>
-                  ) : (
-                    <div className="font-medium text-slate-900">
-                      <span className={`mr-1.5 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${color}`}>{insignia}</span>
-                      {f.tipo === "borrar" ? f.antes.nombre : f.tipo === "cambio" ? f.antes.nombre : f.fijo.nombre} · {alcTexto(f.tipo === "nuevo" ? f.fijo : f.antes)}
-                      {f.tipo === "nuevo" && f.fijo.lugarNuevo && <span className="ml-1.5 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-amber-800">Lugar nuevo</span>}
-                    </div>
-                  )}
-
-                  {f.tipo === "nuevo" && <div className="text-xs text-slate-500">{detalle(f.fijo)}</div>}
-                  {f.tipo === "cambio" &&
-                    camposCambiados(f.antes, f.fijo).map((c) => (
-                      <div key={c} className="text-xs text-slate-500">
-                        {ETIQUETA_CAMPO[c]}: <span className="text-slate-400 line-through">{valorCampo(c, comoPropuesta(f.antes))}</span> → <span className="font-medium text-slate-800">{valorCampo(c, f.fijo)}</span>
-                      </div>
-                    ))}
-                  {f.tipo === "borrar" && <div className="text-xs text-red-600">Se borra con sus pagos pendientes; lo pagado queda en el historial.</div>}
-                  {f.tipo === "monto" && (
-                    <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
-                      {f.antes !== null && periodo === periodoLeido && (f.antes === f.monto ? <span>Ya tenía ese monto (sin cambios)</span> : <span>Antes: {plata(f.antes)}</span>)}
-                      {f.pagado && <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-amber-800">Ya pagado</span>}
-                      {fuera && <span className="text-amber-700">Es un pago puntual de {nombreMes(periodoLeido!).toLowerCase()}: no se puede cargar en otro mes.</span>}
-                    </div>
-                  )}
-                  {original && (
-                    <div className="text-xs text-slate-400">
-                      En la imagen: «{original}»{f.tipo === "nuevo" && f.ia ? ` ${plata(f.ia.monto, f.ia.moneda)}` : ""}
-                    </div>
-                  )}
-                  {terceros.length > 0 && (f.tipo === "monto" || f.tipo === "nuevo") && !(f.tipo === "monto" && f.pagado) && (
-                    <label className="flex flex-wrap items-center gap-1.5 text-xs text-slate-600">
-                      Ya lo pagó:
-                      <select
-                        className="campo h-8 w-auto py-0 text-xs"
-                        value={f.pagadoCon ?? ""}
-                        onChange={(e) => cambiar(f.clave, (x) => ({ ...x, pagadoCon: e.target.value ? Number(e.target.value) : undefined }))}
-                        aria-label="Ya lo pagó"
-                      >
-                        <option value="">nadie (queda para pagar)</option>
-                        {terceros.map((t) => (
-                          <option key={t.id} value={t.id}>
-                            {t.nombre.replace(/^Lo pagó: /, "")}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  )}
-                  {dup && (
-                    <div className="flex flex-wrap items-center gap-2 text-xs text-amber-700">
-                      <AlertTriangle className="size-3.5" /> Ya tenés «{dup.nombre} · {alcTexto(dup)}».
-                      <button type="button" className="font-medium underline" onClick={() => usarExistente(f as Fila & { tipo: "nuevo" }, dup)}>
-                        Usar ese en vez de crear otro
-                      </button>
-                    </div>
-                  )}
-                </div>
-                {(f.tipo === "nuevo" || f.tipo === "cambio") && (
-                  <button type="button" onClick={() => setEditando({ clave: f.clave, inicial: f.fijo })} aria-label="Corregir" title="Corregir cualquier dato" className="flex size-9 shrink-0 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100">
-                    <Pencil className="size-4" />
+              <section key={g.clave} className="overflow-hidden rounded-lg border border-slate-200">
+                <header className="flex items-center gap-3 bg-slate-50 px-3 py-2 text-sm">
+                  <input
+                    type="checkbox"
+                    className="size-4 accent-marca-oscuro"
+                    checked={elegidas === g.items.length}
+                    ref={(el) => void (el && (el.indeterminate = elegidas > 0 && elegidas < g.items.length))}
+                    onChange={(e) => setFilas((fs) => fs.map((f) => (g.items.includes(f) ? { ...f, elegido: e.target.checked } : f)))}
+                    aria-label={`Elegir todo ${g.titulo}`}
+                  />
+                  <button type="button" onClick={() => plegar(g.clave)} className="flex min-w-0 flex-1 items-center gap-2 text-left" aria-expanded={abierto}>
+                    <span className="min-w-0 flex-1 font-semibold text-slate-800">{g.titulo}</span>
+                    <span className="shrink-0 text-xs text-slate-500">
+                      {g.items.length} · {plata(g.items.filter(valeAplicar).reduce((t, f) => t + montoDe(f), 0))}
+                    </span>
+                    <ChevronDown className={`size-4 shrink-0 text-slate-400 transition ${abierto ? "" : "-rotate-90"}`} />
                   </button>
-                )}
-              </li>
+                </header>
+                {abierto &&
+                  agrupar(g.items, (f) => ({ clave: categoriaDe(f), titulo: categoriaDe(f), orden: 0 })).map((sub) => (
+                    <div key={sub.clave} className="border-t border-slate-100">
+                      <h4 className="px-3 pb-0.5 pt-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">{sub.titulo}</h4>
+                      <ul className="divide-y divide-slate-100">{sub.items.map(renglon)}</ul>
+                    </div>
+                  ))}
+              </section>
             );
           })}
-        </ul>
+        </div>
 
         <div className="flex flex-wrap gap-2">
           <Boton chico icono={<Plus className="size-3.5" />} onClick={() => setEditando({ clave: null })}>
