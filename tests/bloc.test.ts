@@ -49,6 +49,20 @@ describe("Bloc", () => {
     expect((await api("PUT", "/999/fijada", { fijada: true })).status).toBe(400);
   });
 
+  it("lo resaltado se guarda con el texto y se saca al restaurar otra versión", async () => {
+    const p = (await api("POST", "", { titulo: "Prompts", texto: "hola mundo" })).json;
+    expect(p.resaltados).toEqual([]);
+    await api("PUT", `/${p.id}`, { texto: "hola mundo lindo", resaltados: [{ desde: 5, hasta: 10 }], version: 1 });
+    expect((await pestanas())[0]).toMatchObject({ texto: "hola mundo lindo", resaltados: [{ desde: 5, hasta: 10 }] });
+    expect((await api("PUT", `/${p.id}`, { resaltados: [{ desde: -1, hasta: 2 }], version: 2 })).status).toBe(400);
+    // Pasados 5 minutos de escritura, la versión anterior queda en el historial; al volver a ella, no coincide lo resaltado.
+    vi.setSystemTime(new Date("2026-11-25T13:10:00Z"));
+    await api("PUT", `/${p.id}`, { texto: "otro texto", version: 2 });
+    const [v] = (await api("GET", `/${p.id}/versiones`)).json;
+    await api("POST", `/${p.id}/versiones/${v.id}/restaurar`);
+    expect((await pestanas())[0]).toMatchObject({ texto: "hola mundo lindo", resaltados: [] });
+  });
+
   it("si otro dispositivo escribió antes, gana lo último y lo pisado queda en el historial", async () => {
     const p = (await api("POST", "", { titulo: "Notas", texto: "hola" })).json;
     // La compu guarda sobre la versión 1…

@@ -246,6 +246,13 @@
       "when": 1795803748527,
       "tag": "0034_categorias_pagos",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1795804762192,
+      "tag": "0035_bloc_resaltados",
+      "breakpoints": true
     }
   ]
 }

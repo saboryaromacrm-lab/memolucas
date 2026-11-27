@@ -13,6 +13,7 @@ import {
   ImagePlus,
   MonitorDown,
   NotebookPen,
+  Highlighter,
   Pencil,
   Pin,
   PinOff,
@@ -28,13 +29,15 @@ import { api, del, get, post, put } from "../lib/api";
 import { fechaHora, haceCuanto } from "../lib/fechas";
 import { comoAppInstalada, useInstalar } from "../lib/instalar";
 import { useRecordado } from "../lib/recordado";
+import { alternarTramo, convertir, moverTramos, siguienteMayuscula, type Mayusculas, type Tramo } from "../lib/textoBloc";
 import type { Configuracion } from "../lib/tipos";
 import { useDatos } from "../lib/vivo";
 import { Fijadas, hayVentanaFlotante, useVentanaFlotante } from "./BlocFijadas";
 import { IMAGEN_MAX_MB, TiraImagenes, VisorImagen, type ImagenBloc } from "./BlocImagenes";
 
-type Pestana = { id: number; titulo: string; texto: string; orden: number; version: number; fijada: boolean; actualizadoEn: string; imagenes: ImagenBloc[] };
-type Local = { texto: string; version: number };
+type Pestana = { id: number; titulo: string; texto: string; orden: number; version: number; fijada: boolean; resaltados: Tramo[]; actualizadoEn: string; imagenes: ImagenBloc[] };
+/** Lo que hay en la pantalla de cada pestaña (puede tener cambios sin guardar). */
+type Local = { texto: string; version: number; resaltados: Tramo[] };
 
 /** Mientras escribís, se guarda a los 0,7 s de la última tecla. */
 const ESPERA_GUARDAR_MS = 700;
@@ -65,6 +68,8 @@ export function Bloc({ comoApp = false }: { comoApp?: boolean }) {
   const urlBloc = useDatos<Pick<Configuracion, "urlBloc">>(comoApp ? null : "/api/configuracion", []).datos?.urlBloc;
   const archivo = useRef<HTMLInputElement>(null);
   const imagen = useRef<HTMLInputElement>(null);
+  /** La hoja: de ahí sale lo seleccionado para resaltar o cambiar mayúsculas. */
+  const hoja = useRef<HTMLTextAreaElement>(null);
   // Fijadas en pantalla: en la compu, la ventanita encima de todo; donde no se puede, la franja de arriba.
   const flotante = useVentanaFlotante();
   const conVentana = hayVentanaFlotante();
@@ -78,21 +83,15 @@ export function Bloc({ comoApp = false }: { comoApp?: boolean }) {
 
   const pestanas = datos ?? [];
   const actual = pestanas.find((p) => p.id === activa.id) ?? pestanas[0];
-  const local = actual ? (locales[actual.id] ?? { texto: actual.texto, version: actual.version }) : null;
+  const local = actual ? (locales[actual.id] ?? { texto: actual.texto, version: actual.version, resaltados: actual.resaltados }) : null;
   const fijadas = pestanas.filter((p) => p.fijada).map((p) => ({ id: p.id, titulo: p.titulo, texto: locales[p.id]?.texto ?? p.texto }));
-
-  // Sin fijadas, la ventanita no tiene nada que mostrar.
-  const ventanaVacia = !!flotante.ventana && !!datos && !fijadas.length;
-  useEffect(() => {
-    if (ventanaVacia) flotante.cerrar();
-  }, [ventanaVacia, flotante]);
 
   // Lo que llega del servidor (otro dispositivo, el asistente) reemplaza lo local solo si acá no hay nada sin guardar.
   useEffect(() => {
     if (!datos) return;
     setLocales((ls) => {
       const n = { ...ls };
-      for (const p of datos) if (!sucias.current.has(p.id) && !enVuelo.current.has(p.id)) n[p.id] = { texto: p.texto, version: p.version };
+      for (const p of datos) if (!sucias.current.has(p.id) && !enVuelo.current.has(p.id)) n[p.id] = { texto: p.texto, version: p.version, resaltados: p.resaltados };
       return n;
     });
   }, [datos]);
@@ -108,7 +107,7 @@ export function Bloc({ comoApp = false }: { comoApp?: boolean }) {
     enVuelo.current.add(id);
     actualizarEstado();
     try {
-      const r = await put<{ version: number; conflicto: boolean }>(`/api/bloc/${id}`, { texto: l.texto, version: l.version });
+      const r = await put<{ version: number; conflicto: boolean }>(`/api/bloc/${id}`, { texto: l.texto, resaltados: l.resaltados, version: l.version });
       setLocales((ls) => ({ ...ls, [id]: { ...(ls[id] ?? l), version: r.version } }));
       localesRef.current = { ...localesRef.current, [id]: { ...(localesRef.current[id] ?? l), version: r.version } };
       if (r.conflicto) avisar("También se escribió en otro dispositivo: esa versión quedó en el historial de la pestaña.", "error");
@@ -124,12 +123,43 @@ export function Bloc({ comoApp = false }: { comoApp?: boolean }) {
     actualizarEstado();
   };
 
-  const escribir = (id: number, texto: string) => {
-    setLocales((ls) => ({ ...ls, [id]: { texto, version: ls[id]?.version ?? pestanas.find((p) => p.id === id)!.version } }));
+  /** Lo que está en pantalla de una pestaña, con un cambio (queda para guardar en un ratito). */
+  const cambiarLocal = (id: number, cambio: (l: Local) => Local) => {
+    setLocales((ls) => {
+      const p = pestanas.find((x) => x.id === id)!;
+      return { ...ls, [id]: cambio(ls[id] ?? { texto: p.texto, version: p.version, resaltados: p.resaltados }) };
+    });
     sucias.current.add(id);
     setEstado("guardando");
     clearTimeout(temporizadores.current.get(id));
     temporizadores.current.set(id, setTimeout(() => void guardar(id), ESPERA_GUARDAR_MS));
+  };
+  // Lo resaltado sigue al texto.
+  const escribir = (id: number, texto: string) => cambiarLocal(id, (l) => ({ ...l, texto, resaltados: moverTramos(l.texto, texto, l.resaltados) }));
+
+  /** Lo seleccionado en la hoja (o un aviso si no hay nada). */
+  const seleccion = () => {
+    const a = hoja.current;
+    if (a && a.selectionStart !== a.selectionEnd) return { a, desde: a.selectionStart, hasta: a.selectionEnd };
+    avisar("Seleccioná el texto primero.", "error");
+    return null;
+  };
+  const resaltar = () => {
+    const s = seleccion();
+    if (s && actual) cambiarLocal(actual.id, (l) => ({ ...l, resaltados: alternarTramo(l.resaltados, s.desde, s.hasta) }));
+  };
+  /** Mayúsculas o minúsculas de lo seleccionado; sin modo, la siguiente (Shift+F3). Se deshace con Ctrl+Z. */
+  const cambiarMayusculas = (modo?: Mayusculas) => {
+    const s = seleccion();
+    if (!s || !actual || !local) return;
+    const viejo = local.texto.slice(s.desde, s.hasta);
+    const nuevo = convertir(viejo, modo ?? siguienteMayuscula(viejo));
+    if (nuevo === viejo) return;
+    s.a.focus();
+    s.a.setSelectionRange(s.desde, s.hasta);
+    // Como si se escribiera (así entra en el Ctrl+Z del navegador); si el navegador no lo deja, se cambia directo.
+    if (!document.execCommand("insertText", false, nuevo)) escribir(actual.id, local.texto.slice(0, s.desde) + nuevo + local.texto.slice(s.hasta));
+    s.a.setSelectionRange(s.desde, s.desde + nuevo.length);
   };
   const guardarTodo = () => [...sucias.current].forEach((id) => void guardar(id));
 
@@ -164,7 +194,9 @@ export function Bloc({ comoApp = false }: { comoApp?: boolean }) {
   /** En la compu la ventanita se abre en el mismo toque (el navegador no deja abrirla después). */
   const fijar = async (p: Pestana, fijada: boolean) => {
     if (fijada && conVentana) await flotante.abrir().catch(() => avisar("No se pudo abrir la ventanita: tocá «En pantalla» para abrirla.", "error"));
-    await accion(() => put(`/api/bloc/${p.id}/fijada`, { fijada }), fijada ? `«${p.titulo}» quedó fijada en pantalla` : undefined);
+    const ok = await accion(() => put(`/api/bloc/${p.id}/fijada`, { fijada }), fijada ? `«${p.titulo}» quedó fijada en pantalla` : undefined);
+    // Al soltar la última, la ventanita no tiene nada que mostrar.
+    if (ok && !fijada && fijadas.every((f) => f.id === p.id)) flotante.cerrar();
   };
   const mover = (id: number, a: number) => {
     const ids = pestanas.map((p) => p.id).filter((x) => x !== id);
@@ -211,10 +243,12 @@ export function Bloc({ comoApp = false }: { comoApp?: boolean }) {
     }
   };
 
-  // Atajos: Ctrl+F buscar, Ctrl+H reemplazar, Ctrl+S guardar ya, Esc cierra la búsqueda.
+  // Atajos: Ctrl+F buscar, Ctrl+H reemplazar, Ctrl+Shift+H resaltar, Shift+F3 mayúsculas, Ctrl+S guardar ya, Esc cierra la búsqueda.
   const alTeclear = (e: EventoTecla) => {
     const ctrl = e.ctrlKey || e.metaKey;
-    if (ctrl && e.key.toLowerCase() === "f") (e.preventDefault(), setBuscando("buscar"));
+    if (ctrl && e.shiftKey && e.key.toLowerCase() === "h") (e.preventDefault(), resaltar());
+    else if (e.shiftKey && e.key === "F3") (e.preventDefault(), cambiarMayusculas());
+    else if (ctrl && e.key.toLowerCase() === "f") (e.preventDefault(), setBuscando("buscar"));
     else if (ctrl && e.key.toLowerCase() === "h") (e.preventDefault(), setBuscando("reemplazar"));
     else if (ctrl && e.key.toLowerCase() === "s") (e.preventDefault(), guardarTodo());
     else if (e.key === "Escape" && buscando) setBuscando(null);
@@ -377,6 +411,28 @@ export function Bloc({ comoApp = false }: { comoApp?: boolean }) {
             <button onClick={() => setLetra({ px: TAMANOS[Math.min(TAMANOS.length - 1, TAMANOS.indexOf(letra.px) + 1)] ?? 16 })} aria-label="Letra más grande" className="flex size-10 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100">
               <AArrowUp className="size-5" />
             </button>
+            <button onClick={resaltar} aria-label="Resaltar" title="Resaltar lo seleccionado, o sacarle el resaltado (Ctrl+Shift+H)" className="flex size-10 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100">
+              <Highlighter className="size-5" />
+            </button>
+            <MenuAcciones
+              abreHacia="derecha"
+              etiqueta="Mayúsculas y minúsculas (Shift+F3)"
+              boton={<span className="text-sm font-semibold text-slate-500">Aa</span>}
+              acciones={[
+                { texto: "MAYÚSCULAS", icono: null, onClick: () => cambiarMayusculas("mayusculas") },
+                { texto: "minúsculas", icono: null, onClick: () => cambiarMayusculas("minusculas") },
+                { texto: "Tipo oración", icono: null, onClick: () => cambiarMayusculas("oracion") },
+                { texto: "Cada Palabra Con Mayúscula", icono: null, onClick: () => cambiarMayusculas("palabras") },
+              ]}
+            />
+            <button
+              onClick={() => void (actual.fijada ? (conVentana ? flotante.abrir() : fijar(actual, false)) : fijar(actual, true))}
+              aria-label={actual.fijada ? "Traer la ventanita al frente" : "Fijar en pantalla"}
+              title={actual.fijada ? (conVentana ? "Traer al frente la ventanita con las fijadas" : "Soltar de arriba") : conVentana ? "Fijar en pantalla, encima de todo" : "Fijar arriba"}
+              className={`flex size-10 items-center justify-center rounded-lg hover:bg-slate-100 ${actual.fijada ? "text-amber-500" : "text-slate-500"}`}
+            >
+              <Pin className={`size-5 ${actual.fijada ? "fill-current" : ""}`} />
+            </button>
             <span className="ml-auto px-2 text-xs text-slate-500">
               {contar(local.texto)} ·{" "}
               <span className={estado === "error" ? "text-red-600" : estado === "guardando" ? "text-amber-600" : "text-marca-oscuro"}>
@@ -389,6 +445,8 @@ export function Bloc({ comoApp = false }: { comoApp?: boolean }) {
 
           <Hoja
             key={actual.id}
+            area={hoja}
+            resaltados={local.resaltados}
             texto={local.texto}
             onTexto={(t) => escribir(actual.id, t)}
             letra={letra.px}
@@ -429,6 +487,8 @@ function coincidencias(texto: string, buscado: string): number[] {
 const ESTILO_HOJA = "block w-full whitespace-pre-wrap break-words p-4 leading-relaxed [overflow-wrap:anywhere]";
 
 function Hoja({
+  area,
+  resaltados,
   texto,
   onTexto,
   letra,
@@ -437,6 +497,9 @@ function Hoja({
   onModo,
   pantallaCompleta,
 }: {
+  /** La hoja (la usa el Bloc para resaltar y cambiar mayúsculas de lo seleccionado). */
+  area: React.RefObject<HTMLTextAreaElement | null>;
+  resaltados: Tramo[];
   texto: string;
   onTexto: (t: string) => void;
   letra: number;
@@ -449,7 +512,6 @@ function Hoja({
   const [buscado, setBuscado] = useState("");
   const [reemplazo, setReemplazo] = useState("");
   const [n, setN] = useState(0);
-  const area = useRef<HTMLTextAreaElement>(null);
   const fondo = useRef<HTMLDivElement>(null);
   const encontradas = useMemo(() => (buscando ? coincidencias(texto, buscado) : []), [texto, buscado, buscando]);
   const i = encontradas.length ? n % encontradas.length : 0;
@@ -476,23 +538,42 @@ function Hoja({
     }
   };
 
-  // El fondo pinta las coincidencias detrás del texto (el área de texto es transparente encima).
+  // El fondo pinta lo resaltado y las coincidencias de la búsqueda detrás del texto (el área de texto es transparente encima).
   const pintado = useMemo(() => {
-    if (!buscando || !encontradas.length) return null;
+    const busqueda = buscando ? encontradas.map((p, k) => ({ desde: p, hasta: p + buscado.length, k })) : [];
+    if (!resaltados.length && !busqueda.length) return null;
+    // Se corta el texto en cada borde de un resaltado o de una coincidencia; cada pedazo sabe qué lo pinta.
+    const bordes = [...new Set([0, texto.length, ...resaltados.flatMap((r) => [r.desde, r.hasta]), ...busqueda.flatMap((b) => [b.desde, b.hasta])])]
+      .filter((x) => x >= 0 && x <= texto.length)
+      .sort((a, b) => a - b);
     const partes: React.ReactNode[] = [];
-    let desde = 0;
-    encontradas.forEach((p, k) => {
-      partes.push(texto.slice(desde, p));
-      partes.push(
-        <mark key={p} data-actual={k === i ? "" : undefined} className={`rounded-sm text-transparent ${k === i ? "bg-orange-300" : "bg-yellow-200"}`}>
-          {texto.slice(p, p + buscado.length)}
-        </mark>,
-      );
-      desde = p + buscado.length;
-    });
-    partes.push(texto.slice(desde) + "\n");
+    for (let k = 0; k < bordes.length - 1; k++) {
+      const [a, b] = [bordes[k], bordes[k + 1]];
+      const pedazo = texto.slice(a, b);
+      const enBusqueda = busqueda.find((x) => x.desde <= a && x.hasta >= b);
+      const resaltado = resaltados.some((r) => r.desde <= a && r.hasta >= b);
+      if (enBusqueda)
+        partes.push(
+          <mark key={a} data-actual={enBusqueda.k === i ? "" : undefined} className={`rounded-sm text-transparent ${enBusqueda.k === i ? "bg-orange-300" : "bg-sky-200"}`}>
+            {pedazo}
+          </mark>,
+        );
+      else if (resaltado)
+        partes.push(
+          <mark key={a} className="rounded-sm bg-yellow-200 text-transparent">
+            {pedazo}
+          </mark>,
+        );
+      else partes.push(pedazo);
+    }
+    partes.push("\n");
     return partes;
-  }, [texto, encontradas, i, buscado, buscando]);
+  }, [texto, encontradas, i, buscado, buscando, resaltados]);
+
+  // El fondo acompaña el desplazamiento de la hoja (también al escribir o al cambiar lo resaltado).
+  useEffect(() => {
+    if (fondo.current && area.current) fondo.current.scrollTop = area.current.scrollTop;
+  });
 
   const teclaBuscar = (e: EventoTecla<HTMLInputElement>) => {
     if (e.key === "Enter") (e.preventDefault(), setN((x) => x + (e.shiftKey ? -1 + (encontradas.length || 1) : 1)));

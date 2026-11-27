@@ -31,7 +31,17 @@ export const rutasBloc: FastifyPluginAsync = async (app) => {
 
   /** Guardar (se llama solo mientras se escribe). Devuelve la versión nueva y si otro dispositivo había escrito antes. */
   app.put("/bloc/:id", async (req) =>
-    guardarPestana(Id.parse(req.params).id, z.object({ texto: Texto.optional(), titulo: Titulo.optional(), version: z.number().int() }).parse(req.body)),
+    guardarPestana(
+      Id.parse(req.params).id,
+      z
+        .object({
+          texto: Texto.optional(),
+          titulo: Titulo.optional(),
+          resaltados: z.array(z.object({ desde: z.number().int().min(0), hasta: z.number().int().min(0) })).max(5000).optional(),
+          version: z.number().int(),
+        })
+        .parse(req.body),
+    ),
   );
 
   app.put("/bloc/:id/fijada", async (req) => {
