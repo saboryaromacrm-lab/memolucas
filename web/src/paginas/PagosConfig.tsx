@@ -14,7 +14,15 @@ import { RevisionIa, type FilaIa } from "./PagosRevisionIa";
 import { useDatos } from "../lib/vivo";
 
 /** Filtro de la lista: todos, un lugar, los generales o los repartidos. */
-type FiltroLugar = number | "todos" | "general" | "repartido";
+type FiltroLugar = number | "todos" | "general" | "repartido" | "personal";
+
+/** Personal: de un lugar personal (la casa), general · personal o repartido solo entre lugares personales. */
+const esPersonal = (f: FijoPago, lugares: LugarPago[]) => {
+  const tipoDe = (id: number | null) => lugares.find((l) => l.id === id)?.tipo;
+  if (f.alcance === "general") return f.tipo === "personal";
+  if (f.alcance === "repartido") return !!f.reparto?.length && f.reparto.every((r) => tipoDe(r.lugarId) === "personal");
+  return tipoDe(f.lugarId) === "personal";
+};
 
 const nombreForma = (formas: FormaPago[], id: number | null) => (id === null ? null : (formas.find((f) => f.id === id)?.nombre ?? null));
 
@@ -35,7 +43,13 @@ export function PagosConfig() {
   const fijos = datos.fijos.filter(
     (f) =>
       lugar === "todos" ||
-      (lugar === "general" ? f.alcance === "general" : lugar === "repartido" ? f.alcance === "repartido" : f.lugarId === lugar || !!f.reparto?.some((r) => r.lugarId === lugar)),
+      (lugar === "personal"
+        ? esPersonal(f, datos.lugares)
+        : lugar === "general"
+          ? f.alcance === "general"
+          : lugar === "repartido"
+            ? f.alcance === "repartido"
+            : f.lugarId === lugar || !!f.reparto?.some((r) => r.lugarId === lugar)),
   );
   // Las categorías en tu orden.
   const grupoDeCategoria = (nombre: string) => {
@@ -59,7 +73,16 @@ export function PagosConfig() {
     const k1 = `${verPor.v}:${g.clave}`;
     return [k1, ...(verPor.v === "lugar" ? agrupar(g.items, (f) => grupoDeCategoria(f.categoria)) : agrupar(g.items, grupoDeConcepto)).map((sub) => `${k1}:${sub.clave}`)];
   });
-  const titulo = lugar === "todos" ? "todos" : lugar === "general" ? "general" : lugar === "repartido" ? "repartidos" : (datos.lugares.find((l) => l.id === lugar)?.nombre ?? "");
+  const titulo =
+    lugar === "todos"
+      ? "todos"
+      : lugar === "personal"
+        ? "todo lo personal"
+        : lugar === "general"
+          ? "general"
+          : lugar === "repartido"
+            ? "repartidos"
+            : (datos.lugares.find((l) => l.id === lugar)?.nombre ?? "");
 
   return (
     <div className="space-y-4">
@@ -383,6 +406,7 @@ function Lugares({ lugares, fijos, elegido, onElegir }: { lugares: LugarPago[]; 
   const agregar = async () => {
     if (await accion(() => post("/api/pagos/lugares", { nombre, tipo }), "Lugar agregado")) setNombre("");
   };
+  const personales = fijos.filter((f) => esPersonal(f, lugares)).length;
   const fila = (activo: boolean) => `flex w-full items-center justify-between gap-2 px-4 py-2.5 text-left text-sm ${activo ? "bg-marca-suave font-medium text-marca-profundo" : "text-slate-700 hover:bg-slate-50"}`;
   return (
     <section className="tarjeta overflow-hidden self-start">
@@ -434,6 +458,14 @@ function Lugares({ lugares, fijos, elegido, onElegir }: { lugares: LugarPago[]; 
             </li>
           );
         })}
+        <li className="border-t border-slate-100">
+          <button className={fila(elegido === "personal")} onClick={() => onElegir("personal")} title="Todo lo tuyo junto: la casa, lo general personal y lo repartido entre lugares personales">
+            <span className="flex items-center gap-2">
+              <Home className="size-4 shrink-0 text-slate-400" /> Todo lo personal
+            </span>
+            <span className="shrink-0 text-xs text-slate-400">{personales ? `${personales} ${personales === 1 ? "pago" : "pagos"}` : ""}</span>
+          </button>
+        </li>
       </ul>
       <form
         className="grid grid-cols-[1fr_auto] gap-2 border-t border-slate-100 p-3"
