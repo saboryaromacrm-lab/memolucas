@@ -133,6 +133,8 @@ export type Configuracion = {
   apiKeyEntorno: boolean;
   apiKeyDisponible: boolean;
   modelos: { id: string; nombre: string; entrada: number; salida: number }[];
+  /** Donde se abre e instala el Bloc como app aparte. */
+  urlBloc: string;
   esfuerzos: string[];
   plantillasDefecto: Plantillas;
 };
