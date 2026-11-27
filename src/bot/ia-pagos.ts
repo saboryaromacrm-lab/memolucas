@@ -3,7 +3,8 @@ import { normalizar, plata } from "../lib/textos.js";
 import { obtenerConfig } from "../servicios/configuracion.js";
 import { guardarAnalisis, listarFijos, listarLugares, resumenPagos, verMes, type Alcance, type FijoPropuesto } from "../servicios/pagos.js";
 import type { FrecuenciaPago, TipoLugar } from "../db/schema.js";
-import { CATEGORIAS, MEDIOS, MESES_DE, nombreMes, type Moneda } from "../servicios/pagos-reglas.js";
+import { elegirForma, formasActivas, type FormaPago } from "../servicios/pagos-formas.js";
+import { CATEGORIAS, MESES_DE, nombreMes, type Moneda } from "../servicios/pagos-reglas.js";
 import { hoyIso } from "../lib/fechas.js";
 import { ErrorUsuario } from "../servicios/recordatorios.js";
 import { gastoDelMes, pedir } from "./ia.js";
@@ -21,7 +22,7 @@ async function conTope() {
 const FRECUENCIAS = Object.keys(MESES_DE) as FrecuenciaPago[];
 
 /** Lo que la IA puede cambiar de un pago que ya está cargado (también es lo que la pantalla muestra como «antes → después»). */
-export const CAMPOS_FIJO = ["nombre", "alcance", "categoria", "monto", "variable", "moneda", "vence", "aviso", "frecuencia", "medio", "cuenta", "nota"] as const;
+export const CAMPOS_FIJO = ["nombre", "alcance", "categoria", "monto", "variable", "moneda", "vence", "aviso", "frecuencia", "forma", "cuenta", "nota"] as const;
 export type CampoFijo = (typeof CAMPOS_FIJO)[number];
 
 // Texto libre (no enums): la IA a veces deja vacíos o escribe a su manera; se normaliza después.
@@ -37,7 +38,7 @@ const Concepto = z.object({
   moneda: z.string().describe('"ARS" (pesos) o "USD" (dólares)'),
   dia: z.number().int().describe("Día del mes en que vence (1 a 31), solo si lo dijo ('a mitad de mes' = 15). Si no dijo un día: 0 (no tiene vencimiento)"),
   frecuencia: z.string().describe(`Una de: ${FRECUENCIAS.join(", ")}`),
-  medio: z.string().describe('Cómo lo paga: Transferencia, Efectivo, Débito automático… "" si no lo dijo'),
+  forma: z.string().describe('Con qué lo paga: una de sus formas de pago, tal cual figura. "" si no lo dijo'),
   cuenta: z.string().describe('Número de cliente, partida o cuenta si lo dijo; si no, ""'),
   nota: z.string().describe('Otro dato útil que dijo; si no, ""'),
 });
@@ -91,7 +92,7 @@ function numeroDe(texto: string) {
 }
 
 /** Un pago nuevo, tal como lo escribió la IA, listo para revisar. */
-const nuevoDesde = (p: z.infer<typeof Concepto>, lugares: Lugar[]): FijoPropuesto => ({
+const nuevoDesde = (p: z.infer<typeof Concepto>, lugares: Lugar[], formas: FormaPago[]): FijoPropuesto => ({
   ...resolverAlcance(lugares, p.alcance, p.lugar, p.tipo, p.repartir_entre),
   nombre: p.nombre,
   categoria: CATEGORIAS.includes(p.categoria) ? p.categoria : "Otros",
@@ -100,7 +101,7 @@ const nuevoDesde = (p: z.infer<typeof Concepto>, lugares: Lugar[]): FijoPropuest
   moneda: monedaDe(p.moneda),
   dia: diaDe(p.dia),
   frecuencia: frecuenciaDe(p.frecuencia) ?? "mensual",
-  medio: p.medio,
+  formaId: elegirForma(formas, p.forma)?.id ?? null,
   cuenta: p.cuenta,
   avisoDias: null,
   nota: p.nota,
@@ -114,7 +115,7 @@ const textoAlcance = (f: Alcance, lugares: Lugar[]) => {
 };
 
 /** Cómo ve la IA cada pago cargado: con los mismos formatos con que propone los cambios. */
-const textoFijo = (f: Fijo, lugares: Lugar[]) =>
+const textoFijo = (f: Fijo, lugares: Lugar[], formas: FormaPago[]) =>
   [
     `#${f.id}`,
     `nombre: ${f.nombre}`,
@@ -126,7 +127,7 @@ const textoFijo = (f: Fijo, lugares: Lugar[]) =>
     `vence: ${f.dia ?? 0}`,
     `aviso: ${f.avisoDias === null ? "general" : f.avisoDias < 0 ? "no" : f.avisoDias}`,
     `frecuencia: ${f.frecuencia}`,
-    f.medio && `medio: ${f.medio}`,
+    f.formaId && `forma: ${formas.find((x) => x.id === f.formaId)?.nombre ?? "?"}`,
     f.cuenta && `cuenta: ${f.cuenta}`,
     f.nota && `nota: ${f.nota}`,
   ]
@@ -134,7 +135,8 @@ const textoFijo = (f: Fijo, lugares: Lugar[]) =>
     .join(" | ");
 
 const FORMATOS = `Formatos del valor de cada campo en "cambios":
-- nombre, categoria, medio, cuenta, nota: el texto nuevo ("" para vaciarlo).
+- nombre, categoria, cuenta, nota: el texto nuevo ("" para vaciarlo).
+- forma: una de sus formas de pago, tal cual figura ("" para que no tenga una fija).
 - alcance: "lugar: <lugar>", "repartido: <lugar>, <lugar>" (sin lugares = todos los negocios) o "general: negocio" / "general: personal".
 - monto: el número (650 mil = 650000). variable: "si" (cambia mes a mes) o "no". moneda: "ARS" o "USD".
 - vence: el día del mes (1 a 31), o "0" para sacarle el vencimiento.
@@ -142,7 +144,7 @@ const FORMATOS = `Formatos del valor de cada campo en "cambios":
 - frecuencia: una de ${FRECUENCIAS.join(", ")}.`;
 
 /** Aplica un campo que cambió la IA. Lo que no se entiende se ignora (devuelve null). */
-function conCampo(f: FijoPropuesto, campo: CampoFijo, valor: string, lugares: Lugar[]): FijoPropuesto | null {
+function conCampo(f: FijoPropuesto, campo: CampoFijo, valor: string, lugares: Lugar[], formas: FormaPago[]): FijoPropuesto | null {
   const v = valor.trim();
   const numero = numeroDe(v);
   switch (campo) {
@@ -150,7 +152,11 @@ function conCampo(f: FijoPropuesto, campo: CampoFijo, valor: string, lugares: Lu
       return v ? { ...f, nombre: v } : null;
     case "categoria":
       return CATEGORIAS.includes(v) ? { ...f, categoria: v } : null;
-    case "medio":
+    case "forma": {
+      if (!v) return { ...f, formaId: null };
+      const forma = elegirForma(formas, v);
+      return forma ? { ...f, formaId: forma.id } : null;
+    }
     case "cuenta":
     case "nota":
       return { ...f, [campo]: v };
@@ -185,7 +191,7 @@ function conCampo(f: FijoPropuesto, campo: CampoFijo, valor: string, lugares: Lu
 function cambio(a: FijoPropuesto, b: FijoPropuesto, campo: CampoFijo) {
   if (campo === "alcance")
     return a.alcance !== b.alcance || a.lugarId !== b.lugarId || a.tipo !== b.tipo || JSON.stringify(a.reparto) !== JSON.stringify(b.reparto) || a.lugarNuevo?.nombre !== b.lugarNuevo?.nombre;
-  const clave = campo === "vence" ? "dia" : campo === "aviso" ? "avisoDias" : campo;
+  const clave = campo === "vence" ? "dia" : campo === "aviso" ? "avisoDias" : campo === "forma" ? "formaId" : campo;
   return a[clave] !== b[clave];
 }
 
@@ -197,18 +203,18 @@ const comoEntrada = ({ id: _, desde: __, ...f }: Fijo): FijoPropuesto => f;
  */
 export async function armarFijosConIa(texto: string) {
   const cfg = await conTope();
-  const [lugares, fijos] = await Promise.all([listarLugares(), listarFijos()]);
+  const [lugares, fijos, formas] = await Promise.all([listarLugares(), listarFijos(), formasActivas()]);
   const system = `Llevás la lista de pagos que ${cfg.nombreUsuario} hace siempre (sus locales, su casa, sus cosas). Te escribe o dicta como le sale: puede querer agregar pagos, cambiar los que tiene o borrarlos.
 Lugares que ya tiene: ${lugares.map((l) => `${l.nombre} (${l.tipo})`).join(", ") || "ninguno"}.
 Categorías: ${CATEGORIAS.join(", ")}.
-Medios de pago habituales: ${MEDIOS.join(", ")}.
+Formas de pago que tiene: ${formas.map((f) => f.nombre).join(", ") || "ninguna"}.
 Cada pago corresponde a:
 - "lugar": lo de un local o la casa (alquiler, luz, gas, internet, ABL de ese lugar).
 - "repartido": lo que es de varios locales a la vez y se paga una sola vez (contador, abogado, sistema, seguridad, publicidad): repartir_entre vacío = todos los negocios.
 - "general": lo que no tiene lugar físico (tarjeta de crédito, cuota del auto, préstamos, celular, prepaga): tipo "personal" salvo que diga que es del negocio.
 
 Pagos que ya tiene cargados:
-${fijos.map((f) => textoFijo(f, lugares)).join("\n") || "ninguno"}
+${fijos.map((f) => textoFijo(f, lugares, formas)).join("\n") || "ninguno"}
 
 Qué hacer:
 - Lo que no está en la lista va en "nuevos": un pago por cosa ("luz y gas en casa" son dos). "La luz de todos los locales" es una luz por cada local (no repartido).
@@ -227,11 +233,11 @@ ${FORMATOS}`;
   const borrar = [...new Set(r.borrar)].filter((id) => porId.has(id) && !pedidos.has(id));
   const cambios = [...pedidos].flatMap(([id, lista]) => {
     const antes = comoEntrada(porId.get(id)!);
-    const despues = lista.reduce((f, { campo, valor }) => conCampo(f, campo, valor, lugares) ?? f, antes);
+    const despues = lista.reduce((f, { campo, valor }) => conCampo(f, campo, valor, lugares, formas) ?? f, antes);
     const campos = CAMPOS_FIJO.filter((c) => cambio(antes, despues, c));
     return campos.length ? [{ id, despues, campos }] : [];
   });
-  const nuevos = r.nuevos.map((p) => nuevoDesde(p, lugares));
+  const nuevos = r.nuevos.map((p) => nuevoDesde(p, lugares, formas));
   const vacio = !nuevos.length && !cambios.length && !borrar.length;
   return { nuevos, cambios, borrar, mensaje: r.mensaje.trim() || (vacio ? "No encontré nada para agregar, cambiar ni borrar. Probá decirlo de otra forma." : "") };
 }

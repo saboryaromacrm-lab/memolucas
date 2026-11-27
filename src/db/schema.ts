@@ -361,6 +361,24 @@ export const pagoLugar = pgTable("pago_lugar", {
   creadoEn: creadoEn(),
 });
 
+export type TipoFormaPago = "transferencia" | "efectivo" | "debito_automatico" | "billetera" | "credito" | "debito" | "otro";
+
+/**
+ * Con qué se paga (Transferencia Galicia, Efectivo, Visa Santander…). Las tarjetas de la sección Tarjetas aparecen solas
+ * (tarjetaId). Las que ya se usaron no se borran: se archivan, así el historial sigue mostrando con qué se pagó.
+ */
+export const pagoForma = pgTable("pago_forma", {
+  id: serial("id").primaryKey(),
+  nombre: text("nombre").notNull(),
+  tipo: text("tipo").$type<TipoFormaPago>().notNull().default("otro"),
+  orden: integer("orden").notNull().default(0),
+  archivada: boolean("archivada").notNull().default(false),
+  tarjetaId: integer("tarjeta_id")
+    .unique()
+    .references(() => tarjeta.id, { onDelete: "set null" }),
+  creadoEn: creadoEn(),
+});
+
 export type FrecuenciaPago = "mensual" | "bimestral" | "trimestral" | "cuatrimestral" | "semestral" | "anual" | "unica";
 /**
  * A qué corresponde un pago: un lugar (el alquiler del local), repartido entre varios (el contador, entre los locales)
@@ -389,7 +407,8 @@ export const pagoFijo = pgTable("pago_fijo", {
   moneda: text("moneda").$type<"ARS" | "USD">().notNull().default("ARS"),
   /** Variable (luz, gas): el monto es un estimado y se sugiere con lo de los meses anteriores. */
   variable: boolean("variable").notNull().default(false),
-  medio: text("medio").notNull().default(""),
+  /** Con qué se paga siempre (la que aparece marcada al tocar «Pagado»). */
+  formaId: integer("forma_id").references(() => pagoForma.id, { onDelete: "set null" }),
   /** Días antes para avisar por WhatsApp: null = los de Configuración; -1 = no avisar. */
   avisoDias: integer("aviso_dias"),
   /** Nombre, monto, número de cliente o cuenta y nota. */
@@ -421,7 +440,8 @@ export const pagoMes = pgTable(
     fijoId: integer("fijo_id").references(() => pagoFijo.id, { onDelete: "set null" }),
     suscripcionId: integer("suscripcion_id").references(() => suscripcion.id, { onDelete: "set null" }),
     tarjetaId: integer("tarjeta_id").references(() => tarjeta.id, { onDelete: "set null" }),
-    medio: text("medio").notNull().default(""),
+    /** Pagado: con qué se pagó. Sin pagar: la que aparece marcada al tocar «Pagado» (la del fijo o la última usada). */
+    formaId: integer("forma_id").references(() => pagoForma.id, { onDelete: "set null" }),
     /** Último pago (el de la parte que completó, si fue en partes). */
     pagadoEn: date("pagado_en"),
     avisoPrevioEnviado: boolean("aviso_previo_enviado").notNull().default(false),
@@ -574,7 +594,9 @@ export type AccionEncuesta =
   | { tipo: "elegir"; ids: number[]; interpretacion: Record<string, unknown> }
   | { tipo: "suscripcion"; suscripcionId: number }
   /** "¿Es el ABL de Casa?" (foto de un comprobante): el borrador tiene el pago y la foto. */
-  | { tipo: "pago"; borradorId: number };
+  | { tipo: "pago"; borradorId: number }
+  /** "¿Con qué pagaste…?": cada opción es una forma de pago (formaIds, en el orden de las opciones). */
+  | { tipo: "formaPago"; borradorId: number; formaIds: number[] };
 
 /** Encuestas que manda el bot: la clave para descifrar los votos y qué hacer con cada opción. */
 export const encuesta = pgTable(

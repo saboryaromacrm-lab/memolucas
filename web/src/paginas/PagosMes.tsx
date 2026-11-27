@@ -1,11 +1,12 @@
 import { useRef, useState, type ReactNode } from "react";
 import { AlertTriangle, Ban, Check, FileText, Paperclip, Pencil, RotateCcw, Sparkles, Trash2, Undo2, Wallet } from "lucide-react";
+import { ElegirForma } from "../componentes/FormasPago";
 import { Boton, Cargando, Deslizable, MenuAcciones, Modal, Vacio, useAccion } from "../componentes/ui";
 import { api, del, post, put } from "../lib/api";
 import { ahora } from "../lib/fechas";
 import { aCampo, aNumero, plata } from "../lib/numeros";
 import { diaMes, plataTotales } from "../lib/pagos";
-import type { ConfigPagos, ItemPago, MesPagos, PartePago } from "../lib/tipos";
+import type { ConfigPagos, FormaPago, ItemPago, MesPagos, PartePago } from "../lib/tipos";
 import { useDatos } from "../lib/vivo";
 
 type Filtro = { tipo: "todos" } | { tipo: "negocio" | "personal" } | { tipo: "lugar"; lugar: string };
@@ -20,9 +21,12 @@ const ETIQUETA_ORIGEN: Partial<Record<ItemPago["origen"], string>> = { suscripci
 
 export function PagosMes({ periodo, nuevo, onCerrarNuevo, onConfigurar }: { periodo: string; nuevo: boolean; onCerrarNuevo: () => void; onConfigurar: () => void }) {
   const { datos } = useDatos<MesPagos>(`/api/pagos/mes?periodo=${periodo}`, ["pagos", "suscripciones", "tarjetas"]);
-  const config = useDatos<ConfigPagos>("/api/pagos/config", ["pagos"]).datos;
+  const config = useDatos<ConfigPagos>("/api/pagos/config", ["pagos", "tarjetas"]).datos;
   const [filtro, setFiltro] = useState<Filtro>({ tipo: "todos" });
-  const [pagando, setPagando] = useState<ItemPago | null>(null);
+  /** Con qué se pagó (solo lo pagado). */
+  const [conForma, setConForma] = useState<number | null>(null);
+  /** Marcar pagado o corregir un pago ya hecho. */
+  const [pago, setPago] = useState<{ i: ItemPago; corregir: boolean } | null>(null);
   const [editando, setEditando] = useState<ItemPago | null>(null);
   const [analizando, setAnalizando] = useState(false);
   const comprobante = useRef<HTMLInputElement>(null);
@@ -31,11 +35,14 @@ export function PagosMes({ periodo, nuevo, onCerrarNuevo, onConfigurar }: { peri
 
   if (!datos) return <Cargando />;
   // Un repartido aparece en cada uno de sus lugares (con su parte) y en Negocio o Personal según sus partes.
-  const pasa = (i: ItemPago) => filtro.tipo === "todos" || i.partes.some((p) => (filtro.tipo === "lugar" ? p.lugar === filtro.lugar : p.tipo === filtro.tipo));
+  const pasa = (i: ItemPago) =>
+    (filtro.tipo === "todos" || i.partes.some((p) => (filtro.tipo === "lugar" ? p.lugar === filtro.lugar : p.tipo === filtro.tipo))) &&
+    (conForma === null || (i.pagado > 0 && i.formaId === conForma));
   const items = datos.items.filter(pasa);
   const lugares = [...new Set(datos.items.flatMap((i) => i.partes.map((p) => p.lugar)))];
+  // Las formas con que ya se pagó algo este mes (para el filtro).
+  const formasUsadas = [...new Map(datos.items.filter((i) => i.pagado > 0 && i.formaId && i.forma).map((i) => [i.formaId!, i.forma!])).entries()];
   const parteDe = (i: ItemPago) => (filtro.tipo === "lugar" && i.partes.length > 1 ? i.partes.find((p) => p.lugar === filtro.lugar) : undefined);
-  const pagar = (i: ItemPago) => accion(() => post(`/api/pagos/${i.id}/pagar`, {}), `${i.nombre} · ${i.lugar}: pagado`);
   const analizar = async () => {
     setAnalizando(true);
     await accion(() => post("/api/pagos/ia/analizar", { periodo }), "Listo el análisis");
@@ -92,25 +99,37 @@ export function PagosMes({ periodo, nuevo, onCerrarNuevo, onConfigurar }: { peri
       )}
 
       {datos.items.length > 0 && (
-        <Deslizable className="gap-1.5">
-          {[
-            { f: { tipo: "todos" } as Filtro, texto: "Todos" },
-            { f: { tipo: "negocio" } as Filtro, texto: "Negocio" },
-            { f: { tipo: "personal" } as Filtro, texto: "Personal" },
-            ...lugares.map((l) => ({ f: { tipo: "lugar", lugar: l } as Filtro, texto: l })),
-          ].map(({ f, texto }) => {
-            const activo = JSON.stringify(f) === JSON.stringify(filtro);
-            return (
-              <button
-                key={texto + f.tipo}
-                onClick={() => setFiltro(f)}
-                className={`h-9 shrink-0 rounded-full border px-3.5 text-sm ${activo ? "border-marca-oscuro bg-marca-oscuro text-white" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"}`}
-              >
-                {texto}
-              </button>
-            );
-          })}
-        </Deslizable>
+        <div className="flex flex-wrap items-center gap-2">
+          <Deslizable className="min-w-0 flex-1 gap-1.5">
+            {[
+              { f: { tipo: "todos" } as Filtro, texto: "Todos" },
+              { f: { tipo: "negocio" } as Filtro, texto: "Negocio" },
+              { f: { tipo: "personal" } as Filtro, texto: "Personal" },
+              ...lugares.map((l) => ({ f: { tipo: "lugar", lugar: l } as Filtro, texto: l })),
+            ].map(({ f, texto }) => {
+              const activo = JSON.stringify(f) === JSON.stringify(filtro);
+              return (
+                <button
+                  key={texto + f.tipo}
+                  onClick={() => setFiltro(f)}
+                  className={`h-9 shrink-0 rounded-full border px-3.5 text-sm ${activo ? "border-marca-oscuro bg-marca-oscuro text-white" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"}`}
+                >
+                  {texto}
+                </button>
+              );
+            })}
+          </Deslizable>
+          {formasUsadas.length > 0 && (
+            <select className="campo h-9 w-auto py-0 text-sm" value={conForma ?? ""} onChange={(e) => setConForma(e.target.value ? Number(e.target.value) : null)} aria-label="Pagado con">
+              <option value="">Pagado con: todas</option>
+              {formasUsadas.map(([id, nombre]) => (
+                <option key={id} value={id}>
+                  Pagado con {nombre}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
       )}
 
       {!datos.items.length ? (
@@ -140,9 +159,9 @@ export function PagosMes({ periodo, nuevo, onCerrarNuevo, onConfigurar }: { peri
                       key={i.id}
                       i={i}
                       parte={parteDe(i)}
-                      onPagar={() => void pagar(i)}
+                      onPagar={() => setPago({ i, corregir: false })}
                       acciones={[
-                        i.estado !== "pagado" && i.estado !== "omitido" && { texto: "Pagar otro monto o en partes", icono: <Wallet />, onClick: () => setPagando(i) },
+                        (i.estado === "pagado" || i.estado === "parcial") && { texto: "Editar pago (forma, fecha o monto)", icono: <Wallet />, onClick: () => setPago({ i, corregir: true }) },
                         { texto: "Monto, vencimiento o nota del mes", icono: <Pencil />, onClick: () => setEditando(i) },
                         { texto: i.comprobante ? "Cambiar el comprobante" : "Adjuntar comprobante", icono: <Paperclip />, onClick: () => (setParaComprobante(i), comprobante.current?.click()) },
                         !!i.comprobante && { texto: "Ver comprobante", icono: <FileText />, onClick: () => void window.open(`/api/pagos/${i.id}/comprobante`, "_blank") },
@@ -164,7 +183,7 @@ export function PagosMes({ periodo, nuevo, onCerrarNuevo, onConfigurar }: { peri
       )}
 
       <input ref={comprobante} type="file" accept="image/*,application/pdf" hidden onChange={(e) => (void subirComprobante(e.target.files?.[0]), (e.target.value = ""))} />
-      {pagando && <ModalPagar i={pagando} medios={config?.medios ?? []} onCerrar={() => setPagando(null)} />}
+      {pago && config && <ModalPago {...pago} formas={config.formas} onCerrar={() => setPago(null)} />}
       {editando && <ModalDelMes i={editando} onCerrar={() => setEditando(null)} />}
       {nuevo && config && <ModalSuelto config={config} periodo={periodo} onCerrar={onCerrarNuevo} />}
     </div>
@@ -221,7 +240,7 @@ function Fila({ i, parte, onPagar, acciones }: { i: ItemPago; parte?: PartePago;
         ) : i.estado === "pagado" ? (
           <div className="text-right text-xs font-semibold text-marca-oscuro">
             ✓ Pagado{i.pagadoEn ? ` el ${diaMes(i.pagadoEn)}` : ""}
-            {i.medio && <div className="font-normal text-slate-400">{i.medio}</div>}
+            {i.forma && <div className="font-normal text-slate-400">{i.forma}</div>}
           </div>
         ) : (
           <span className="text-xs text-slate-400">No va</span>
@@ -232,51 +251,70 @@ function Fila({ i, parte, onPagar, acciones }: { i: ItemPago; parte?: PartePago;
   );
 }
 
-function ModalPagar({ i, medios, onCerrar }: { i: ItemPago; medios: string[]; onCerrar: () => void }) {
-  const [monto, setMonto] = useState(aCampo(i.falta, true));
-  const [fecha, setFecha] = useState(ahora().toISODate()!);
-  const [medio, setMedio] = useState(i.medio);
+/**
+ * Marcar pagado: con qué (la de siempre o la última, ya marcada), cuándo (hoy, se puede cambiar) y cuánto (lo que
+ * falta; con menos queda en parte). corregir: un pago ya hecho, sin desmarcarlo (cambia la última parte).
+ */
+function ModalPago({ i, corregir, formas, onCerrar }: { i: ItemPago; corregir: boolean; formas: FormaPago[]; onCerrar: () => void }) {
+  const hoy = ahora().toISODate()!;
+  const ayer = ahora().minus({ days: 1 }).toISODate()!;
+  const ultima = i.pagos.at(-1);
+  const [formaId, setFormaId] = useState(i.formaId && formas.some((f) => f.id === i.formaId && (corregir || !f.archivada)) ? i.formaId : null);
+  const [fecha, setFecha] = useState(corregir ? (ultima?.fecha ?? hoy) : hoy);
+  const [monto, setMonto] = useState(aCampo(corregir ? (ultima?.monto ?? i.pagado) : i.falta, true));
   const accion = useAccion();
   const n = aNumero(monto);
+  const listo = n !== null && n > 0 && formaId !== null && !!fecha;
   const guardar = async () => {
-    if (n === null) return;
-    if (await accion(() => post(`/api/pagos/${i.id}/pagar`, { monto: n, fecha, medio }), n + 0.5 < i.falta ? "Anotado: pagado en parte" : "Pagado")) onCerrar();
+    if (!listo) return;
+    const ok = corregir
+      ? await accion(() => put(`/api/pagos/${i.id}/pago`, { monto: n, fecha, formaId }), "Pago corregido")
+      : await accion(() => post(`/api/pagos/${i.id}/pagar`, { monto: n, fecha, formaId }), n + 0.5 < i.falta ? "Anotado: pagado en parte" : `${i.nombre} · ${i.lugar}: pagado`);
+    if (ok) onCerrar();
   };
+  const atajo = (valor: string, texto: string) => (
+    <button type="button" onClick={() => setFecha(valor)} className={`h-9 rounded-full border px-3 text-sm ${fecha === valor ? "border-marca-oscuro bg-marca-oscuro text-white" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"}`}>
+      {texto}
+    </button>
+  );
   return (
     <Modal
       abierto
       onCerrar={onCerrar}
-      titulo={`Pagar ${i.nombre} · ${i.lugar}`}
+      titulo={`${corregir ? "Editar el pago de" : "Pagar"} ${i.nombre} · ${i.lugar}`}
       ancho="max-w-md"
       pie={
         <>
           <Boton onClick={onCerrar}>Cancelar</Boton>
-          <Boton variante="primario" disabled={n === null} onClick={() => void guardar()}>
-            Guardar
+          <Boton variante="primario" disabled={!listo} onClick={() => void guardar()}>
+            {corregir ? "Guardar" : "Confirmar"}
           </Boton>
         </>
       }
     >
-      <p className="mb-3 text-sm text-slate-500">
-        Falta {plata(i.falta, i.moneda)}. Si pagás menos, queda <b>pagado en parte</b> y después sumás el resto.
-      </p>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="space-y-4">
+        <div>
+          <span className="etiqueta">¿Con qué pagaste?</span>
+          <ElegirForma formas={formas} valor={formaId} onCambio={setFormaId} />
+        </div>
+        <div>
+          <span className="etiqueta">¿Cuándo?</span>
+          <div className="flex flex-wrap items-center gap-2">
+            {atajo(hoy, "Hoy")}
+            {atajo(ayer, "Ayer")}
+            <input className="campo w-auto flex-1" type="date" value={fecha} max={hoy} onChange={(e) => setFecha(e.target.value)} aria-label="Fecha del pago" />
+          </div>
+        </div>
         <label className="block">
-          <span className="etiqueta">Monto</span>
-          <input className="campo" inputMode="decimal" autoFocus value={monto} onChange={(e) => setMonto(e.target.value)} />
-        </label>
-        <label className="block">
-          <span className="etiqueta">Fecha</span>
-          <input className="campo" type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} />
-        </label>
-        <label className="col-span-2 block">
-          <span className="etiqueta">Cómo lo pagaste</span>
-          <input className="campo" list="medios-pago" value={medio} onChange={(e) => setMedio(e.target.value)} placeholder="Transferencia, efectivo…" />
-          <datalist id="medios-pago">
-            {medios.map((m) => (
-              <option key={m} value={m} />
-            ))}
-          </datalist>
+          <span className="etiqueta">¿Cuánto?</span>
+          <input className="campo" inputMode="decimal" value={monto} onChange={(e) => setMonto(e.target.value)} />
+          <span className="mt-1 block text-xs text-slate-500">
+            {corregir
+              ? i.pagos.length > 1
+                ? `Se pagó en ${i.pagos.length} partes: esto corrige la última.`
+                : `Del total de ${plata(i.monto, i.moneda)}.`
+              : `Falta ${plata(i.falta, i.moneda)}. Si pagás menos, queda pagado en parte y después sumás el resto.`}
+          </span>
         </label>
       </div>
     </Modal>
@@ -329,7 +367,8 @@ function ModalDelMes({ i, onCerrar }: { i: ItemPago; onCerrar: () => void }) {
 
 function ModalSuelto({ config, periodo, onCerrar }: { config: ConfigPagos; periodo: string; onCerrar: () => void }) {
   const hoy = ahora().toISODate()!;
-  const [f, setF] = useState({ nombre: "", lugarId: "general-personal", categoria: "Otros", monto: "", moneda: "ARS", fecha: hoy.startsWith(periodo) ? hoy : `${periodo}-01`, medio: "", nota: "", pagado: true });
+  const [f, setF] = useState({ nombre: "", lugarId: "general-personal", categoria: "Otros", monto: "", moneda: "ARS", fecha: hoy.startsWith(periodo) ? hoy : `${periodo}-01`, nota: "", pagado: true });
+  const [formaId, setFormaId] = useState<number | null>(null);
   const accion = useAccion();
   const campo = (k: keyof typeof f) => ({ value: String(f[k]), onChange: (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value }) });
   const n = aNumero(f.monto);
@@ -338,7 +377,7 @@ function ModalSuelto({ config, periodo, onCerrar }: { config: ConfigPagos; perio
     // "general-personal" / "general-negocio": sin lugar físico.
     const general = f.lugarId.startsWith("general-");
     const ok = await accion(
-      () => post("/api/pagos", { ...f, monto: n, lugarId: general ? null : Number(f.lugarId), tipo: general ? f.lugarId.slice(8) : undefined }),
+      () => post("/api/pagos", { ...f, monto: n, formaId, lugarId: general ? null : Number(f.lugarId), tipo: general ? f.lugarId.slice(8) : undefined }),
       "Pago anotado",
     );
     if (ok) onCerrar();
@@ -352,7 +391,7 @@ function ModalSuelto({ config, periodo, onCerrar }: { config: ConfigPagos; perio
       pie={
         <>
           <Boton onClick={onCerrar}>Cancelar</Boton>
-          <Boton variante="primario" disabled={!f.nombre.trim() || n === null} onClick={() => void guardar()}>
+          <Boton variante="primario" disabled={!f.nombre.trim() || n === null || (f.pagado && formaId === null)} onClick={() => void guardar()}>
             Guardar
           </Boton>
         </>
@@ -400,19 +439,14 @@ function ModalSuelto({ config, periodo, onCerrar }: { config: ConfigPagos; perio
           <span className="etiqueta">Fecha</span>
           <input className="campo" type="date" {...campo("fecha")} />
         </label>
-        <label className="block">
-          <span className="etiqueta">Cómo lo pagaste</span>
-          <input className="campo" list="medios-suelto" placeholder="Transferencia…" {...campo("medio")} />
-          <datalist id="medios-suelto">
-            {config.medios.map((m) => (
-              <option key={m} value={m} />
-            ))}
-          </datalist>
-        </label>
         <label className="col-span-2 flex items-center gap-2 text-sm text-slate-700">
           <input type="checkbox" className="size-4 accent-marca-oscuro" checked={f.pagado} onChange={(e) => setF({ ...f, pagado: e.target.checked })} />
           Ya está pagado (si no, queda para pagar en esa fecha)
         </label>
+        <div className="col-span-2">
+          <span className="etiqueta">{f.pagado ? "¿Con qué pagaste?" : "¿Con qué lo vas a pagar? (opcional)"}</span>
+          <ElegirForma formas={config.formas} valor={formaId} onCambio={setFormaId} ninguna={f.pagado ? undefined : "Todavía no sé"} />
+        </div>
       </div>
     </Modal>
   );

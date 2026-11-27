@@ -204,6 +204,20 @@
       "when": 1795782628228,
       "tag": "0028_pagos_sin_vencimiento",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1795785249197,
+      "tag": "0029_formas_de_pago",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1795785261379,
+      "tag": "0030_sin_medio_de_texto",
+      "breakpoints": true
     }
   ]
 }
