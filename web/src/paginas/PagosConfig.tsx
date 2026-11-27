@@ -4,11 +4,15 @@ import { Boton, Cargando, Interruptor, MenuAcciones, Modal, useAccion } from "..
 import { del, post, put } from "../lib/api";
 import { aCampo, aNumero, plata } from "../lib/numeros";
 import { describirAlcance, FRECUENCIAS_PAGO, nombreMes, periodoActual } from "../lib/pagos";
-import type { AlcancePago, ConfigPagos, FijoPago, FrecuenciaPago, LugarPago, Moneda, TipoLugar } from "../lib/tipos";
+import type { AlcancePago, CampoFijo, ConfigPagos, FijoPago, FijoPropuesto, FrecuenciaPago, LugarPago, Moneda, PropuestaPagos, TipoLugar } from "../lib/tipos";
 import { useDatos } from "../lib/vivo";
 
-/** Lo que armó la IA, para revisar antes de guardar. */
-type Propuesto = Omit<FijoPago, "id" | "desde"> & { lugarNuevo?: { nombre: string; tipo: TipoLugar }; elegido: boolean };
+/** Cada cosa que propone la IA, con su casilla para revisar antes de aplicar. */
+type ItemIa = (
+  | { tipo: "nuevo"; fijo: FijoPropuesto }
+  | { tipo: "cambio"; antes: FijoPago; fijo: FijoPropuesto; campos: CampoFijo[] }
+  | { tipo: "borrar"; antes: FijoPago }
+) & { elegido: boolean };
 /** Filtro de la lista: todos, un lugar, los generales o los repartidos. */
 type FiltroLugar = number | "todos" | "general" | "repartido";
 
@@ -43,7 +47,7 @@ export function PagosConfig() {
             </Boton>
           </div>
           {!fijos.length ? (
-            <p className="border-t border-slate-100 px-4 py-6 text-center text-sm text-slate-500">Todavía no cargaste pagos{lugar === "todos" ? "" : " en este lugar"}. Usá «Cargá con IA» o «+ Pago fijo».</p>
+            <p className="border-t border-slate-100 px-4 py-6 text-center text-sm text-slate-500">Todavía no cargaste pagos{lugar === "todos" ? "" : " en este lugar"}. Usá «Cargá o cambiá con IA» o «+ Pago fijo».</p>
           ) : (
             <ul className="divide-y divide-slate-100 border-t border-slate-100">
               {fijos.map((f) => (
@@ -115,91 +119,186 @@ export function PagosConfig() {
   );
 }
 
+const ETIQUETA_CAMPO: Record<CampoFijo, string> = {
+  nombre: "Nombre",
+  alcance: "A qué corresponde",
+  categoria: "Categoría",
+  monto: "Monto",
+  variable: "Tipo de monto",
+  moneda: "Moneda",
+  vence: "Vencimiento",
+  aviso: "Aviso",
+  frecuencia: "Frecuencia",
+  medio: "Medio de pago",
+  cuenta: "Cuenta",
+  nota: "Nota",
+};
+
+const INSIGNIA: Record<ItemIa["tipo"], [string, string]> = {
+  nuevo: ["Nuevo", "bg-emerald-100 text-emerald-800"],
+  cambio: ["Cambia", "bg-sky-100 text-sky-800"],
+  borrar: ["Borrar", "bg-red-100 text-red-700"],
+};
+
+const cantidad = (n: number, uno: string, varios: string) => (n ? [`${n} ${n === 1 ? uno : varios}`] : []);
+
 function CargarConIa({ config }: { config: ConfigPagos }) {
   const [texto, setTexto] = useState("");
   const [armando, setArmando] = useState(false);
-  const [propuesta, setPropuesta] = useState<Propuesto[] | null>(null);
+  const [items, setItems] = useState<ItemIa[] | null>(null);
+  const [mensaje, setMensaje] = useState("");
   const accion = useAccion();
+  const lugarDe = (f: FijoPropuesto) => (f.lugarNuevo ? f.lugarNuevo.nombre : describirAlcance(f, config.lugares));
+  const valor = (c: CampoFijo, f: FijoPropuesto) =>
+    ({
+      nombre: f.nombre,
+      alcance: lugarDe(f) + (f.lugarNuevo ? " (lugar nuevo)" : ""),
+      categoria: f.categoria,
+      monto: f.monto ? plata(f.monto, f.moneda) : "sin monto",
+      variable: f.variable ? "cambia mes a mes" : "fijo",
+      moneda: f.moneda === "USD" ? "dólares" : "pesos",
+      vence: f.dia ? `día ${f.dia}` : "sin vencimiento",
+      aviso: textoAviso(f.avisoDias, config.diasAviso).toLowerCase(),
+      frecuencia: FRECUENCIAS_PAGO[f.frecuencia].toLowerCase(),
+      medio: f.medio,
+      cuenta: f.cuenta,
+      nota: f.nota,
+    })[c] || "—";
+
   const armar = async () => {
     setArmando(true);
-    const r = await accion(() => post<{ fijos: Omit<Propuesto, "elegido">[] }>("/api/pagos/ia/armar", { texto }));
+    setMensaje("");
+    const r = await accion(() => post<PropuestaPagos>("/api/pagos/ia/armar", { texto }));
     setArmando(false);
-    if (r) setPropuesta(r.fijos.map((f) => ({ ...f, elegido: true })));
+    if (!r) return;
+    const cargado = (id: number) => config.fijos.find((f) => f.id === id);
+    const lista: ItemIa[] = [
+      ...r.cambios.flatMap((c) => {
+        const antes = cargado(c.id);
+        return antes ? [{ tipo: "cambio" as const, antes, fijo: c.despues, campos: c.campos, elegido: true }] : [];
+      }),
+      ...r.nuevos.map((fijo) => ({ tipo: "nuevo" as const, fijo, elegido: true })),
+      // Lo que se borra arranca destildado: lo tildás vos.
+      ...r.borrar.flatMap((id) => {
+        const antes = cargado(id);
+        return antes ? [{ tipo: "borrar" as const, antes, elegido: false }] : [];
+      }),
+    ];
+    setMensaje(r.mensaje || (lista.length ? "" : "No encontré nada para agregar, cambiar ni borrar."));
+    if (lista.length) setItems(lista);
   };
-  const elegidos = propuesta?.filter((p) => p.elegido) ?? [];
-  const guardar = async () => {
-    const fijos = elegidos.map(({ elegido: _, ...f }) => f);
-    if (await accion(() => post("/api/pagos/fijos/lote", { fijos }), `Listo: ${fijos.length} ${fijos.length === 1 ? "pago cargado" : "pagos cargados"}`)) {
-      setPropuesta(null);
+  const cerrar = () => {
+    setItems(null);
+    setMensaje("");
+  };
+  const elegidos = items?.filter((i) => i.elegido) ?? [];
+  const aplicar = async () => {
+    const nuevos = elegidos.flatMap((i) => (i.tipo === "nuevo" ? [i.fijo] : []));
+    const cambios = elegidos.flatMap((i) => (i.tipo === "cambio" ? [{ id: i.antes.id, ...i.fijo }] : []));
+    const borrar = elegidos.flatMap((i) => (i.tipo === "borrar" ? [i.antes.id] : []));
+    const listo = [...cantidad(nuevos.length, "cargado", "cargados"), ...cantidad(cambios.length, "cambiado", "cambiados"), ...cantidad(borrar.length, "borrado", "borrados")];
+    if (await accion(() => post("/api/pagos/fijos/aplicar", { nuevos, cambios, borrar }), `Listo: ${listo.join(", ")}`)) {
+      cerrar();
       setTexto("");
     }
   };
-  const nombreLugar = (p: Propuesto) => (p.lugarNuevo ? p.lugarNuevo.nombre : describirAlcance(p, config.lugares));
+  const elegirTodos = (elegido: boolean) => items && setItems(items.map((i) => ({ ...i, elegido })));
 
   return (
     <section className="rounded-xl border border-teal-200 bg-gradient-to-br from-teal-50 to-white p-4">
       <h2 className="flex items-center gap-1.5 text-sm font-semibold text-marca-profundo">
-        <Sparkles className="size-4" /> Cargá con IA
+        <Sparkles className="size-4" /> Cargá o cambiá con IA
       </h2>
-      <p className="mt-1 text-sm text-slate-600">Escribí o dictá lo que pagás, como te salga. La IA arma la lista y la revisás antes de guardar (cuesta unos centavos).</p>
+      <p className="mt-1 text-sm text-slate-600">
+        Escribí o dictá lo que pagás o lo que querés cambiar, como te salga. La IA arma los cambios y los revisás antes de guardar (cuesta unos centavos).
+      </p>
       <textarea
         className="campo mt-2 min-h-24"
         value={texto}
         onChange={(e) => setTexto(e.target.value)}
-        placeholder="En el Express 1 pago alquiler 650 mil el 5, la luz a mitad de mes más o menos 70 mil, internet 30 mil por débito automático. En casa el ABL cada dos meses, unos 38 mil el 20…"
+        placeholder="En el Express 1 pago alquiler 650 mil el 5 y la luz más o menos 70 mil… · Sacale el vencimiento a todo · El alquiler de Fontana subió a 850 mil · Borrá el gimnasio"
       />
-      <div className="mt-2">
+      <div className="mt-2 flex flex-wrap items-center gap-3">
         <Boton variante="primario" icono={<Sparkles className="size-4" />} cargando={armando} disabled={texto.trim().length < 3} onClick={() => void armar()}>
-          Armar la lista
+          Armar con IA
         </Boton>
+        {mensaje && !items && <p className="text-sm text-amber-700">{mensaje}</p>}
       </div>
-      {propuesta && (
+      {items && (
         <Modal
           abierto
-          onCerrar={() => setPropuesta(null)}
-          titulo={`Revisá lo que armó la IA (${propuesta.length})`}
+          onCerrar={cerrar}
+          titulo={`Revisá lo que propone la IA (${items.length})`}
           ancho="max-w-4xl"
           pie={
             <>
-              <Boton onClick={() => setPropuesta(null)}>Cancelar</Boton>
-              <Boton variante="primario" disabled={!elegidos.length} onClick={() => void guardar()}>
-                Guardar {elegidos.length}
+              <Boton onClick={cerrar}>Cancelar</Boton>
+              <Boton variante="primario" disabled={!elegidos.length} onClick={() => void aplicar()}>
+                Aplicar {elegidos.length}
               </Boton>
             </>
           }
         >
-          <p className="mb-3 text-sm text-slate-500">Destildá lo que no va. Después cada uno se puede editar en la lista.</p>
+          {mensaje && <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">{mensaje}</p>}
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm text-slate-500">Destildá lo que no va. Lo que se borra viene destildado: tildalo si va.</p>
+            <div className="flex gap-1">
+              <Boton variante="fantasma" chico onClick={() => elegirTodos(true)}>
+                Elegir todos
+              </Boton>
+              <Boton variante="fantasma" chico onClick={() => elegirTodos(false)}>
+                Ninguno
+              </Boton>
+            </div>
+          </div>
           <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
-            {propuesta.map((p, k) => (
-              <li key={k} className="flex items-start gap-3 px-3 py-2.5">
-                <input
-                  type="checkbox"
-                  className="mt-1 size-4 accent-marca-oscuro"
-                  checked={p.elegido}
-                  onChange={(e) => setPropuesta(propuesta.map((x, j) => (j === k ? { ...x, elegido: e.target.checked } : x)))}
-                  aria-label={`Incluir ${p.nombre}`}
-                />
-                <div className="min-w-0 flex-1 text-sm">
-                  <div className="font-medium text-slate-900">
-                    {p.nombre} · {nombreLugar(p)}
-                    {p.lugarNuevo && <span className="ml-1.5 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-amber-800">Lugar nuevo</span>}
+            {items.map((it, k) => {
+              const f = it.tipo === "nuevo" ? it.fijo : it.antes;
+              const [insignia, color] = INSIGNIA[it.tipo];
+              return (
+                <li key={k} className="flex items-start gap-3 px-3 py-2.5">
+                  <input
+                    type="checkbox"
+                    className="mt-1 size-4 accent-marca-oscuro"
+                    checked={it.elegido}
+                    onChange={(e) => setItems(items.map((x, j) => (j === k ? { ...x, elegido: e.target.checked } : x)))}
+                    aria-label={`${insignia}: ${f.nombre}`}
+                  />
+                  <div className="min-w-0 flex-1 text-sm">
+                    <div className="font-medium text-slate-900">
+                      <span className={`mr-1.5 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${color}`}>{insignia}</span>
+                      {f.nombre} · {lugarDe(f)}
+                      {it.tipo === "nuevo" && it.fijo.lugarNuevo && <span className="ml-1.5 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-amber-800">Lugar nuevo</span>}
+                    </div>
+                    {it.tipo === "nuevo" && (
+                      <div className="text-xs text-slate-500">
+                        {[
+                          f.categoria,
+                          f.monto ? `${f.variable ? "~ " : ""}${plata(f.monto, f.moneda)}` : "sin monto",
+                          f.dia ? `día ${f.dia}` : "sin vencimiento",
+                          FRECUENCIAS_PAGO[f.frecuencia].toLowerCase(),
+                          f.medio,
+                          f.cuenta,
+                          f.nota,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </div>
+                    )}
+                    {it.tipo === "cambio" && (
+                      <ul className="mt-0.5 space-y-0.5 text-xs">
+                        {it.campos.map((c) => (
+                          <li key={c} className="text-slate-500">
+                            {ETIQUETA_CAMPO[c]}: <span className="text-slate-400 line-through">{valor(c, it.antes)}</span> → <span className="font-medium text-slate-800">{valor(c, it.fijo)}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {it.tipo === "borrar" && <div className="text-xs text-red-600">Se borra con sus pagos pendientes; lo pagado queda en el historial.</div>}
                   </div>
-                  <div className="text-xs text-slate-500">
-                    {[
-                      p.categoria,
-                      p.monto ? `${p.variable ? "~ " : ""}${plata(p.monto, p.moneda)}` : "sin monto",
-                      p.dia ? `día ${p.dia}` : "sin vencimiento",
-                      FRECUENCIAS_PAGO[p.frecuencia].toLowerCase(),
-                      p.medio,
-                      p.cuenta,
-                      p.nota,
-                    ]
-                      .filter(Boolean)
-                      .join(" · ")}
-                  </div>
-                </div>
-              </li>
-            ))}
+                </li>
+              );
+            })}
           </ul>
         </Modal>
       )}

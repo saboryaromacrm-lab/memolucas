@@ -295,7 +295,10 @@ describe("Pagos", () => {
 
   it("la IA arma la lista de lo que dictaste: usa tus lugares o propone los nuevos", async () => {
     pedir.mockResolvedValue({
-      pagos: [
+      cambios: [],
+      borrar: [],
+      mensaje: "",
+      nuevos: [
         // Para un lugar que ya existe la IA deja el tipo vacío, y escribe la moneda y la frecuencia a su manera: no rompe.
         { alcance: "lugar", lugar: "express 1", tipo: "", repartir_entre: [], nombre: "Alquiler", categoria: "Alquiler", monto: 650000, variable: false, moneda: "pesos", dia: 5, frecuencia: "Bimestral", medio: "Transferencia", cuenta: "", nota: "" },
         { alcance: "lugar", lugar: "Fontana", tipo: "negocio", repartir_entre: [], nombre: "Luz", categoria: "Electricidad", monto: 0, variable: true, moneda: "USD", dia: 15, frecuencia: "mensual", medio: "", cuenta: "", nota: "" },
@@ -303,7 +306,7 @@ describe("Pagos", () => {
         { alcance: "general", lugar: "", tipo: "personal", repartir_entre: [], nombre: "Cuota Fiat", categoria: "Préstamos y cuotas", monto: 300000, variable: false, moneda: "ARS", dia: 0, frecuencia: "mensual", medio: "", cuenta: "", nota: "" },
       ],
     });
-    const { fijos } = await armarFijosConIa("en el express 1 pago alquiler 650 mil el 5, y en Fontana la luz a mitad de mes");
+    const { nuevos: fijos } = await armarFijosConIa("en el express 1 pago alquiler 650 mil el 5, y en Fontana la luz a mitad de mes");
     expect(fijos.map((f) => [f.alcance, f.lugarId, f.lugarNuevo, f.categoria, f.moneda, f.frecuencia])).toEqual([
       ["lugar", express, undefined, "Alquiler", "ARS", "bimestral"],
       ["lugar", null, { nombre: "Fontana", tipo: "negocio" }, "Otros", "USD", "mensual"],
@@ -312,6 +315,60 @@ describe("Pagos", () => {
     ]);
     expect(fijos.map((f) => f.tipo)).toEqual([null, null, "negocio", "personal"]);
     expect(fijos.map((f) => f.dia)).toEqual([5, 15, 10, null]); // Sin día dicho: sin vencimiento.
+  });
+
+  it("la IA también cambia y borra lo que ya está cargado; se revisa y se aplica todo junto", async () => {
+    const alquiler = (await crearFijo(fijo(express, { nombre: "Alquiler", monto: 650000, dia: 5, nota: "Contrato hasta 2027" }))).id;
+    const abl = (await crearFijo(fijo(casa, { nombre: "ABL", categoria: "Impuestos y tasas", monto: 38400, dia: 20 }))).id;
+    const gym = (await crearFijo(fijo(casa, { nombre: "Gimnasio", monto: 25000, dia: 1 }))).id;
+    pedir.mockResolvedValue({
+      nuevos: [],
+      cambios: [
+        { id: alquiler, campo: "vence", valor: "0" },
+        { id: alquiler, campo: "monto", valor: "$ 850.000" }, // Escrito a la argentina.
+        { id: alquiler, campo: "nota", valor: "Contrato hasta 2027" }, // Mismo valor: no es un cambio.
+        { id: abl, campo: "vence", valor: "0" },
+        { id: abl, campo: "alcance", valor: "lugar: Fontana" },
+        { id: abl, campo: "aviso", valor: "no" },
+        { id: gym, campo: "Vence", valor: "15" }, // También pidió borrarlo: gana el borrado solo si no lo cambia.
+        { id: 999, campo: "vence", valor: "0" }, // No existe: se ignora.
+        { id: abl, campo: "frecuencia", valor: "cada tanto" }, // No se entiende: se ignora.
+      ],
+      borrar: [gym, 999],
+      mensaje: "",
+    });
+    const r1 = await armarFijosConIa("sacale el vencimiento a todo, el alquiler subió a 850 mil, el ABL pasalo a Fontana sin aviso");
+    expect(r1.cambios.map((c) => [c.id, c.campos])).toEqual([
+      [alquiler, ["monto", "vence"]],
+      [abl, ["alcance", "vence", "aviso"]],
+      [gym, ["vence"]],
+    ]);
+    expect(r1.borrar).toEqual([]);
+    const cambioAbl = r1.cambios[1].despues;
+    expect([cambioAbl.dia, cambioAbl.avisoDias, cambioAbl.lugarNuevo, cambioAbl.frecuencia]).toEqual([null, -1, { nombre: "Fontana", tipo: "negocio" }, "mensual"]);
+
+    // Sin cambios que tengan sentido: en lugar de una lista vacía, dice por qué.
+    pedir.mockResolvedValue({ nuevos: [], cambios: [], borrar: [], mensaje: "" });
+    expect((await armarFijosConIa("hola")).mensaje).toContain("No encontré nada para agregar, cambiar ni borrar");
+
+    // Se aplica por el panel: el cambio llega al pago de este mes y el borrado se lleva sus pendientes.
+    const { app, headers } = await panelConSesion();
+    const aplicar = (payload: object) => app.inject({ method: "POST", url: "/api/pagos/fijos/aplicar", headers, payload });
+    const res = await aplicar({ nuevos: [], cambios: r1.cambios.slice(0, 2).map((c) => ({ id: c.id, ...c.despues })), borrar: [gym] });
+    expect(res.json()).toEqual({ creados: 0, cambiados: 2, borrados: 1 });
+    const mes = await verMes("2026-11");
+    expect(mes.items.map((i) => [i.nombre, i.lugar, i.vence, i.monto])).toEqual(
+      expect.arrayContaining([
+        ["Alquiler", "Express 1", null, 850000],
+        ["ABL", "Fontana", null, 38400],
+      ]),
+    );
+    expect(mes.items.some((i) => i.nombre === "Gimnasio")).toBe(false);
+    // Algo que ya no existe frena todo antes de tocar nada.
+    const mal = await aplicar({ nuevos: [fijo(casa, { nombre: "Gas" })], cambios: [], borrar: [gym] });
+    expect(mal.statusCode).toBe(400);
+    expect((await verMes("2026-11")).items.some((i) => i.nombre === "Gas")).toBe(false);
+    await app.close();
   });
 
   it("si la IA falla al armar la lista, el panel dice por qué (no «Error interno»)", async () => {

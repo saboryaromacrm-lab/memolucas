@@ -4,6 +4,7 @@ import { analizarMesPagos, armarFijosConIa } from "../../bot/ia-pagos.js";
 import { actualizarConfig, obtenerConfig } from "../../servicios/configuracion.js";
 import {
   actualizarFijo,
+  aplicarFijos,
   actualizarLugar,
   actualizarPagoDelMes,
   borrarComprobante,
@@ -12,7 +13,6 @@ import {
   borrarPago,
   COMPROBANTE_MAX_BYTES,
   crearFijo,
-  crearFijos,
   crearLugar,
   crearSuelto,
   desmarcarPago,
@@ -97,12 +97,13 @@ export const rutasPagos: FastifyPluginAsync = async (app) => {
   });
 
   app.post("/pagos/fijos", async (req) => crearFijo(Fijo.parse(req.body)));
-  /** Lo que armó la IA y revisaste: los lugares nuevos se crean. */
-  app.post("/pagos/fijos/lote", async (req) => {
-    const { fijos } = z
-      .object({ fijos: z.array(Fijo.extend({ lugarNuevo: Lugar.optional() })).max(200) })
-      .parse(req.body);
-    return crearFijos(fijos);
+  /** Lo que propuso la IA y revisaste: agrega (los lugares nuevos se crean), cambia y borra. */
+  app.post("/pagos/fijos/aplicar", async (req) => {
+    const Propuesto = Fijo.extend({ lugarNuevo: Lugar.optional() });
+    const IdFijo = z.number().int().positive();
+    return aplicarFijos(
+      z.object({ nuevos: z.array(Propuesto).max(200), cambios: z.array(Propuesto.extend({ id: IdFijo })).max(500), borrar: z.array(IdFijo).max(500) }).parse(req.body),
+    );
   });
   app.put("/pagos/fijos/:id", async (req) => {
     await actualizarFijo(Id.parse(req.params).id, Fijo.parse(req.body));

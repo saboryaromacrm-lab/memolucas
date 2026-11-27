@@ -162,24 +162,36 @@ export async function crearFijo(e: EntradaFijo) {
   return f;
 }
 
-/** Varios a la vez (lo que arma la IA). Los lugares nuevos se crean antes. */
-export async function crearFijos(lista: (EntradaFijo & { lugarNuevo?: { nombre: string; tipo: TipoLugar } })[]) {
-  const nuevos = new Map<string, number>();
-  for (const e of lista) {
-    if (e.alcance !== "lugar") {
-      await crearFijo(e);
-      continue;
-    }
-    let lugarId = e.lugarId;
-    if (!lugarId && e.lugarNuevo) {
-      const clave = normalizar(e.lugarNuevo.nombre);
-      lugarId = nuevos.get(clave) ?? (await crearLugar(e.lugarNuevo)).id;
-      nuevos.set(clave, lugarId);
-    }
-    if (!lugarId) throw new ErrorUsuario(`Falta el lugar de «${e.nombre}».`);
-    await crearFijo({ ...e, lugarId });
+/** Un pago fijo propuesto por la IA: si es de un lugar que todavía no existe, trae el lugar a crear. */
+export type FijoPropuesto = EntradaFijo & { lugarNuevo?: { nombre: string; tipo: TipoLugar } };
+
+/**
+ * Lo que propuso la IA y revisaste: agrega, cambia y borra. Se revisa todo antes de tocar nada (así no queda a medias);
+ * los lugares nuevos se crean una sola vez aunque los nombren varios pagos.
+ */
+export async function aplicarFijos(c: { nuevos: FijoPropuesto[]; cambios: (FijoPropuesto & { id: number })[]; borrar: number[] }) {
+  for (const e of [...c.nuevos, ...c.cambios]) {
+    if (!e.nombre.trim()) throw new ErrorUsuario("Falta el nombre de un pago.");
+    if (e.alcance === "lugar" && !e.lugarId && !e.lugarNuevo?.nombre.trim()) throw new ErrorUsuario(`Falta el lugar de «${e.nombre}».`);
+    if (e.alcance !== "lugar") alcanceValido(e);
   }
-  return { creados: lista.length };
+  const ids = [...c.cambios.map((e) => e.id), ...c.borrar];
+  if (ids.length) {
+    const hay = new Set((await db.select({ id: pagoFijo.id }).from(pagoFijo).where(inArray(pagoFijo.id, ids))).map((f) => f.id));
+    if (ids.some((id) => !hay.has(id))) throw new ErrorUsuario("Algún pago ya no existe: volvé a armar los cambios.");
+  }
+  const lugaresNuevos = new Map<string, number>();
+  const conLugar = async (e: FijoPropuesto): Promise<EntradaFijo> => {
+    if (e.alcance !== "lugar" || e.lugarId || !e.lugarNuevo) return e;
+    const clave = normalizar(e.lugarNuevo.nombre);
+    const lugarId = lugaresNuevos.get(clave) ?? (await crearLugar(e.lugarNuevo)).id;
+    lugaresNuevos.set(clave, lugarId);
+    return { ...e, lugarId };
+  };
+  for (const e of c.nuevos) await crearFijo(await conLugar(e));
+  for (const { id, ...e } of c.cambios) await actualizarFijo(id, await conLugar(e));
+  for (const id of c.borrar) await borrarFijo(id);
+  return { creados: c.nuevos.length, cambiados: c.cambios.length, borrados: c.borrar.length };
 }
 
 /**
