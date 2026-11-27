@@ -382,8 +382,8 @@ export const pagoFijo = pgTable("pago_fijo", {
   reparto: jsonb("reparto").$type<RepartoPago>(),
   categoria: text("categoria").notNull(),
   frecuencia: text("frecuencia").$type<FrecuenciaPago>().notNull().default("mensual"),
-  /** Día del mes en que vence (si el mes es más corto, el último día). */
-  dia: integer("dia").notNull(),
+  /** Día del mes en que vence (si el mes es más corto, el último día). null: no tiene vencimiento. */
+  dia: integer("dia"),
   /** Primer mes en que se paga ("2026-11"): de ahí cuenta la frecuencia. */
   desde: text("desde").notNull(),
   moneda: text("moneda").$type<"ARS" | "USD">().notNull().default("ARS"),
@@ -409,7 +409,8 @@ export const pagoMes = pgTable(
   {
     id: serial("id").primaryKey(),
     periodo: text("periodo").notNull(),
-    vence: date("vence").notNull(),
+    /** null: no tiene vencimiento (nunca queda vencido ni se avisa antes). */
+    vence: date("vence"),
     lugarId: integer("lugar_id").references(() => pagoLugar.id, { onDelete: "restrict" }),
     alcance: text("alcance").$type<AlcancePago>().notNull().default("lugar"),
     tipo: text("tipo").$type<TipoLugar>(),

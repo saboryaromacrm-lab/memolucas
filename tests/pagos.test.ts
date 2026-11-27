@@ -203,6 +203,24 @@ describe("Pagos", () => {
     expect((await buscarPendientes("contador fontana")).map((i) => i.nombre)).toEqual(["Contador"]);
   });
 
+  it("sin vencimiento: va al final de lo que falta, nunca queda vencido ni se avisa antes, y sí entra en lo que falta del mes", async () => {
+    const wa = enviadorFalso();
+    await crearFijo(fijo(express, { nombre: "Luz", monto: 70000, dia: 28 }));
+    await crearFijo(fijo(casa, { nombre: "Ayuda a mamá", categoria: "Otros", monto: 50000, dia: null }));
+    const mes = await verMes("2026-11");
+    expect(mes.items.map((i) => [i.nombre, i.vence, i.vencido])).toEqual([
+      ["Luz", "2026-11-28", false],
+      ["Ayuda a mamá", null, false],
+    ]);
+    r.ir(local("2026-12-25T10:00"));
+    expect((await verMes("2026-12")).totales.vencidos).toBe(0);
+    await avisarPagos();
+    expect(wa.enviados.map((e) => e.texto).join()).not.toContain("Ayuda a mamá");
+    r.ir(local("2026-12-16T10:00"));
+    await mensajesDelMesPagos();
+    expect(wa.enviados.at(-1)?.texto).toContain("• Ayuda a mamá · Casa — $ 50.000,00 · sin vencimiento");
+  });
+
   it("buscar lo que dijo por WhatsApp, el historial y el resumen por lugar", async () => {
     await crearFijo(fijo(express, { nombre: "Luz", monto: 70000, dia: 15 }));
     await crearFijo(fijo(casa, { nombre: "Luz", monto: 40000, dia: 15 }));
@@ -282,7 +300,7 @@ describe("Pagos", () => {
         { alcance: "lugar", lugar: "express 1", tipo: "", repartir_entre: [], nombre: "Alquiler", categoria: "Alquiler", monto: 650000, variable: false, moneda: "pesos", dia: 5, frecuencia: "Bimestral", medio: "Transferencia", cuenta: "", nota: "" },
         { alcance: "lugar", lugar: "Fontana", tipo: "negocio", repartir_entre: [], nombre: "Luz", categoria: "Electricidad", monto: 0, variable: true, moneda: "USD", dia: 15, frecuencia: "mensual", medio: "", cuenta: "", nota: "" },
         { alcance: "repartido", lugar: "", tipo: "", repartir_entre: [], nombre: "Contador", categoria: "Honorarios", monto: 85000, variable: false, moneda: "ARS", dia: 10, frecuencia: "mensual", medio: "", cuenta: "", nota: "" },
-        { alcance: "general", lugar: "", tipo: "personal", repartir_entre: [], nombre: "Cuota Fiat", categoria: "Préstamos y cuotas", monto: 300000, variable: false, moneda: "ARS", dia: 15, frecuencia: "mensual", medio: "", cuenta: "", nota: "" },
+        { alcance: "general", lugar: "", tipo: "personal", repartir_entre: [], nombre: "Cuota Fiat", categoria: "Préstamos y cuotas", monto: 300000, variable: false, moneda: "ARS", dia: 0, frecuencia: "mensual", medio: "", cuenta: "", nota: "" },
       ],
     });
     const { fijos } = await armarFijosConIa("en el express 1 pago alquiler 650 mil el 5, y en Fontana la luz a mitad de mes");
@@ -293,6 +311,7 @@ describe("Pagos", () => {
       ["general", null, undefined, "Préstamos y cuotas", "ARS", "mensual"],
     ]);
     expect(fijos.map((f) => f.tipo)).toEqual([null, null, "negocio", "personal"]);
+    expect(fijos.map((f) => f.dia)).toEqual([5, 15, 10, null]); // Sin día dicho: sin vencimiento.
   });
 
   it("si la IA falla al armar la lista, el panel dice por qué (no «Error interno»)", async () => {

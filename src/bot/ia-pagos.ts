@@ -33,7 +33,7 @@ const EsquemaArmado = z.object({
       monto: z.number().describe("En números (650 mil = 650000). 0 si no lo dijo"),
       variable: z.boolean().describe("true si cambia mes a mes (luz, gas, agua) o dijo 'más o menos'"),
       moneda: z.string().describe('"ARS" (pesos) o "USD" (dólares)'),
-      dia: z.number().int().describe("Día del mes en que vence (1 a 31). 'A mitad de mes' = 15; si no lo dijo, 10"),
+      dia: z.number().int().describe("Día del mes en que vence (1 a 31), solo si lo dijo ('a mitad de mes' = 15). Si no dijo un día: 0 (no tiene vencimiento)"),
       frecuencia: z.string().describe(`Una de: ${FRECUENCIAS.join(", ")}`),
       medio: z.string().describe('Cómo lo paga: Transferencia, Efectivo, Débito automático… "" si no lo dijo'),
       cuenta: z.string().describe('Número de cliente, partida o cuenta si lo dijo; si no, ""'),
@@ -79,7 +79,7 @@ Un pago por cosa ("luz y gas en casa" son dos). Si dice "la luz de todos los loc
         monto: Math.max(0, p.monto),
         variable: p.variable,
         moneda: (/usd|d[oó]lar|u\$s|us\$/i.test(p.moneda) ? "USD" : "ARS") as "ARS" | "USD",
-        dia: Math.min(31, Math.max(1, p.dia)),
+        dia: p.dia >= 1 ? Math.min(31, p.dia) : null,
         frecuencia: (FRECUENCIAS.find((f) => normalizar(p.frecuencia).startsWith(f.slice(0, 5))) ?? "mensual") as FrecuenciaPago,
         medio: p.medio,
         cuenta: p.cuenta,
@@ -109,7 +109,7 @@ export async function analizarMesPagos(periodo: string): Promise<string> {
     "Por lugar este mes: " + resumen.mes.porLugar.map((g) => `${g.nombre} ${montos(g.total)}`).join(", "),
     "Por categoría este mes: " + resumen.mes.porCategoria.map((g) => `${g.nombre} ${montos(g.total)}`).join(", "),
     "Pagos (nombre | lugar | vence | monto | pagado | estado):",
-    ...mes.items.map((i) => `${i.nombre} | ${i.lugar} | ${i.vence} | ${plata(i.monto, i.moneda)} | ${plata(i.pagado, i.moneda)} | ${i.estado}${i.vencido ? " (vencido)" : ""}`),
+    ...mes.items.map((i) => `${i.nombre} | ${i.lugar} | ${i.vence ?? "sin vencimiento"} | ${plata(i.monto, i.moneda)} | ${plata(i.pagado, i.moneda)} | ${i.estado}${i.vencido ? " (vencido)" : ""}`),
     mes.alertas.length ? `Alertas calculadas: ${mes.alertas.join(" ")}` : "",
   ].join("\n");
   const system = `Sos el asistente de finanzas de ${cfg.nombreUsuario} (tiene locales, su casa y sus cosas). Analizás sus pagos del mes en español rioplatense, con voseo.

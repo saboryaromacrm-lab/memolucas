@@ -58,7 +58,7 @@ export function PagosConfig() {
                     <div className="text-[11px] text-slate-400">{f.variable ? "variable" : "fijo"}</div>
                   </div>
                   <div className="text-xs text-slate-600">
-                    Día {f.dia} · {FRECUENCIAS_PAGO[f.frecuencia].toLowerCase()}
+                    {f.dia ? `Día ${f.dia}` : "Sin vto."} · {FRECUENCIAS_PAGO[f.frecuencia].toLowerCase()}
                     <div className="text-slate-400">{f.medio || "Medio sin definir"}</div>
                   </div>
                   <div className="hidden text-xs text-slate-500 sm:block">{textoAviso(f.avisoDias, datos.diasAviso)}</div>
@@ -188,7 +188,7 @@ function CargarConIa({ config }: { config: ConfigPagos }) {
                     {[
                       p.categoria,
                       p.monto ? `${p.variable ? "~ " : ""}${plata(p.monto, p.moneda)}` : "sin monto",
-                      `día ${p.dia}`,
+                      p.dia ? `día ${p.dia}` : "sin vencimiento",
                       FRECUENCIAS_PAGO[p.frecuencia].toLowerCase(),
                       p.medio,
                       p.cuenta,
@@ -295,6 +295,8 @@ function ModalFijo({ fijo, lugarInicial, config, onCerrar }: { fijo: FijoPago | 
     variable: fijo?.variable ?? false,
     moneda: (fijo?.moneda ?? "ARS") as Moneda,
     dia: String(fijo?.dia ?? 10),
+    /** De entrada sin vencimiento: muchos pagos no tienen fecha. */
+    conVencimiento: fijo ? fijo.dia !== null : false,
     frecuencia: (fijo?.frecuencia ?? "mensual") as FrecuenciaPago,
     desde: fijo?.desde ?? periodoActual(),
     medio: fijo?.medio ?? "",
@@ -313,7 +315,7 @@ function ModalFijo({ fijo, lugarInicial, config, onCerrar }: { fijo: FijoPago | 
   const elegidos = Object.keys(reparto).map(Number);
   const suma = elegidos.reduce((s, id) => s + (aNumero(reparto[id]) ?? 0), 0);
   const repartoValido = elegidos.length >= 2 && (!conPorcentajes || Math.abs(suma - 100) < 0.01);
-  const valido = f.nombre.trim() && Number(f.dia) >= 1 && Number(f.dia) <= 31 && (alcance === "lugar" ? !!f.lugarId : alcance === "repartido" ? repartoValido : true);
+  const valido = f.nombre.trim() && (!f.conVencimiento || (Number(f.dia) >= 1 && Number(f.dia) <= 31)) && (alcance === "lugar" ? !!f.lugarId : alcance === "repartido" ? repartoValido : true);
   const alternar = (id: number) => setReparto((r) => (id in r ? Object.fromEntries(Object.entries(r).filter(([k]) => Number(k) !== id)) : { ...r, [id]: "" }));
   const guardar = async () => {
     const cuerpo = {
@@ -323,7 +325,7 @@ function ModalFijo({ fijo, lugarInicial, config, onCerrar }: { fijo: FijoPago | 
       tipo: alcance === "general" ? tipoGeneral : null,
       reparto: alcance === "repartido" ? elegidos.map((id) => ({ lugarId: id, porcentaje: conPorcentajes ? (aNumero(reparto[id]) ?? 0) : null })) : null,
       monto,
-      dia: Number(f.dia),
+      dia: f.conVencimiento ? Number(f.dia) : null,
       avisoDias: f.aviso === "" ? null : Number(f.aviso),
     };
     const ok = await accion(() => (fijo ? put(`/api/pagos/fijos/${fijo.id}`, cuerpo) : post("/api/pagos/fijos", cuerpo)), fijo ? "Guardado" : "Pago agregado");
@@ -448,11 +450,21 @@ function ModalFijo({ fijo, lugarInicial, config, onCerrar }: { fijo: FijoPago | 
           <input type="checkbox" className="size-4 accent-marca-oscuro" checked={f.variable} onChange={(e) => setF({ ...f, variable: e.target.checked })} />
           Cambia mes a mes (luz, gas, agua): sugiere el promedio de lo que pagaste
         </label>
-        <label className="block">
-          <span className="etiqueta">Vence el día</span>
-          <input className="campo" type="number" min={1} max={31} {...campo("dia")} />
-        </label>
-        <label className="block">
+        <div className="col-span-2">
+          <Interruptor
+            activo={f.conVencimiento}
+            onChange={(v) => setF({ ...f, conVencimiento: v })}
+            etiqueta="Tiene vencimiento"
+            ayuda={f.conVencimiento ? "Te aviso antes y, si pasa la fecha sin pagarlo, queda como vencido." : "Sin fecha: aparece en el mes para pagar, sin avisos de vencimiento."}
+          />
+        </div>
+        {f.conVencimiento && (
+          <label className="block">
+            <span className="etiqueta">Vence el día</span>
+            <input className="campo" type="number" min={1} max={31} {...campo("dia")} />
+          </label>
+        )}
+        <label className={f.conVencimiento ? "block" : "col-span-2 block"}>
           <span className="etiqueta">Cada cuánto</span>
           <select className="campo" {...campo("frecuencia")}>
             {Object.entries(FRECUENCIAS_PAGO).map(([v, t]) => (
@@ -480,7 +492,7 @@ function ModalFijo({ fijo, lugarInicial, config, onCerrar }: { fijo: FijoPago | 
           <span className="etiqueta">N.º de cliente o cuenta</span>
           <input className="campo" placeholder="Opcional" {...campo("cuenta")} />
         </label>
-        <label className="block">
+        <label className={f.conVencimiento ? "block" : "hidden"}>
           <span className="etiqueta">Aviso por WhatsApp</span>
           <select className="campo" {...campo("aviso")}>
             <option value="">Como en Configuración ({config.diasAviso} días antes)</option>

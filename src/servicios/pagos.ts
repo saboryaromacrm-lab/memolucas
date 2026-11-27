@@ -111,7 +111,8 @@ export type EntradaFijo = Alcance & {
   monto: number;
   variable: boolean;
   moneda: Moneda;
-  dia: number;
+  /** null: sin vencimiento. */
+  dia: number | null;
   frecuencia: FrecuenciaPago;
   desde?: string;
   medio: string;
@@ -138,7 +139,7 @@ const columnasFijo = (e: EntradaFijo) => ({
   ...alcanceValido(e),
   categoria: e.categoria.trim() || "Otros",
   frecuencia: e.frecuencia,
-  dia: Math.min(31, Math.max(1, Math.round(e.dia))),
+  dia: e.dia === null ? null : Math.min(31, Math.max(1, Math.round(e.dia))),
   moneda: e.moneda,
   variable: e.variable,
   medio: e.medio.trim(),
@@ -203,7 +204,7 @@ export async function actualizarFijo(id: number, e: EntradaFijo) {
     await db
       .update(pagoMes)
       .set({
-        vence: venceEn(f.dia, r.periodo),
+        vence: f.dia ? venceEn(f.dia, r.periodo) : null,
         lugarId: f.lugarId,
         alcance: f.alcance,
         tipo: f.tipo,
@@ -283,7 +284,7 @@ export async function prepararMes(periodo: string) {
       .insert(pagoMes)
       .values({
         periodo,
-        vence: venceEn(f.dia, periodo),
+        vence: f.dia ? venceEn(f.dia, periodo) : null,
         lugarId: f.lugarId,
         alcance: f.alcance,
         tipo: f.tipo,
@@ -415,7 +416,7 @@ function aItem(r: PagoMes, lugares: Lugar[], hoy: string) {
     pagado,
     falta: r.estado === "omitido" ? 0 : Math.max(0, monto - pagado),
     pagos: d.pagos,
-    vencido: (r.estado === "pendiente" || r.estado === "parcial") && r.vence < hoy,
+    vencido: (r.estado === "pendiente" || r.estado === "parcial") && r.vence !== null && r.vence < hoy,
     medio: r.medio,
     pagadoEn: r.pagadoEn,
     cuenta: d.cuenta,
@@ -542,7 +543,8 @@ export async function omitirPago(id: number, omitido: boolean) {
 }
 
 /** El monto y el vencimiento de este mes (los de la boleta), y la nota. Con una fecha nueva, los avisos vuelven a salir. */
-export async function actualizarPagoDelMes(id: number, c: { monto?: number; vence?: string; nota?: string; medio?: string }) {
+/** vence null: sin vencimiento. */
+export async function actualizarPagoDelMes(id: number, c: { monto?: number; vence?: string | null; nota?: string; medio?: string }) {
   const r = await obtener(id);
   const d = abrirMes(r.datosCifrados);
   const nuevo = { ...d, ...(c.monto !== undefined ? { boleta: Math.max(0, c.monto) } : {}), ...(c.nota !== undefined ? { nota: c.nota.trim() } : {}) };

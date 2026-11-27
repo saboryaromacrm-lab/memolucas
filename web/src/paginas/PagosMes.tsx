@@ -189,7 +189,7 @@ function Fila({ i, parte, onPagar, acciones }: { i: ItemPago; parte?: PartePago;
   return (
     // Celular: nombre y monto arriba; fecha, lugar y el botón abajo. Compu: todo en una fila.
     <li className={`grid grid-cols-[1fr_auto] items-center gap-x-3 gap-y-1.5 px-4 py-3 sm:grid-cols-[3.5rem_1fr_9rem_9rem_11.5rem] ${i.vencido ? "bg-red-50/60" : ""}`}>
-      <div className={`hidden text-sm font-semibold sm:col-start-1 sm:row-start-1 sm:block ${i.vencido ? "text-red-600" : "text-slate-700"}`}>{diaMes(i.vence)}</div>
+      <div className={`hidden text-sm font-semibold sm:col-start-1 sm:row-start-1 sm:block ${i.vencido ? "text-red-600" : i.vence ? "text-slate-700" : "text-slate-400"}`}>{i.vence ? diaMes(i.vence) : "Sin vto."}</div>
       <div className="min-w-0 sm:col-start-2 sm:row-start-1">
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="font-medium text-slate-900">{i.nombre}</span>
@@ -205,7 +205,7 @@ function Fila({ i, parte, onPagar, acciones }: { i: ItemPago; parte?: PartePago;
         </div>
       </div>
       <div className="flex min-w-0 items-center gap-2 text-xs text-slate-500 sm:col-start-3 sm:row-start-1">
-        <span className={`sm:hidden ${i.vencido ? "font-medium text-red-600" : ""}`}>{diaMes(i.vence)} ·</span>
+        <span className={`sm:hidden ${i.vencido ? "font-medium text-red-600" : ""}`}>{i.vence ? diaMes(i.vence) : "Sin vto."} ·</span>
         <span
           title={i.partes.length > 1 ? i.partes.map((p) => `${p.lugar}: ${plata(p.monto, i.moneda)}`).join(" · ") : undefined}
           className={`truncate rounded-md px-2 py-0.5 ${i.alcance === "repartido" ? "bg-amber-50 text-amber-800" : i.tipo === "negocio" ? "bg-indigo-50 text-indigo-700" : "bg-slate-100 text-slate-600"}`}
@@ -285,12 +285,12 @@ function ModalPagar({ i, medios, onCerrar }: { i: ItemPago; medios: string[]; on
 
 function ModalDelMes({ i, onCerrar }: { i: ItemPago; onCerrar: () => void }) {
   const [monto, setMonto] = useState(aCampo(i.monto, true));
-  const [vence, setVence] = useState(i.vence);
+  const [vence, setVence] = useState(i.vence ?? "");
   const [nota, setNota] = useState(i.nota);
   const accion = useAccion();
   const n = aNumero(monto);
   const guardar = async () => {
-    const cambios = { ...(n !== null && n !== i.monto ? { monto: n } : {}), ...(vence !== i.vence ? { vence } : {}), ...(nota !== i.nota ? { nota } : {}) };
+    const cambios = { ...(n !== null && n !== i.monto ? { monto: n } : {}), ...(vence !== (i.vence ?? "") ? { vence: vence || null } : {}), ...(nota !== i.nota ? { nota } : {}) };
     if (await accion(() => put(`/api/pagos/${i.id}`, cambios), "Guardado")) onCerrar();
   };
   return (
@@ -315,7 +315,7 @@ function ModalDelMes({ i, onCerrar }: { i: ItemPago; onCerrar: () => void }) {
           <input className="campo" inputMode="decimal" value={monto} onChange={(e) => setMonto(e.target.value)} />
         </label>
         <label className="block">
-          <span className="etiqueta">Vence</span>
+          <span className="etiqueta">Vence (opcional)</span>
           <input className="campo" type="date" value={vence} onChange={(e) => setVence(e.target.value)} />
         </label>
         <label className="col-span-2 block">
