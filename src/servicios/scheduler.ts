@@ -14,6 +14,7 @@ import { avisarSuscripciones } from "./suscripciones.js";
 import { avisarCierres, avisarTarjetas } from "./tarjetas.js";
 import { actualizarYtDlp } from "./videos.js";
 import { purgarBloc } from "./bloc.js";
+import { purgarCargas } from "./pagos-cargas.js";
 import { revisarIA } from "../bot/estado-ia.js";
 import { revisarCreditoIA } from "./credito-ia.js";
 import { avisarPagos, mensajesDelMesPagos } from "./pagos-avisos.js";
@@ -69,6 +70,7 @@ async function mantenimiento() {
   await borrarArchivosSueltos();
   await purgarWa();
   await purgarBloc();
+  await purgarCargas();
   await actualizarYtDlp();
   const cfg = await obtenerConfig();
   if (!cfg.limpiezaFotosActiva) return;

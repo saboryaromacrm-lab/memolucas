@@ -185,7 +185,7 @@ function CargarConIa({ config }: { config: ConfigPagos }) {
   const [texto, setTexto] = useState("");
   const [archivo, setArchivo] = useState<File | null>(null);
   const [armando, setArmando] = useState(false);
-  const [revision, setRevision] = useState<{ filas: FilaIa[]; totalImagen: number | null; mensaje: string } | null>(null);
+  const [revision, setRevision] = useState<{ filas: FilaIa[]; totalImagen: number | null; mensaje: string; cargaId: number } | null>(null);
   const [mensaje, setMensaje] = useState("");
   const accion = useAccion();
 
@@ -207,7 +207,7 @@ function CargarConIa({ config }: { config: ConfigPagos }) {
         return antes ? [{ tipo: "borrar" as const, antes }] : [];
       }),
     ];
-    if (filas.length) setRevision({ filas, totalImagen: r.totalImagen, mensaje: r.mensaje });
+    if (filas.length) setRevision({ filas, totalImagen: r.totalImagen, mensaje: r.mensaje, cargaId: r.cargaId });
     else setMensaje(r.mensaje || "No encontré nada para agregar, cambiar ni borrar.");
   };
   const listo = () => {

@@ -370,7 +370,8 @@ export type FijoPropuesto = Omit<FijoPago, "id" | "desde" | "estimado"> & {
 export type CampoFijo = "nombre" | "alcance" | "categoria" | "monto" | "variable" | "moneda" | "vence" | "aviso" | "frecuencia" | "forma" | "cuenta" | "nota";
 /** Lo que propone la IA contra la lista cargada: pagos nuevos, cambios (solo los campos que cambian) y los que se borran. */
 /** totalImagen: el total general que figura en la imagen o el PDF (null si no hay). */
-export type PropuestaPagos = { nuevos: FijoPropuesto[]; cambios: { id: number; despues: FijoPropuesto; campos: CampoFijo[] }[]; borrar: number[]; totalImagen: number | null; mensaje: string };
+/** cargaId: la lectura (va con lo que aplicás, así queda en «Cargas con IA»). */
+export type PropuestaPagos = { nuevos: FijoPropuesto[]; cambios: { id: number; despues: FijoPropuesto; campos: CampoFijo[] }[]; borrar: number[]; totalImagen: number | null; mensaje: string; cargaId: number };
 
 /** tercero: «Lo pagó: …» (otra persona lo pagó por vos; se crea sola con cada cuenta). */
 export type TipoFormaPago = "transferencia" | "efectivo" | "debito_automatico" | "billetera" | "credito" | "debito" | "otro" | "tercero";
@@ -399,4 +400,23 @@ export type PropuestaMes = {
   nuevos: FijoPropuesto[];
   totalImagen: number | null;
   mensaje: string;
+  cargaId: number;
+};
+
+/** Un renglón de lo que hizo una carga con IA. fijoId: el concepto (para abrirlo, si sigue estando). */
+export type LineaCarga = { tipo: "nuevo" | "cambio" | "borrar" | "monto" | "lugar" | "categoria"; nombre: string; detalle: string; fijoId?: number };
+/** Lo que aplicaste con la IA: lo que le pasaste y lo que hizo. reconstruida: de antes de que se guardaran (solo lo que creó). */
+export type CargaIa = { id: number; tipo: "config" | "mes"; periodo: string | null; reconstruida: boolean; aplicadaEn: string; texto: string; archivo: string | null; lineas: LineaCarga[] };
+/** Lo que va a pasar al deshacerla. */
+export type PlanDeshacer = { borra: string[]; vuelve: string[]; recrea: string[]; montos: string[]; quedan: { nombre: string; motivo: string }[]; lugares: string[]; categorias: string[]; reconstruida: boolean };
+/** Lo que hizo una carga, para abrirlo en la revisión y corregirlo. propios: los conceptos que creó. */
+export type CargaParaCorregir = {
+  id: number;
+  tipo: "config" | "mes";
+  periodo: string | null;
+  propios: number[];
+  nuevos: (FijoPropuesto & { pagadoCon?: number })[];
+  cambios: { antes: FijoPago; despues: FijoPropuesto }[];
+  borrar: FijoPago[];
+  montos: (({ fijoId: number } | { itemId: number }) & { monto: number; antes: number; nombre: string; lugar: string; pagado: boolean; pagadoCon?: number })[];
 };
