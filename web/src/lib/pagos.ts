@@ -1,7 +1,7 @@
 import { DateTime } from "luxon";
 import { ahora } from "./fechas";
 import { plata } from "./numeros";
-import type { FrecuenciaPago, Totales } from "./tipos";
+import type { AlcancePago, FrecuenciaPago, LugarPago, RepartoPago, TipoLugar, Totales } from "./tipos";
 
 // Lo común de las pantallas de Pagos.
 
@@ -27,3 +27,14 @@ export const FRECUENCIAS_PAGO: Record<FrecuenciaPago, string> = {
   anual: "Una vez por año",
   unica: "Una sola vez",
 };
+
+/** "Express 1", "Repartido: Express 1, Fontana (40 %, 60 %)" o "General · personal". */
+export function describirAlcance(a: { alcance: AlcancePago; lugarId: number | null; tipo: TipoLugar | null; reparto: RepartoPago | null }, lugares: LugarPago[]): string {
+  const nombre = (id: number | null) => lugares.find((l) => l.id === id)?.nombre ?? "—";
+  if (a.alcance === "general") return `General · ${a.tipo ?? "personal"}`;
+  if (a.alcance === "repartido" && a.reparto) {
+    const con = a.reparto.every((r) => r.porcentaje !== null);
+    return `Repartido: ${a.reparto.map((r) => nombre(r.lugarId) + (con ? ` ${r.porcentaje} %` : "")).join(", ")}${con ? "" : " (partes iguales)"}`;
+  }
+  return nombre(a.lugarId);
+}

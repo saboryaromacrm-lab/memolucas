@@ -30,6 +30,8 @@ const DatosTarjeta = z.object({
   disponibleCuotas: Plata,
   saldo: Plata,
   pagoMinimo: Plata,
+  /** Es del negocio: en Pagos su resumen cuenta como "General · negocio". */
+  negocio: z.boolean().optional(),
 });
 const DatosCuota = z.object({
   comercio: z.string().trim().min(1, "Falta el comercio").max(120),

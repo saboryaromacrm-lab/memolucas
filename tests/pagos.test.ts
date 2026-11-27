@@ -46,7 +46,10 @@ vi.mock("../src/bot/ia.js", async (orig) => ({
 const Z = "America/Argentina/Buenos_Aires";
 const local = (iso: string) => DateTime.fromISO(iso, { zone: Z }).toJSDate();
 const fijo = (lugarId: number, e: Partial<EntradaFijo>): EntradaFijo => ({
+  alcance: "lugar",
   lugarId,
+  tipo: null,
+  reparto: null,
   nombre: "Pago",
   categoria: "Servicios",
   monto: 0,
@@ -132,9 +135,9 @@ describe("Pagos", () => {
     const visa = await crearTarjeta({ ...SIN_SALDOS, nombre: "Visa", ultimos4: "1376", cierre: "2026-11-16", vencimiento: "2026-11-30", saldo: 386540, pagoMinimo: 38654 });
     const nov = await verMes("2026-11");
     expect(nov.items.map((i) => [i.nombre, i.lugar, i.monto, i.moneda, i.estado, i.origen])).toEqual([
-      ["Netflix", "Suscripciones", 9999, "ARS", "pagado", "suscripcion"], // El 10/11 ya se renovó (vence el 10/12).
-      ["ChatGPT Plus", "Suscripciones", 20, "USD", "pendiente", "suscripcion"],
-      ["Visa ···1376", "Tarjetas", 386540, "ARS", "pendiente", "tarjeta"],
+      ["Netflix", "General", 9999, "ARS", "pagado", "suscripcion"], // El 10/11 ya se renovó (vence el 10/12).
+      ["ChatGPT Plus", "General", 20, "USD", "pendiente", "suscripcion"],
+      ["Visa ···1376", "General", 386540, "ARS", "pendiente", "tarjeta"],
     ]);
     await registrarPago(nov.items[1].id);
     expect((await db.select().from(suscripcion).where(eq(suscripcion.id, chatgpt.id)))[0].fechaVto).toBe("2026-12-28");
@@ -163,6 +166,41 @@ describe("Pagos", () => {
     await borrarFijo(id);
     expect((await verMes("2026-11")).items.map((i) => [i.nombre, i.estado])).toEqual([["Internet Fibra", "pagado"]]); // Lo pagado queda.
     expect((await verMes("2026-12")).items).toEqual([]);
+  });
+
+  it("repartido entre locales y general: una vez en el mes, cada local con su parte en el resumen y en el CSV", async () => {
+    const fontana = (await crearLugar({ nombre: "Fontana", tipo: "negocio" })).id;
+    const reparto = [express, fontana].map((lugarId) => ({ lugarId, porcentaje: null }));
+    await crearFijo({ ...fijo(express, { nombre: "Contador", categoria: "Honorarios", monto: 85000, dia: 10 }), alcance: "repartido", lugarId: null, reparto });
+    await crearFijo({ ...fijo(express, { nombre: "Cuota Fiat", categoria: "Préstamos y cuotas", monto: 300000, dia: 15 }), alcance: "general", lugarId: null, tipo: "personal" });
+    await expect(crearFijo({ ...fijo(express, { nombre: "Abogado" }), alcance: "repartido", reparto: [reparto[0]] })).rejects.toThrow("al menos 2");
+    const mes = await verMes("2026-11");
+    expect(mes.items.map((i) => [i.nombre, i.lugar, i.tipo, i.monto])).toEqual([
+      ["Contador", "Repartido · 2 locales", "negocio", 85000],
+      ["Cuota Fiat", "General", "personal", 300000],
+    ]);
+    expect(mes.items[0].partes.map((p) => [p.lugar, p.monto])).toEqual([
+      ["Express 1", 42500],
+      ["Fontana", 42500],
+    ]);
+    const resumen = await resumenPagos("2026-11");
+    expect(resumen.mes.porLugar.map((g) => [g.nombre, g.total.ARS])).toEqual([
+      ["General", 300000],
+      ["Express 1", 42500],
+      ["Fontana", 42500],
+    ]);
+    expect(resumen.mes.porTipo.map((g) => [g.nombre, g.total.ARS])).toEqual([
+      ["Personal", 300000],
+      ["Negocio", 85000],
+    ]);
+    const { app, headers } = await panelConSesion();
+    const csv = (await app.inject({ url: "/api/pagos/exportar?desde=2026-11&hasta=2026-11", headers })).body;
+    expect(csv).toContain("Express 1;Negocio;Honorarios;Contador;ARS;42500,00;0,00;Pendiente;;Transferencia;50 % de $ 85.000,00 repartido;");
+    expect(csv).toContain("Fontana;Negocio;Honorarios;Contador;ARS;42500,00");
+    expect(csv).toContain("General;Personal;Préstamos y cuotas;Cuota Fiat;ARS;300000,00");
+    await app.close();
+    await expect(borrarLugar(fontana)).rejects.toThrow("tiene pagos");
+    expect((await buscarPendientes("contador fontana")).map((i) => i.nombre)).toEqual(["Contador"]);
   });
 
   it("buscar lo que dijo por WhatsApp, el historial y el resumen por lugar", async () => {
@@ -241,15 +279,20 @@ describe("Pagos", () => {
     pedir.mockResolvedValue({
       pagos: [
         // Para un lugar que ya existe la IA deja el tipo vacío, y escribe la moneda y la frecuencia a su manera: no rompe.
-        { lugar: "express 1", lugar_nuevo_tipo: "", nombre: "Alquiler", categoria: "Alquiler", monto: 650000, variable: false, moneda: "pesos", dia: 5, frecuencia: "Bimestral", medio: "Transferencia", cuenta: "", nota: "" },
-        { lugar: "Fontana", lugar_nuevo_tipo: "negocio", nombre: "Luz", categoria: "Electricidad", monto: 0, variable: true, moneda: "USD", dia: 15, frecuencia: "mensual", medio: "", cuenta: "", nota: "" },
+        { alcance: "lugar", lugar: "express 1", tipo: "", repartir_entre: [], nombre: "Alquiler", categoria: "Alquiler", monto: 650000, variable: false, moneda: "pesos", dia: 5, frecuencia: "Bimestral", medio: "Transferencia", cuenta: "", nota: "" },
+        { alcance: "lugar", lugar: "Fontana", tipo: "negocio", repartir_entre: [], nombre: "Luz", categoria: "Electricidad", monto: 0, variable: true, moneda: "USD", dia: 15, frecuencia: "mensual", medio: "", cuenta: "", nota: "" },
+        { alcance: "repartido", lugar: "", tipo: "", repartir_entre: [], nombre: "Contador", categoria: "Honorarios", monto: 85000, variable: false, moneda: "ARS", dia: 10, frecuencia: "mensual", medio: "", cuenta: "", nota: "" },
+        { alcance: "general", lugar: "", tipo: "personal", repartir_entre: [], nombre: "Cuota Fiat", categoria: "Préstamos y cuotas", monto: 300000, variable: false, moneda: "ARS", dia: 15, frecuencia: "mensual", medio: "", cuenta: "", nota: "" },
       ],
     });
     const { fijos } = await armarFijosConIa("en el express 1 pago alquiler 650 mil el 5, y en Fontana la luz a mitad de mes");
-    expect(fijos.map((f) => [f.lugarId, f.lugarNuevo, f.categoria, f.moneda, f.frecuencia])).toEqual([
-      [express, undefined, "Alquiler", "ARS", "bimestral"],
-      [null, { nombre: "Fontana", tipo: "negocio" }, "Otros", "USD", "mensual"],
+    expect(fijos.map((f) => [f.alcance, f.lugarId, f.lugarNuevo, f.categoria, f.moneda, f.frecuencia])).toEqual([
+      ["lugar", express, undefined, "Alquiler", "ARS", "bimestral"],
+      ["lugar", null, { nombre: "Fontana", tipo: "negocio" }, "Otros", "USD", "mensual"],
+      ["general", null, undefined, "Honorarios", "ARS", "mensual"], // Un solo negocio: repartido no tiene sentido, queda general · negocio.
+      ["general", null, undefined, "Préstamos y cuotas", "ARS", "mensual"],
     ]);
+    expect(fijos.map((f) => f.tipo)).toEqual([null, null, "negocio", "personal"]);
   });
 
   it("si la IA falla al armar la lista, el panel dice por qué (no «Error interno»)", async () => {

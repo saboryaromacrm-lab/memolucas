@@ -18,7 +18,8 @@ import { cuandoVence, diaDe, diasParaVencer, momentoAviso, sePuedeAvisar } from 
 // ───────────── Datos (lo cifrado de cada fila) ─────────────
 
 export type Saldos = { limiteCompra: number; limiteCuotas: number; disponibleCompra: number; disponibleCuotas: number; saldo: number; pagoMinimo: number };
-export type DatosTarjeta = Saldos & { nombre: string; ultimos4: string; cierre: string | null; vencimiento: string | null };
+/** negocio: sin el dato (al importar un resumen) no se cambia. */
+export type DatosTarjeta = Saldos & { nombre: string; ultimos4: string; cierre: string | null; vencimiento: string | null; negocio?: boolean };
 export type DatosCuota = { comercio: string; montoCuota: number; fechaCompra: string | null; cuotaActual: number; cuotaTotal: number };
 export type DatosConsumo = { nombre: string; montos: Record<string, number> };
 /** Cuánto pagaste del último resumen (null: no lo marcaste). Va con los saldos de la tarjeta. */
@@ -187,6 +188,7 @@ function vista(t: Tarjeta, cuotas: TarjetaCuota[], resumenes: FilaResumen[], con
     ultimos4: t.ultimos4,
     cierre: t.cierre,
     vencimiento: t.vencimiento,
+    negocio: t.negocio,
     ...saldosDe(saldos),
     usoLimite: saldos.limiteCompra > 0 ? ((saldos.limiteCompra - saldos.disponibleCompra) / saldos.limiteCompra) * 100 : null,
     proximoResumen: proximoResumen(t, saldos, activas, listaConsumos, suscripciones, gastos, hoy),
@@ -249,7 +251,14 @@ export async function avisoVtoPara(vencimiento: string | null) {
   return momentoAviso(vencimiento, cfg.tarjetasDiasAviso, cfg) <= new Date() ? vencimiento : null;
 }
 
-const filaTarjeta = (d: DatosTarjeta) => ({ nombre: d.nombre, ultimos4: d.ultimos4, cierre: d.cierre, vencimiento: d.vencimiento, datosCifrados: sellar(saldosDe(d)) });
+const filaTarjeta = (d: DatosTarjeta) => ({
+  nombre: d.nombre,
+  ultimos4: d.ultimos4,
+  cierre: d.cierre,
+  vencimiento: d.vencimiento,
+  datosCifrados: sellar(saldosDe(d)),
+  ...(d.negocio !== undefined ? { negocio: d.negocio } : {}),
+});
 
 export async function crearTarjeta(d: DatosTarjeta) {
   const [t] = await db
