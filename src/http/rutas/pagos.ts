@@ -50,7 +50,8 @@ const Fijo = Alcance.extend({
   monto: Monto,
   variable: z.boolean(),
   moneda: Moneda,
-  dia: z.number().int().min(1).max(31),
+  /** null: sin vencimiento. */
+  dia: z.number().int().min(1).max(31).nullable(),
   frecuencia: z.enum(["mensual", "bimestral", "trimestral", "cuatrimestral", "semestral", "anual", "unica"]),
   desde: Periodo.optional(),
   medio: z.string().max(60),
@@ -136,7 +137,7 @@ export const rutasPagos: FastifyPluginAsync = async (app) => {
     return { ok: true };
   });
   app.put("/pagos/:id", async (req) =>
-    actualizarPagoDelMes(Id.parse(req.params).id, z.object({ monto: Monto, vence: Fecha, nota: z.string().max(500), medio: z.string().max(60) }).partial().parse(req.body)),
+    actualizarPagoDelMes(Id.parse(req.params).id, z.object({ monto: Monto, vence: Fecha.nullable(), nota: z.string().max(500), medio: z.string().max(60) }).partial().parse(req.body)),
   );
   app.delete("/pagos/:id", async (req) => {
     await borrarPago(Id.parse(req.params).id);

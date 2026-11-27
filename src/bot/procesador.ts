@@ -178,7 +178,7 @@ async function textoPagosPendientes(): Promise<string> {
   const pendientes = await pagosPendientes().catch(() => [] as ItemPago[]);
   return pendientes
     .slice(0, 60)
-    .map((i) => `${i.id} | ${i.nombre} · ${i.lugar} | ${i.cuenta || "-"} | ${plata(i.falta || i.monto, i.moneda)} | ${i.vence}`)
+    .map((i) => `${i.id} | ${i.nombre} · ${i.lugar} | ${i.cuenta || "-"} | ${plata(i.falta || i.monto, i.moneda)} | ${i.vence ?? "sin vencimiento"}`)
     .join("\n");
 }
 
@@ -532,7 +532,8 @@ export class Procesador {
     if (a.tipo === "factura" && p) {
       const r = await actualizarPagoDelMes(p.id, { ...(a.monto_numero > 0 ? { monto: a.monto_numero } : {}), ...(fechaIso ? { vence: fechaIso } : {}) });
       await borrarAdjunto(adjuntoId);
-      return this.decir(`📄 Anoté la boleta de *${r.nombre} · ${r.lugar}*: ${plata(r.monto, r.moneda)}, ${cuandoVence(r.vence)}. Te aviso antes.`, { intencion: "pago_boleta" });
+      const cuando = r.vence ? `, ${cuandoVence(r.vence)}. Te aviso antes.` : ".";
+      return this.decir(`📄 Anoté la boleta de *${r.nombre} · ${r.lugar}*: ${plata(r.monto, r.moneda)}${cuando}`, { intencion: "pago_boleta" });
     }
     const borradorId = await guardarBorrador({ adjuntoId, pago: { registroId: p?.id ?? null, monto: a.monto_numero, fecha: fechaIso } });
     const vi = `🧾 Veo un pago${a.monto_numero > 0 ? ` de ${plata(a.monto_numero)}` : ""}${fechaIso ? ` del ${diaDe(fechaIso).toFormat("dd/MM")}` : ""}.`;

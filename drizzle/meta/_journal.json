@@ -197,6 +197,13 @@
       "when": 1795743540272,
       "tag": "0027_pagos_alcance",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1795782628228,
+      "tag": "0028_pagos_sin_vencimiento",
+      "breakpoints": true
     }
   ]
 }

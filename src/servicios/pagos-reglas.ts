@@ -98,14 +98,14 @@ export function estadoDe(esperado: number, pagos: ParteDePago[]): Exclude<Estado
 
 // ───────────── Alertas del mes (sin IA: salen de los números) ─────────────
 
-export type ItemAlerta = { nombre: string; lugar: string; moneda: Moneda; monto: number; vence: string; estado: EstadoPago; promedioAnterior: number | null };
+export type ItemAlerta = { nombre: string; lugar: string; moneda: Moneda; monto: number; vence: string | null; estado: EstadoPago; promedioAnterior: number | null };
 
 /** Sube más que esto respecto del promedio: se avisa. */
 const SUBA_MINIMA = 0.25;
 
 export function alertasDelMes(items: ItemAlerta[], hoy: string, totalAnterior: { ARS: number; USD: number } | null): string[] {
   const alertas: string[] = [];
-  const vencidos = items.filter((i) => (i.estado === "pendiente" || i.estado === "parcial") && i.vence < hoy);
+  const vencidos = items.filter((i): i is ItemAlerta & { vence: string } => (i.estado === "pendiente" || i.estado === "parcial") && i.vence !== null && i.vence < hoy);
   if (vencidos.length)
     alertas.push(
       `${vencidos.length === 1 ? "Venció sin pagar" : `Vencieron sin pagar ${vencidos.length}`}: ${vencidos
@@ -131,7 +131,7 @@ export function alertasDelMes(items: ItemAlerta[], hoy: string, totalAnterior: {
 /** Un renglón por lugar: un pago repartido sale en cada lugar con su parte (y "reparto" dice de cuánto). */
 export type FilaCsv = {
   periodo: string;
-  vence: string;
+  vence: string | null;
   lugar: string;
   tipo: string;
   categoria: string;

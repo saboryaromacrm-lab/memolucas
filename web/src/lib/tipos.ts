@@ -290,7 +290,8 @@ export type PartePago = { lugarId: number | null; lugar: string; tipo: TipoLugar
 export type ItemPago = {
   id: number;
   periodo: string;
-  vence: string;
+  /** null: sin vencimiento. */
+  vence: string | null;
   nombre: string;
   lugarId: number | null;
   alcance: AlcancePago;
@@ -343,7 +344,8 @@ export type FijoPago = {
   monto: number;
   variable: boolean;
   moneda: Moneda;
-  dia: number;
+  /** null: sin vencimiento. */
+  dia: number | null;
   frecuencia: FrecuenciaPago;
   desde: string;
   medio: string;
