@@ -5,8 +5,9 @@ import { IconoForma, TIPOS_FORMA } from "../componentes/FormasPago";
 import { Boton, Cargando, Interruptor, MenuAcciones, Modal, useAccion } from "../componentes/ui";
 import { del, post, put } from "../lib/api";
 import { plata } from "../lib/numeros";
-import { describirAlcance, FRECUENCIAS_PAGO, periodoActual } from "../lib/pagos";
-import type { ConfigPagos, FijoPago, FormaPago, LugarPago, PropuestaPagos, TipoFormaPago, TipoLugar } from "../lib/tipos";
+import { agrupar, describirAlcance, FRECUENCIAS_PAGO, grupoDeAlcance, periodoActual, plataTotales, totalPorMes } from "../lib/pagos";
+import { useRecordado } from "../lib/recordado";
+import type { CategoriaPago, ConfigPagos, FijoPago, FormaPago, LugarPago, PropuestaPagos, TipoFormaPago, TipoLugar } from "../lib/tipos";
 import { ModalFijo } from "./PagosFijo";
 import { RevisionIa, type FilaIa } from "./PagosRevisionIa";
 import { useDatos } from "../lib/vivo";
@@ -22,6 +23,7 @@ export function PagosConfig() {
   const { datos } = useDatos<ConfigPagos>("/api/pagos/config", ["pagos", "tarjetas"]);
   const [lugar, setLugar] = useState<FiltroLugar>("todos");
   const [editando, setEditando] = useState<FijoPago | "nuevo" | null>(null);
+  const [verPor, setVerPor] = useRecordado<{ v: "lugar" | "categoria" }>("pagos-ver-por", { v: "lugar" });
   const accion = useAccion();
   if (!datos) return <Cargando />;
   // Un repartido aparece en cada uno de sus lugares.
@@ -30,6 +32,11 @@ export function PagosConfig() {
       lugar === "todos" ||
       (lugar === "general" ? f.alcance === "general" : lugar === "repartido" ? f.alcance === "repartido" : f.lugarId === lugar || !!f.reparto?.some((r) => r.lugarId === lugar)),
   );
+  // Las categorías en tu orden.
+  const grupoDeCategoria = (nombre: string) => {
+    const k = datos.categorias.findIndex((c) => c.nombre === nombre);
+    return { clave: nombre, titulo: nombre, orden: k < 0 ? 999 : k };
+  };
   const titulo = lugar === "todos" ? "todos" : lugar === "general" ? "general" : lugar === "repartido" ? "repartidos" : (datos.lugares.find((l) => l.id === lugar)?.nombre ?? "");
 
   return (
@@ -40,52 +47,61 @@ export function PagosConfig() {
         <div className="space-y-4 self-start">
           <Lugares lugares={datos.lugares} fijos={datos.fijos} elegido={lugar} onElegir={setLugar} />
           <Formas formas={datos.formas} />
+          <Categorias categorias={datos.categorias} />
         </div>
 
         <section className="tarjeta overflow-hidden">
           <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
             <h2 className="text-sm font-semibold text-slate-800">Qué pagás · {titulo}</h2>
-            <Boton chico variante="primario" icono={<Plus className="size-3.5" />} disabled={!datos.lugares.length} onClick={() => setEditando("nuevo")}>
-              Pago fijo
-            </Boton>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex rounded-lg bg-slate-100 p-0.5 text-xs" role="radiogroup" aria-label="Ver por">
+                {(
+                  [
+                    ["lugar", "Por lugar"],
+                    ["categoria", "Por categoría"],
+                  ] as const
+                ).map(([v, texto]) => (
+                  <button key={v} role="radio" aria-checked={verPor.v === v} onClick={() => setVerPor({ v })} className={`min-h-8 rounded-md px-2.5 font-medium ${verPor.v === v ? "bg-white text-slate-900 shadow-sm" : "text-slate-500"}`}>
+                    {texto}
+                  </button>
+                ))}
+              </div>
+              <Boton chico variante="primario" icono={<Plus className="size-3.5" />} disabled={!datos.lugares.length} onClick={() => setEditando("nuevo")}>
+                Pago fijo
+              </Boton>
+            </div>
           </div>
           {!fijos.length ? (
             <p className="border-t border-slate-100 px-4 py-6 text-center text-sm text-slate-500">Todavía no cargaste pagos{lugar === "todos" ? "" : " en este lugar"}. Usá «Cargá o cambiá con IA» o «+ Pago fijo».</p>
           ) : (
-            <ul className="divide-y divide-slate-100 border-t border-slate-100">
-              {fijos.map((f) => (
-                <li key={f.id} className="grid grid-cols-[1fr_auto] items-center gap-x-3 gap-y-1 px-4 py-3 sm:grid-cols-[1fr_9rem_10rem_9rem_auto]">
-                  <button onClick={() => setEditando(f)} className="min-w-0 text-left">
-                    <div className="font-medium text-slate-900">{f.nombre}</div>
-                    <div className="truncate text-xs text-slate-500">{[(lugar === "todos" || f.alcance !== "lugar") && describirAlcance(f, datos.lugares), f.categoria, f.cuenta].filter(Boolean).join(" · ")}</div>
-                  </button>
-                  <div className="text-right text-sm tabular-nums text-slate-900 sm:text-left">
-                    {f.variable && "~ "}
-                    {f.monto ? plata(f.monto, f.moneda) : "Sin monto"}
-                    <div className="text-[11px] text-slate-400">{f.variable ? "variable" : "fijo"}</div>
+            agrupar(fijos, (f) => (verPor.v === "lugar" ? grupoDeAlcance(f, datos.lugares) : grupoDeCategoria(f.categoria))).map((g) => (
+              <div key={g.clave} className="border-t border-slate-200">
+                <h3 className="flex flex-wrap items-baseline justify-between gap-x-3 bg-slate-50 px-4 py-2 text-sm">
+                  <span className="font-semibold text-slate-800">{g.titulo}</span>
+                  <span className="text-xs text-slate-500">
+                    {g.items.length} {g.items.length === 1 ? "pago" : "pagos"} · {plataTotales(totalPorMes(g.items))} por mes
+                  </span>
+                </h3>
+                {/* Por lugar, adentro va por categoría; por categoría, cada pago dice su lugar. */}
+                {(verPor.v === "lugar" ? agrupar(g.items, (f) => grupoDeCategoria(f.categoria)) : [{ clave: "", titulo: "", orden: 0, items: g.items }]).map((sub) => (
+                  <div key={sub.clave}>
+                    {sub.titulo && <h4 className="px-4 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">{sub.titulo}</h4>}
+                    <ul className="divide-y divide-slate-100">
+                      {sub.items.map((f) => (
+                        <FilaFijo
+                          key={f.id}
+                          f={f}
+                          config={datos}
+                          detalle={[verPor.v === "categoria" || lugar !== "todos" ? describirAlcance(f, datos.lugares) : "", f.cuenta].filter(Boolean).join(" · ")}
+                          onEditar={() => setEditando(f)}
+                          onBorrar={() => confirm(`¿Borrar ${f.nombre}? Sale de los meses que vienen; lo ya pagado queda en el historial.`) && void accion(() => del(`/api/pagos/fijos/${f.id}`), "Pago borrado")}
+                        />
+                      ))}
+                    </ul>
                   </div>
-                  <div className="text-xs text-slate-600">
-                    {f.dia ? `Día ${f.dia}` : "Sin vto."} · {FRECUENCIAS_PAGO[f.frecuencia].toLowerCase()}
-                    <div className="text-slate-400">{nombreForma(datos.formas, f.formaId) ?? "Sin forma fija"}</div>
-                  </div>
-                  <div className="hidden text-xs text-slate-500 sm:block">{textoAviso(f.avisoDias, datos.diasAviso)}</div>
-                  <div className="col-start-2 row-span-2 row-start-1 self-center sm:col-start-auto sm:row-span-1">
-                    <MenuAcciones
-                      etiqueta={`Acciones de ${f.nombre}`}
-                      acciones={[
-                        { texto: "Editar", icono: <Pencil />, onClick: () => setEditando(f) },
-                        {
-                          texto: "Borrar",
-                          icono: <Trash2 />,
-                          peligro: true,
-                          onClick: () => confirm(`¿Borrar ${f.nombre}? Sale de los meses que vienen; lo ya pagado queda en el historial.`) && void accion(() => del(`/api/pagos/fijos/${f.id}`), "Pago borrado"),
-                        },
-                      ]}
-                    />
-                  </div>
-                </li>
-              ))}
-            </ul>
+                ))}
+              </div>
+            ))
           )}
         </section>
       </div>
@@ -194,6 +210,128 @@ function CargarConIa({ config }: { config: ConfigPagos }) {
         <RevisionIa modo="config" config={config} {...revision} periodo={periodoActual()} onCerrar={() => setRevision(null)} onListo={listo} />
       )}
     </section>
+  );
+}
+
+/** Un pago fijo de la lista: nombre, detalle, monto, vencimiento, forma y aviso. */
+function FilaFijo({ f, config, detalle, onEditar, onBorrar }: { f: FijoPago; config: ConfigPagos; detalle: string; onEditar: () => void; onBorrar: () => void }) {
+  return (
+    <li className="grid grid-cols-[1fr_auto] items-center gap-x-3 gap-y-1 px-4 py-3 sm:grid-cols-[1fr_9rem_10rem_9rem_auto]">
+      <button onClick={onEditar} className="min-w-0 text-left">
+        <div className="font-medium text-slate-900">{f.nombre}</div>
+        {detalle && <div className="truncate text-xs text-slate-500">{detalle}</div>}
+      </button>
+      <div className="text-right text-sm tabular-nums text-slate-900 sm:text-left">
+        {f.variable && "~ "}
+        {f.monto ? plata(f.monto, f.moneda) : "Sin monto"}
+        <div className="text-[11px] text-slate-400">{f.variable ? "variable" : "fijo"}</div>
+      </div>
+      <div className="text-xs text-slate-600">
+        {f.dia ? `Día ${f.dia}` : "Sin vto."} · {FRECUENCIAS_PAGO[f.frecuencia].toLowerCase()}
+        <div className="text-slate-400">{nombreForma(config.formas, f.formaId) ?? "Sin forma fija"}</div>
+      </div>
+      <div className="hidden text-xs text-slate-500 sm:block">{textoAviso(f.avisoDias, config.diasAviso)}</div>
+      <div className="col-start-2 row-span-2 row-start-1 self-center sm:col-start-auto sm:row-span-1">
+        <MenuAcciones
+          etiqueta={`Acciones de ${f.nombre}`}
+          acciones={[
+            { texto: "Editar", icono: <Pencil />, onClick: onEditar },
+            { texto: "Borrar", icono: <Trash2 />, peligro: true, onClick: onBorrar },
+          ]}
+        />
+      </div>
+    </li>
+  );
+}
+
+/** Tus categorías (Alquiler, Servicios…): renombrar cambia todos los pagos; borrar una con pagos pide a cuál pasarlos. */
+function Categorias({ categorias }: { categorias: CategoriaPago[] }) {
+  const [nombre, setNombre] = useState("");
+  const [borrando, setBorrando] = useState<CategoriaPago | null>(null);
+  const accion = useAccion();
+  const mover = (k: number, paso: -1 | 1) => {
+    const ids = categorias.map((c) => c.id);
+    [ids[k], ids[k + paso]] = [ids[k + paso], ids[k]];
+    void accion(() => put("/api/pagos/categorias/orden", { ids }));
+  };
+  const borrar = (c: CategoriaPago) => (c.usos ? setBorrando(c) : confirm(`¿Borrar la categoría «${c.nombre}»?`) && void accion(() => del(`/api/pagos/categorias/${c.id}`), "Categoría borrada"));
+  return (
+    <section className="tarjeta overflow-hidden">
+      <h2 className="px-4 py-3 text-sm font-semibold text-slate-800">Categorías</h2>
+      <ul className="border-t border-slate-100">
+        {categorias.map((c, k) => (
+          <li key={c.id} className="flex items-center gap-2 border-t border-slate-100 py-1.5 pl-4 pr-1 text-sm text-slate-700 first:border-t-0">
+            <span className="min-w-0 flex-1 truncate">{c.nombre}</span>
+            <span className="shrink-0 text-xs text-slate-400">{c.fijos ? `${c.fijos} ${c.fijos === 1 ? "pago" : "pagos"}` : ""}</span>
+            <MenuAcciones
+              etiqueta={`Acciones de ${c.nombre}`}
+              acciones={[
+                k > 0 && { texto: "Subir", icono: <ArrowUp />, onClick: () => mover(k, -1) },
+                k < categorias.length - 1 && { texto: "Bajar", icono: <ArrowDown />, onClick: () => mover(k, 1) },
+                {
+                  texto: "Renombrar",
+                  icono: <Pencil />,
+                  onClick: () => {
+                    const n = prompt("Nuevo nombre (cambia también en todos los pagos)", c.nombre);
+                    if (n?.trim() && n.trim() !== c.nombre) void accion(() => put(`/api/pagos/categorias/${c.id}`, { nombre: n }), "Renombrada");
+                  },
+                },
+                { texto: "Borrar", icono: <Trash2 />, peligro: true, onClick: () => borrar(c) },
+              ]}
+            />
+          </li>
+        ))}
+      </ul>
+      <form
+        className="flex gap-2 border-t border-slate-100 p-3"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (nombre.trim()) void accion(() => post("/api/pagos/categorias", { nombre }), "Categoría agregada").then((r) => r && setNombre(""));
+        }}
+      >
+        <input className="campo min-w-0 flex-1" placeholder="Nueva categoría" value={nombre} onChange={(e) => setNombre(e.target.value)} />
+        <Boton chico type="submit" disabled={!nombre.trim()} icono={<Plus className="size-3.5" />}>
+          Agregar
+        </Boton>
+      </form>
+      {borrando && <ModalBorrarCategoria categoria={borrando} categorias={categorias} onCerrar={() => setBorrando(null)} />}
+    </section>
+  );
+}
+
+function ModalBorrarCategoria({ categoria, categorias, onCerrar }: { categoria: CategoriaPago; categorias: CategoriaPago[]; onCerrar: () => void }) {
+  const otras = categorias.filter((c) => c.id !== categoria.id);
+  const [pasarA, setPasarA] = useState(otras.find((c) => c.nombre === "Otros")?.id ?? otras[0]?.id ?? 0);
+  const accion = useAccion();
+  const borrar = async () => {
+    if (await accion(() => del(`/api/pagos/categorias/${categoria.id}?pasarA=${pasarA}`), "Categoría borrada")) onCerrar();
+  };
+  return (
+    <Modal
+      abierto
+      onCerrar={onCerrar}
+      titulo={`Borrar «${categoria.nombre}»`}
+      ancho="max-w-sm"
+      pie={
+        <>
+          <Boton onClick={onCerrar}>Cancelar</Boton>
+          <Boton variante="peligro" disabled={!pasarA} onClick={() => void borrar()}>
+            Borrar y pasar
+          </Boton>
+        </>
+      }
+    >
+      <p className="mb-3 text-sm text-slate-600">
+        Tiene {categoria.usos} {categoria.usos === 1 ? "pago" : "pagos"} (fijos y de cada mes). ¿A qué categoría los paso?
+      </p>
+      <select className="campo" value={pasarA} onChange={(e) => setPasarA(Number(e.target.value))} aria-label="Pasar a">
+        {otras.map((c) => (
+          <option key={c.id} value={c.id}>
+            {c.nombre}
+          </option>
+        ))}
+      </select>
+    </Modal>
   );
 }
 

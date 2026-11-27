@@ -12,20 +12,6 @@ export type ParteDePago = { monto: number; fecha: string; formaId?: number };
 /** Cada cuántos meses (0 = una sola vez). */
 export const MESES_DE: Record<FrecuenciaPago, number> = { mensual: 1, bimestral: 2, trimestral: 3, cuatrimestral: 4, semestral: 6, anual: 12, unica: 0 };
 
-export const CATEGORIAS = [
-  "Alquiler",
-  "Servicios",
-  "Impuestos y tasas",
-  "Sueldos y cargas",
-  "Expensas",
-  "Seguros",
-  "Honorarios",
-  "Préstamos y cuotas",
-  "Tarjetas",
-  "Suscripciones",
-  "Otros",
-];
-
 /** "2026-11" de una fecha "2026-11-26". */
 export const periodoDe = (fecha: string) => fecha.slice(0, 7);
 export const sumarMeses = (periodo: string, n: number) => DateTime.fromISO(`${periodo}-01`).plus({ months: n }).toFormat("yyyy-MM");

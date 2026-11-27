@@ -22,6 +22,7 @@ import { hoyIso } from "../lib/fechas.js";
 import { normalizar, plata } from "../lib/textos.js";
 import { almacenCifrado, comoWebp } from "./archivos-cifrados.js";
 import { actualizarConfig, obtenerConfig } from "./configuracion.js";
+import { asegurarCategoria } from "./pagos-categorias.js";
 import { formaActiva, formaDeTarjeta } from "./pagos-formas.js";
 import {
   aCsv,
@@ -140,7 +141,7 @@ export function alcanceValido(a: Alcance): Alcance {
 
 const columnasFijo = (e: EntradaFijo) => ({
   ...alcanceValido(e),
-  categoria: e.categoria.trim() || "Otros",
+  categoria: e.categoria,
   frecuencia: e.frecuencia,
   dia: e.dia === null ? null : Math.min(31, Math.max(1, Math.round(e.dia))),
   moneda: e.moneda,
@@ -157,9 +158,10 @@ export async function listarFijos() {
 
 export async function crearFijo(e: EntradaFijo) {
   if (!e.nombre.trim()) throw new ErrorUsuario("Falta el nombre del pago.");
+  const categoria = await asegurarCategoria(e.categoria);
   const [f] = await db
     .insert(pagoFijo)
-    .values({ ...columnasFijo(e), desde: e.desde ?? mesActual() })
+    .values({ ...columnasFijo({ ...e, categoria }), desde: e.desde ?? mesActual() })
     .returning({ id: pagoFijo.id });
   avisar();
   return f;
@@ -248,9 +250,10 @@ export async function aplicarMes(periodo: string, c: { montos: MontoDelMes[]; nu
  */
 export async function actualizarFijo(id: number, e: EntradaFijo) {
   if (!e.nombre.trim()) throw new ErrorUsuario("Falta el nombre del pago.");
+  const categoria = await asegurarCategoria(e.categoria);
   const [f] = await db
     .update(pagoFijo)
-    .set({ ...columnasFijo(e), ...(e.desde ? { desde: e.desde } : {}), actualizadoEn: new Date() })
+    .set({ ...columnasFijo({ ...e, categoria }), ...(e.desde ? { desde: e.desde } : {}), actualizadoEn: new Date() })
     .where(eq(pagoFijo.id, id))
     .returning();
   if (!f) throw new ErrorUsuario("Ese pago ya no existe.");
@@ -677,6 +680,7 @@ export async function crearSuelto(e: EntradaSuelto) {
   if (!(e.monto > 0)) throw new ErrorUsuario("Falta el monto.");
   if (e.pagado && !e.formaId) throw new ErrorUsuario("Falta con qué lo pagaste.");
   if (e.formaId) await formaActiva(e.formaId);
+  const categoria = await asegurarCategoria(e.categoria);
   const pagos = e.pagado ? [{ monto: e.monto, fecha: e.fecha, ...(e.formaId ? { formaId: e.formaId } : {}) }] : [];
   const [r] = await db
     .insert(pagoMes)
@@ -684,7 +688,7 @@ export async function crearSuelto(e: EntradaSuelto) {
       periodo: periodoDe(e.fecha),
       vence: e.fecha,
       ...alcanceValido({ alcance: e.lugarId ? "lugar" : "general", lugarId: e.lugarId, tipo: e.tipo ?? null, reparto: null }),
-      categoria: e.categoria.trim() || "Otros",
+      categoria,
       moneda: e.moneda,
       estado: e.pagado ? "pagado" : "pendiente",
       pagadoEn: e.pagado ? e.fecha : null,

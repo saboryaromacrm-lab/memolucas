@@ -27,6 +27,7 @@ export function PagosMes({ periodo, nuevo, onCerrarNuevo, onConfigurar }: { peri
   const [filtro, setFiltro] = useState<Filtro>({ tipo: "todos" });
   /** Con qué se pagó (solo lo pagado). */
   const [conForma, setConForma] = useState<number | null>(null);
+  const [categoria, setCategoria] = useState<string | null>(null);
   /** Marcar pagado o corregir un pago ya hecho. */
   const [pago, setPago] = useState<{ i: ItemPago; corregir: boolean } | null>(null);
   const [editando, setEditando] = useState<ItemPago | null>(null);
@@ -37,13 +38,20 @@ export function PagosMes({ periodo, nuevo, onCerrarNuevo, onConfigurar }: { peri
   const accion = useAccion();
 
   if (!datos) return <Cargando />;
+  const ordenCategoria = (nombre: string) => {
+    const k = config?.categorias.findIndex((c) => c.nombre === nombre) ?? -1;
+    return k < 0 ? 999 : k;
+  };
   // Un repartido aparece en cada uno de sus lugares (con su parte) y en Negocio o Personal según sus partes.
   const pasa = (i: ItemPago) =>
     (filtro.tipo === "todos" || i.partes.some((p) => (filtro.tipo === "lugar" ? p.lugar === filtro.lugar : p.tipo === filtro.tipo))) &&
-    (conForma === null || (i.pagado > 0 && i.formaId === conForma));
+    (conForma === null || (i.pagado > 0 && i.formaId === conForma)) &&
+    (categoria === null || i.categoria === categoria);
   const items = datos.items.filter(pasa);
   const lugares = [...new Set(datos.items.flatMap((i) => i.partes.map((p) => p.lugar)))];
   // Las formas con que ya se pagó algo este mes (para el filtro).
+  // Las categorías de los pagos del mes, en tu orden.
+  const categorias = [...new Set(datos.items.map((i) => i.categoria))].sort((a, b) => ordenCategoria(a) - ordenCategoria(b) || a.localeCompare(b));
   const formasUsadas = [...new Map(datos.items.filter((i) => i.pagado > 0 && i.formaId && i.forma).map((i) => [i.formaId!, i.forma!])).entries()];
   const parteDe = (i: ItemPago) => (filtro.tipo === "lugar" && i.partes.length > 1 ? i.partes.find((p) => p.lugar === filtro.lugar) : undefined);
   const analizar = async () => {
@@ -129,6 +137,16 @@ export function PagosMes({ periodo, nuevo, onCerrarNuevo, onConfigurar }: { peri
               );
             })}
           </Deslizable>
+          {categorias.length > 1 && (
+            <select className="campo h-9 w-auto py-0 text-sm" value={categoria ?? ""} onChange={(e) => setCategoria(e.target.value || null)} aria-label="Categoría">
+              <option value="">Categoría: todas</option>
+              {categorias.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          )}
           {formasUsadas.length > 0 && (
             <select className="campo h-9 w-auto py-0 text-sm" value={conForma ?? ""} onChange={(e) => setConForma(e.target.value ? Number(e.target.value) : null)} aria-label="Pagado con">
               <option value="">Pagado con: todas</option>
@@ -431,7 +449,7 @@ function ModalSuelto({ config, periodo, onCerrar }: { config: ConfigPagos; perio
           <input className="campo" list="categorias-pago" {...campo("categoria")} />
           <datalist id="categorias-pago">
             {config.categorias.map((c) => (
-              <option key={c} value={c} />
+              <option key={c.id} value={c.nombre} />
             ))}
           </datalist>
         </label>

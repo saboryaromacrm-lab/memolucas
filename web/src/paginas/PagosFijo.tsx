@@ -204,7 +204,7 @@ export function ModalFijo({
           <input className="campo" list="categorias-fijo" {...campo("categoria")} />
           <datalist id="categorias-fijo">
             {config.categorias.map((c) => (
-              <option key={c} value={c} />
+              <option key={c.id} value={c.nombre} />
             ))}
           </datalist>
         </label>

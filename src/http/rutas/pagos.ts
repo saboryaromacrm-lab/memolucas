@@ -30,7 +30,8 @@ import {
 } from "../../servicios/pagos.js";
 import { actualizarPersona, borrarPagoAPersona, borrarPersona, crearPersona, listarCuentas, pagarAPersona } from "../../servicios/pagos-cuentas.js";
 import { actualizarForma, borrarForma, crearForma, listarFormas, ordenarFormas, TIPOS_FORMA } from "../../servicios/pagos-formas.js";
-import { CATEGORIAS, periodoDe } from "../../servicios/pagos-reglas.js";
+import { borrarCategoria, crearCategoria, listarCategorias, ordenarCategorias, renombrarCategoria } from "../../servicios/pagos-categorias.js";
+import { periodoDe } from "../../servicios/pagos-reglas.js";
 import { hoyIso } from "../../lib/fechas.js";
 import { ErrorUsuario } from "../../servicios/recordatorios.js";
 
@@ -99,7 +100,7 @@ export const rutasPagos: FastifyPluginAsync = async (app) => {
       lugares: await listarLugares(),
       fijos: await listarFijos(),
       formas: await listarFormas(),
-      categorias: CATEGORIAS,
+      categorias: await listarCategorias(),
       diasAviso: cfg.pagosDiasAviso,
       mensajes: cfg.pagosMensajes,
       notasIa: cfg.pagosNotasIa,
@@ -136,6 +137,22 @@ export const rutasPagos: FastifyPluginAsync = async (app) => {
   });
   app.delete("/pagos/formas/:id", async (req) => {
     await borrarForma(Id.parse(req.params).id);
+    return { ok: true };
+  });
+
+  const NombreCategoria = z.object({ nombre: z.string().max(60) });
+  app.post("/pagos/categorias", async (req) => crearCategoria(NombreCategoria.parse(req.body).nombre));
+  app.put("/pagos/categorias/orden", async (req) => {
+    await ordenarCategorias(z.object({ ids: z.array(z.number().int().positive()).max(200) }).parse(req.body).ids);
+    return { ok: true };
+  });
+  app.put("/pagos/categorias/:id", async (req) => {
+    await renombrarCategoria(Id.parse(req.params).id, NombreCategoria.parse(req.body).nombre);
+    return { ok: true };
+  });
+  /** ?pasarA: la categoría a la que pasan sus pagos (hace falta si tiene). */
+  app.delete("/pagos/categorias/:id", async (req) => {
+    await borrarCategoria(Id.parse(req.params).id, z.object({ pasarA: z.coerce.number().int().positive().optional() }).parse(req.query).pasarA);
     return { ok: true };
   });
 
