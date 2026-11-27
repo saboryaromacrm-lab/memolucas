@@ -102,7 +102,11 @@ export async function crearServidor() {
       await anotarFallaIA(motivo);
       return reply.code(503).send({ error: CAUSA_FALLA_IA[motivo] });
     }
-    if (err instanceof ErrorIA) return reply.code(502).send({ error: `La IA no pudo responder: ${err.message}` });
+    if (err instanceof ErrorIA) {
+      await registrar("error", "ia", `Falló la IA en ${req.method} ${req.url.split("?")[0]}`, err);
+      const detalle = err.message.length > 160 ? `${err.message.slice(0, 160)}… (el detalle completo quedó en Logs)` : err.message;
+      return reply.code(502).send({ error: `La IA no pudo responder: ${detalle}` });
+    }
     await registrar("error", "http", `Falló ${req.method} ${req.url.split("?")[0]}`, err);
     return reply.code(500).send({ error: "Error interno: el detalle quedó en Logs." });
   });
