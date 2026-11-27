@@ -16,7 +16,7 @@ const MINUTOS_ENTRE_VERSIONES = 5;
 export const DIAS_PAPELERA = 30;
 const SIN_TITULO = "Sin título";
 
-export type Pestana = { id: number; titulo: string; texto: string; orden: number; version: number; actualizadoEn: Date };
+export type Pestana = { id: number; titulo: string; texto: string; orden: number; version: number; fijada: boolean; actualizadoEn: Date };
 export type ImagenBloc = { id: number; ancho: number; alto: number };
 
 const leer = (cifrado: string) => descifrar(cifrado) ?? "(no se pudo descifrar)";
@@ -26,6 +26,7 @@ const aPestana = (f: typeof blocPestana.$inferSelect): Pestana => ({
   texto: leer(f.textoCifrado),
   orden: f.orden,
   version: f.version,
+  fijada: f.fijada,
   actualizadoEn: f.actualizadoEn,
 });
 
@@ -113,6 +114,13 @@ export async function ordenarBloc(ids: number[]) {
   await db.transaction(async (tx) => {
     for (const [i, id] of ids.entries()) await tx.update(blocPestana).set({ orden: i + 1 }).where(eq(blocPestana.id, id));
   });
+  bus.avisar("bloc");
+}
+
+/** Fijar en pantalla (o soltarla). No cambia la versión: no es escribir. */
+export async function fijarPestana(id: number, fijada: boolean) {
+  await obtener(id);
+  await db.update(blocPestana).set({ fijada }).where(eq(blocPestana.id, id));
   bus.avisar("bloc");
 }
 

@@ -7,6 +7,7 @@ import {
   borrarPestana,
   cerrarPestana,
   crearPestana,
+  fijarPestana,
   guardarPestana,
   IMAGEN_MAX_BYTES,
   leerImagen,
@@ -32,6 +33,11 @@ export const rutasBloc: FastifyPluginAsync = async (app) => {
   app.put("/bloc/:id", async (req) =>
     guardarPestana(Id.parse(req.params).id, z.object({ texto: Texto.optional(), titulo: Titulo.optional(), version: z.number().int() }).parse(req.body)),
   );
+
+  app.put("/bloc/:id/fijada", async (req) => {
+    await fijarPestana(Id.parse(req.params).id, z.object({ fijada: z.boolean() }).parse(req.body).fijada);
+    return { ok: true };
+  });
 
   app.post("/bloc/orden", async (req) => {
     await ordenarBloc(z.object({ ids: z.array(z.number().int().positive()).max(500) }).parse(req.body).ids);

@@ -1,3 +1,4 @@
+import { createPortal } from "react-dom";
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent as EventoPegar, type DragEvent as EventoArrastre, type KeyboardEvent as EventoTecla } from "react";
 import {
   AArrowDown,
@@ -13,6 +14,8 @@ import {
   MonitorDown,
   NotebookPen,
   Pencil,
+  Pin,
+  PinOff,
   Plus,
   Replace,
   Search,
@@ -27,9 +30,10 @@ import { comoAppInstalada, useInstalar } from "../lib/instalar";
 import { useRecordado } from "../lib/recordado";
 import type { Configuracion } from "../lib/tipos";
 import { useDatos } from "../lib/vivo";
+import { Fijadas, hayVentanaFlotante, useVentanaFlotante } from "./BlocFijadas";
 import { IMAGEN_MAX_MB, TiraImagenes, VisorImagen, type ImagenBloc } from "./BlocImagenes";
 
-type Pestana = { id: number; titulo: string; texto: string; orden: number; version: number; actualizadoEn: string; imagenes: ImagenBloc[] };
+type Pestana = { id: number; titulo: string; texto: string; orden: number; version: number; fijada: boolean; actualizadoEn: string; imagenes: ImagenBloc[] };
 type Local = { texto: string; version: number };
 
 /** Mientras escribís, se guarda a los 0,7 s de la última tecla. */
@@ -61,6 +65,9 @@ export function Bloc({ comoApp = false }: { comoApp?: boolean }) {
   const urlBloc = useDatos<Pick<Configuracion, "urlBloc">>(comoApp ? null : "/api/configuracion", []).datos?.urlBloc;
   const archivo = useRef<HTMLInputElement>(null);
   const imagen = useRef<HTMLInputElement>(null);
+  // Fijadas en pantalla: en la compu, la ventanita encima de todo; donde no se puede, la franja de arriba.
+  const flotante = useVentanaFlotante();
+  const conVentana = hayVentanaFlotante();
 
   // Estado de guardado, en refs para que los temporizadores vean lo último.
   const localesRef = useRef(locales);
@@ -72,6 +79,13 @@ export function Bloc({ comoApp = false }: { comoApp?: boolean }) {
   const pestanas = datos ?? [];
   const actual = pestanas.find((p) => p.id === activa.id) ?? pestanas[0];
   const local = actual ? (locales[actual.id] ?? { texto: actual.texto, version: actual.version }) : null;
+  const fijadas = pestanas.filter((p) => p.fijada).map((p) => ({ id: p.id, titulo: p.titulo, texto: locales[p.id]?.texto ?? p.texto }));
+
+  // Sin fijadas, la ventanita no tiene nada que mostrar.
+  const ventanaVacia = !!flotante.ventana && !!datos && !fijadas.length;
+  useEffect(() => {
+    if (ventanaVacia) flotante.cerrar();
+  }, [ventanaVacia, flotante]);
 
   // Lo que llega del servidor (otro dispositivo, el asistente) reemplaza lo local solo si acá no hay nada sin guardar.
   useEffect(() => {
@@ -147,6 +161,11 @@ export function Bloc({ comoApp = false }: { comoApp?: boolean }) {
       await guardar(p.id);
       await del(`/api/bloc/${p.id}`);
     }, `«${p.titulo}» fue a la papelera`);
+  /** En la compu la ventanita se abre en el mismo toque (el navegador no deja abrirla después). */
+  const fijar = async (p: Pestana, fijada: boolean) => {
+    if (fijada && conVentana) await flotante.abrir().catch(() => avisar("No se pudo abrir la ventanita: tocá «En pantalla» para abrirla.", "error"));
+    await accion(() => put(`/api/bloc/${p.id}/fijada`, { fijada }), fijada ? `«${p.titulo}» quedó fijada en pantalla` : undefined);
+  };
   const mover = (id: number, a: number) => {
     const ids = pestanas.map((p) => p.id).filter((x) => x !== id);
     ids.splice(Math.max(0, Math.min(ids.length, a)), 0, id);
@@ -205,6 +224,11 @@ export function Bloc({ comoApp = false }: { comoApp?: boolean }) {
 
   const acciones = (
     <>
+      {conVentana && fijadas.length > 0 && !flotante.ventana && (
+        <Boton chico={comoApp} icono={<Pin className="size-4" />} onClick={() => void flotante.abrir()} title="Abre la ventanita con las fijadas, encima de todo">
+          En pantalla ({fijadas.length})
+        </Boton>
+      )}
       <Boton chico={comoApp} icono={<Upload className="size-4" />} onClick={() => archivo.current?.click()}>
         Importar .txt
       </Boton>
@@ -250,6 +274,17 @@ export function Bloc({ comoApp = false }: { comoApp?: boolean }) {
         />
       )}
       <input ref={archivo} type="file" accept=".txt,.md,text/plain" multiple hidden onChange={(e) => (void importar(e.target.files), (e.target.value = ""))} />
+
+      {fijadas.length > 0 && !conVentana && (
+        <div className={comoApp ? "mb-2 shrink-0" : "mb-3"}>
+          <Fijadas fijadas={fijadas} letra={letra.px} onTexto={escribir} onSoltar={(id) => void fijar(pestanas.find((p) => p.id === id)!, false)} enVentana={false} />
+        </div>
+      )}
+      {flotante.ventana &&
+        createPortal(
+          <Fijadas fijadas={fijadas} letra={letra.px} onTexto={escribir} onSoltar={(id) => void fijar(pestanas.find((p) => p.id === id)!, false)} enVentana />,
+          flotante.ventana.document.body,
+        )}
 
       {!actual || !local ? (
         <div className="tarjeta">
@@ -314,6 +349,9 @@ export function Bloc({ comoApp = false }: { comoApp?: boolean }) {
                 { texto: "Renombrar", icono: <Pencil />, onClick: () => setRenombrar(actual) },
                 { texto: "Historial", icono: <History />, onClick: () => (guardarTodo(), setHistorial(actual)) },
                 { texto: "Copiar todo", icono: <ClipboardCopy />, onClick: () => void copiar(local.texto) },
+                actual.fijada
+                  ? { texto: "Soltar de la pantalla", icono: <PinOff />, onClick: () => void fijar(actual, false) }
+                  : { texto: conVentana ? "Fijar en pantalla (encima de todo)" : "Fijar arriba", icono: <Pin />, onClick: () => void fijar(actual, true) },
                 pestanas[0]?.id !== actual.id && { texto: "Mover a la izquierda", icono: <ArrowLeft />, onClick: () => mover(actual.id, pestanas.findIndex((x) => x.id === actual.id) - 1) },
                 pestanas.at(-1)?.id !== actual.id && { texto: "Mover a la derecha", icono: <ArrowRight />, onClick: () => mover(actual.id, pestanas.findIndex((x) => x.id === actual.id) + 1) },
                 { texto: "Cerrar pestaña", icono: <Trash2 />, peligro: true, onClick: () => void cerrar(actual) },
