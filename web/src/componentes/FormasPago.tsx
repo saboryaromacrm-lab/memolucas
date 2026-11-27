@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { ArrowLeftRight, Banknote, CircleDollarSign, CreditCard, Repeat, Smartphone, WalletCards } from "lucide-react";
+import { ArrowLeftRight, Banknote, CircleDollarSign, CreditCard, Repeat, Smartphone, UserRound, WalletCards } from "lucide-react";
 import type { FormaPago, TipoFormaPago } from "../lib/tipos";
 
 /** Cada tipo de forma de pago: cómo se llama y su ícono. */
@@ -11,6 +11,7 @@ export const TIPOS_FORMA: Record<TipoFormaPago, { texto: string; icono: ReactNod
   credito: { texto: "Tarjeta de crédito", icono: <CreditCard /> },
   debito: { texto: "Tarjeta de débito", icono: <WalletCards /> },
   otro: { texto: "Otro", icono: <CircleDollarSign /> },
+  tercero: { texto: "Lo pagó otra persona", icono: <UserRound /> },
 };
 
 export function IconoForma({ tipo, className = "size-4" }: { tipo: TipoFormaPago; className?: string }) {

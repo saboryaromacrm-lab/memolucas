@@ -33,6 +33,7 @@ import {
 } from "../src/servicios/pagos.js";
 import { avisarPagos, mensajesDelMesPagos } from "../src/servicios/pagos-avisos.js";
 import { borrarForma, crearForma, listarFormas } from "../src/servicios/pagos-formas.js";
+import { borrarPersona, crearPersona, listarCuentas, pagarAPersona } from "../src/servicios/pagos-cuentas.js";
 import { crearSuscripcion, pagarSuscripcionCon } from "../src/servicios/suscripciones.js";
 import { actualizarTarjeta, borrarTarjeta, crearTarjeta, SIN_SALDOS } from "../src/servicios/tarjetas.js";
 import { armarFijosConIa, cargarMesConIa } from "../src/bot/ia-pagos.js";
@@ -511,6 +512,61 @@ describe("Pagos", () => {
       ["Transferencia", 50000],
       ["Efectivo", 8000],
     ]);
+  });
+
+  it("cuentas con personas: lo que pagó la contadora es gasto una vez y se debe; lo que le pagás baja la deuda", async () => {
+    const contadora = await crearPersona({ nombre: "Contadora", saldoInicial: 20000 });
+    await expect(crearPersona({ nombre: " contadora ", saldoInicial: 0 })).rejects.toThrow("Ya tenés la cuenta de «Contadora».");
+    const pagoElla = (await listarFormas()).find((f) => f.personaId === contadora.id)!;
+    expect([pagoElla.nombre, pagoElla.tipo]).toEqual(["Lo pagó: Contadora", "tercero"]);
+    await expect(borrarForma(pagoElla.id)).rejects.toThrow("se saca borrando la persona");
+
+    await crearFijo(fijo(express, { nombre: "F-931", monto: 493430 }));
+    await crearFijo(fijo(express, { nombre: "IPS", monto: 26930 }));
+    // El F-931 lo pagó ella entero; el IPS, una parte ella y el resto vos.
+    await registrarPago((await item("2026-11", "F-931")).id, { formaId: pagoElla.id, fecha: "2026-11-10" });
+    await registrarPago((await item("2026-11", "IPS")).id, { monto: 10000, formaId: pagoElla.id, fecha: "2026-11-11" });
+    await registrarPago((await item("2026-11", "IPS")).id, { formaId: efectivo, fecha: "2026-11-12" });
+    // Le pagaste 300 mil por transferencia: no con «Lo pagó: …».
+    await expect(pagarAPersona(contadora.id, { monto: 1, fecha: "2026-11-20", formaId: pagoElla.id, nota: "" })).rejects.toThrow("Elegí con qué le pagaste vos");
+    await pagarAPersona(contadora.id, { monto: 300000, fecha: "2026-11-20", formaId: transferencia, nota: "a cuenta" });
+
+    const [c] = (await listarCuentas()).filter((x) => x.id === contadora.id);
+    expect(c.saldo).toBe(20000 + 493430 + 10000 - 300000);
+    expect(c.movimientos.map((m) => [m.tipo, m.fecha, m.monto])).toEqual([
+      ["lePagaste", "2026-11-20", 300000],
+      ["pago", "2026-11-11", 10000],
+      ["pago", "2026-11-10", 493430],
+    ]);
+    // El gasto del mes no cambia por lo que le pagaste a ella.
+    expect((await verMes("2026-11")).totales.pagado.ARS).toBe(493430 + 26930);
+    expect((await resumenPagos("2026-11")).mes.porForma.find((g) => g.nombre === "Lo pagó: Contadora")?.total.ARS).toBe(503430);
+    await expect(borrarPersona(contadora.id)).rejects.toThrow("tiene movimientos");
+
+    // El día 1 te recuerda lo que le debés.
+    const wa = enviadorFalso();
+    r.ir(local("2026-12-01T10:00"));
+    pedir.mockResolvedValue({ vinetas: ["Bien."] });
+    await mensajesDelMesPagos();
+    expect(wa.enviados[0].texto).toContain("🤝 Le debés a Contadora $ 223.430,00.");
+  });
+
+  it("cargar el mes con la IA: lo que ya pagó la contadora queda pagado por ella", async () => {
+    const contadora = await crearPersona({ nombre: "Contadora", saldoInicial: 0 });
+    const pagoElla = (await listarFormas()).find((f) => f.personaId === contadora.id)!.id;
+    const f931 = (await crearFijo(fijo(express, { nombre: "F-931", monto: 450000, variable: true }))).id;
+    const { app, headers } = await panelConSesion();
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/pagos/mes/aplicar",
+      headers,
+      payload: { periodo: "2026-11", montos: [{ fijoId: f931, monto: 493430, pagadoCon: pagoElla }], nuevos: [{ ...fijo(express, { nombre: "UTHGRA", monto: 35412, variable: true }), pagadoCon: pagoElla }] },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(await item("2026-11", "F-931")).toMatchObject({ estado: "pagado", pagado: 493430, forma: "Lo pagó: Contadora" });
+    expect(await item("2026-11", "UTHGRA")).toMatchObject({ estado: "pagado", pagado: 35412, forma: "Lo pagó: Contadora" });
+    expect((await listarCuentas()).find((c) => c.id === contadora.id)?.saldo).toBe(493430 + 35412);
+    await app.close();
   });
 
   it("WhatsApp: si no se sabe con qué se pagó, lo pregunta con una encuesta y lo anota con lo que contesta", async () => {

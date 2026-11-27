@@ -212,22 +212,33 @@ export async function aplicarFijos(c: { nuevos: FijoPropuesto[]; cambios: (FijoP
  * Los montos de un mes que leyó la IA (el resumen de la contadora, por ejemplo) y revisaste: cada monto va al pago de
  * ese mes, y lo que no estaba se crea como pago fijo desde ese mes, con ese monto.
  */
-/** Un monto del mes: al pago de un concepto de todos los meses (fijoId) o a un pago puntual del mes (itemId). */
-export type MontoDelMes = ({ fijoId: number } | { itemId: number }) & { monto: number };
+/**
+ * Un monto del mes: al pago de un concepto de todos los meses (fijoId) o a un pago puntual del mes (itemId).
+ * pagadoCon: ya está pagado con esa forma (por ejemplo «Lo pagó: Contadora»).
+ */
+export type MontoDelMes = ({ fijoId: number } | { itemId: number }) & { monto: number; pagadoCon?: number };
 
-export async function aplicarMes(periodo: string, c: { montos: MontoDelMes[]; nuevos: FijoPropuesto[] }) {
+export async function aplicarMes(periodo: string, c: { montos: MontoDelMes[]; nuevos: (FijoPropuesto & { pagadoCon?: number })[] }) {
   validarPropuestos(c.nuevos);
   const conLugar = creadorDeLugares();
-  for (const e of c.nuevos) await crearFijo({ ...(await conLugar(e)), desde: periodo });
+  const creados: MontoDelMes[] = [];
+  for (const e of c.nuevos) {
+    const { id } = await crearFijo({ ...(await conLugar(e)), desde: periodo });
+    if (e.pagadoCon) creados.push({ fijoId: id, monto: e.monto, pagadoCon: e.pagadoCon });
+  }
   await prepararMes(periodo);
   // Cada monto va al pago de ese mes: el del concepto (lo de todos los meses) o, si no sale de uno, ese pago.
   const filas = await db.select().from(pagoMes).where(eq(pagoMes.periodo, periodo));
-  const destinos = c.montos.map((m) => {
+  const filaDe = (m: MontoDelMes) => {
     const fila = "fijoId" in m ? filas.find((r) => r.fijoId === m.fijoId) : filas.find((r) => r.id === m.itemId);
     if (!fila) throw new ErrorUsuario(`Un pago elegido no está en ${nombreMes(periodo).toLowerCase()} (no se paga ese mes o ya no existe): revisalo.`);
-    return { id: fila.id, monto: m.monto };
-  });
-  for (const d of destinos) await actualizarPagoDelMes(d.id, { monto: d.monto });
+    return fila;
+  };
+  const destinos = c.montos.map((m) => ({ fila: filaDe(m), monto: m.monto, pagadoCon: m.pagadoCon }));
+  for (const d of destinos) await actualizarPagoDelMes(d.fila.id, { monto: d.monto });
+  // Lo que ya está pagado (por la contadora, por ejemplo) queda pagado con esa forma.
+  for (const d of [...destinos, ...creados.map((m) => ({ fila: filaDe(m), pagadoCon: m.pagadoCon }))])
+    if (d.pagadoCon && d.fila.estado !== "pagado") await registrarPago(d.fila.id, { formaId: d.pagadoCon });
   return { cambiados: destinos.length, creados: c.nuevos.length };
 }
 
@@ -580,7 +591,7 @@ export async function registrarPago(id: number, p: { monto?: number; fecha?: str
   const parte = p.monto ?? Math.max(0, monto - totalPagado(d.pagos));
   if (parte < 0 || (parte === 0 && monto > 0)) throw new ErrorUsuario("Falta el monto que pagaste.");
   const fecha = p.fecha ?? hoyIso();
-  const pagos = [...d.pagos, { monto: parte, fecha }];
+  const pagos = [...d.pagos, { monto: parte, fecha, formaId }];
   const estado = estadoDe(monto, pagos);
   await db
     .update(pagoMes)
@@ -605,7 +616,7 @@ export async function corregirPago(id: number, c: { monto: number; fecha: string
   if (!d.pagos.length || (r.estado !== "pagado" && r.estado !== "parcial")) throw new ErrorUsuario("Ese pago todavía no está pagado.");
   if (!(c.monto > 0)) throw new ErrorUsuario("Falta el monto que pagaste.");
   if (c.formaId !== r.formaId) await formaActiva(c.formaId);
-  const pagos = [...d.pagos.slice(0, -1), { monto: c.monto, fecha: c.fecha }];
+  const pagos = [...d.pagos.slice(0, -1), { monto: c.monto, fecha: c.fecha, formaId: c.formaId }];
   await db
     .update(pagoMes)
     .set({ estado: estadoDe(d.boleta ?? d.esperado, pagos), pagadoEn: c.fecha, formaId: c.formaId, datosCifrados: sellar({ ...d, pagos }), actualizadoEn: new Date() })
@@ -666,7 +677,7 @@ export async function crearSuelto(e: EntradaSuelto) {
   if (!(e.monto > 0)) throw new ErrorUsuario("Falta el monto.");
   if (e.pagado && !e.formaId) throw new ErrorUsuario("Falta con qué lo pagaste.");
   if (e.formaId) await formaActiva(e.formaId);
-  const pagos = e.pagado ? [{ monto: e.monto, fecha: e.fecha }] : [];
+  const pagos = e.pagado ? [{ monto: e.monto, fecha: e.fecha, ...(e.formaId ? { formaId: e.formaId } : {}) }] : [];
   const [r] = await db
     .insert(pagoMes)
     .values({
@@ -775,8 +786,15 @@ export async function resumenPagos(periodo: string) {
     porLugar: agrupar(porPartes(lista, (p) => p.lugar)),
     porCategoria: agrupar(lista.map((i) => ({ nombre: i.categoria, moneda: i.moneda, monto: i.monto, pagado: i.pagado }))),
     porTipo: agrupar(porPartes(lista, (p) => (p.tipo === "negocio" ? "Negocio" : "Personal"))),
-    // Solo lo pagado: con qué se pagó.
-    porForma: agrupar(lista.filter((i) => i.pagado > 0).map((i) => ({ nombre: i.forma ?? "Sin forma de pago", moneda: i.moneda, monto: i.pagado, pagado: i.pagado }))),
+    // Solo lo pagado, cada parte con lo que se pagó (una parte la contadora y otra vos, por ejemplo).
+    porForma: agrupar(
+      lista.flatMap((i) =>
+        i.pagos.map((p) => {
+          const formaId = p.formaId ?? i.formaId;
+          return { nombre: (formaId && cat.formas.get(formaId)) || "Sin forma de pago", moneda: i.moneda, monto: p.monto, pagado: p.monto };
+        }),
+      ),
+    ),
   });
   return {
     periodo,
@@ -847,6 +865,31 @@ export async function historialPagos(desde: string, hasta: string, buscar?: stri
     .map((r) => aItem(r, cat, hoyIso()))
     .filter((i) => i.pagado > 0 && (!filtro || filtro.split(/\s+/).every((p) => normalizar(`${i.nombre} ${i.lugar} ${i.categoria}`).includes(p))));
   return { items, total: sumaPorMoneda(items.map((i) => ({ moneda: i.moneda, valor: i.pagado }))) };
+}
+
+/**
+ * Las partes pagadas con esas formas (lo que otra persona pagó por vos: «Lo pagó: …»), con su pago. Solo pesos: las
+ * cuentas con personas son en pesos.
+ */
+export async function partesPagadasCon(formaIds: number[]) {
+  if (!formaIds.length) return [];
+  const [filas, cat] = await Promise.all([
+    db
+      .select()
+      .from(pagoMes)
+      .where(and(inArray(pagoMes.estado, ["pagado", "parcial"]), eq(pagoMes.moneda, "ARS"))),
+    catalogos(),
+  ]);
+  const hoy = hoyIso();
+  return filas.flatMap((r) => {
+    const partes = abrirMes(r.datosCifrados).pagos.flatMap((p) => {
+      const formaId = p.formaId ?? r.formaId;
+      return formaId && formaIds.includes(formaId) ? [{ ...p, formaId }] : [];
+    });
+    if (!partes.length) return [];
+    const i = aItem(r, cat, hoy);
+    return partes.map((p) => ({ formaId: p.formaId, fecha: p.fecha, monto: p.monto, pagoId: r.id, periodo: r.periodo, nombre: i.nombre, lugar: i.lugar }));
+  });
 }
 
 export async function guardarAnalisis(periodo: string, texto: string) {

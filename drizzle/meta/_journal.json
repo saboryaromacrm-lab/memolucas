@@ -232,6 +232,13 @@
       "when": 1795790881499,
       "tag": "0032_pagos_notas_ia",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1795801518295,
+      "tag": "0033_cuentas_personas",
+      "breakpoints": true
     }
   ]
 }

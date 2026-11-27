@@ -85,6 +85,8 @@ describe("asistente", () => {
       "agregar_al_bloc",
       "ver_pagos",
       "registrar_pago",
+      "ver_cuentas",
+      "pagar_a_persona",
       "cargar_boleta",
       "cargar_pago_suelto",
       "historial_pagos",

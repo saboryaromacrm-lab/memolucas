@@ -7,6 +7,7 @@ import { enFila } from "./disparador.js";
 import { enviador } from "./enviador.js";
 import { registrarMensaje } from "./mensajes.js";
 import { marcarAvisado, pagosParaAvisar, verMes, type ItemPago } from "./pagos.js";
+import { listarCuentas } from "./pagos-cuentas.js";
 import { nombreMes, periodoDe, sumarMeses } from "./pagos-reglas.js";
 import { cuandoVence, diaDe, diasParaVencer, momentoAviso, sePuedeAvisar } from "./vencimientos.js";
 
@@ -64,6 +65,12 @@ export async function avisarPagos(): Promise<void> {
 }
 
 /** Lo llama el barrido: el resumen del día 1 y lo que falta a mitad de mes (una vez por mes cada uno). */
+/** «Le debés a la contadora $ X» (solo las cuentas con deuda), para sumar a los mensajes del mes. */
+async function lineaDeudas() {
+  const deudas = (await listarCuentas()).filter((c) => c.saldo >= 1);
+  return deudas.length ? `\n\n🤝 ${deudas.map((c) => `Le debés a ${c.nombre} ${plata(c.saldo)}`).join(" · ")}.` : "";
+}
+
 export async function mensajesDelMesPagos(): Promise<void> {
   const cfg = await obtenerConfig();
   if (!cfg.pagosMensajes || !sePuedeAvisar(cfg)) return;
@@ -88,7 +95,8 @@ export async function mensajesDelMesPagos(): Promise<void> {
     const texto =
       `${cierre}📅 *Pagos de ${mes.nombre}:* ${vivos.length} por ${montos(mes.totales.total)}.\n` +
       `Los más grandes: ${grandes.map((i) => `${i.nombre} · ${i.lugar} (${plata(i.monto, i.moneda)})`).join(", ")}.\n\n` +
-      `*Para pagar:*\n${primeros.map((i) => `• ${i.vence ? diaDe(i.vence).toFormat("dd/MM") : "Sin vto."} ${i.nombre} · ${i.lugar} — ${plata(i.monto, i.moneda)}`).join("\n")}`;
+      `*Para pagar:*\n${primeros.map((i) => `• ${i.vence ? diaDe(i.vence).toFormat("dd/MM") : "Sin vto."} ${i.nombre} · ${i.lugar} — ${plata(i.monto, i.moneda)}`).join("\n")}` +
+      (await lineaDeudas());
     return mandar(texto, "pagos_mes").catch((err) => registrar("error", "pagos", "No se pudo mandar el resumen del mes", err));
   }
 
@@ -97,9 +105,10 @@ export async function mensajesDelMesPagos(): Promise<void> {
     const mes = await verMes(periodo);
     if (!mes.items.length) return;
     const faltan = mes.items.filter((i) => i.estado === "pendiente" || i.estado === "parcial");
-    const texto = faltan.length
+    let texto = faltan.length
       ? `🧾 *A mitad de mes te falta pagar ${montos(mes.totales.falta)}:*\n${faltan.map((i) => `${linea(i)} · ${vto(i.vence)}`).join("\n")}`
       : `✅ Vas al día: ya pagaste todo lo de ${mes.nombre}.`;
+    texto += await lineaDeudas();
     return mandar(texto, "pagos_mitad").catch((err) => registrar("error", "pagos", "No se pudo mandar lo que falta del mes", err));
   }
 }

@@ -1,33 +1,40 @@
 import { and, asc, count, eq, max } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { pagoFijo, pagoForma, pagoMes, tarjeta, type TipoFormaPago } from "../db/schema.js";
+import { pagoFijo, pagoForma, pagoMes, pagoPersona, tarjeta, type TipoFormaPago } from "../db/schema.js";
 import { bus } from "../lib/eventos.js";
 import { normalizar } from "../lib/textos.js";
 import { ErrorUsuario } from "./recordatorios.js";
 
-// Las formas de pago de Pagos: las que cargás y, solas, las tarjetas de la sección Tarjetas.
+// Las formas de pago de Pagos: las que cargás y, solas, las tarjetas de la sección Tarjetas y «Lo pagó: …» de cada
+// persona que paga cosas por vos (Cuentas).
 
+/** Los tipos que se eligen al cargar una forma (las «Lo pagó: …» se crean solas con cada persona). */
 export const TIPOS_FORMA = ["transferencia", "efectivo", "debito_automatico", "billetera", "credito", "debito", "otro"] as const satisfies readonly TipoFormaPago[];
 
 export type FormaPago = typeof pagoForma.$inferSelect;
 
 const avisar = () => bus.avisar("pagos");
 const nombreDeTarjeta = (t: { nombre: string; ultimos4: string }) => `${t.nombre}${t.ultimos4 ? ` ···${t.ultimos4}` : ""}`;
+export const nombreDePersona = (nombre: string) => `Lo pagó: ${nombre}`;
 
-/** Cada tarjeta tiene su forma de pago (se crea sola y sigue su nombre). Si la archivaste, no vuelve. */
-async function sincronizarTarjetas() {
-  const [tarjetas, formas] = await Promise.all([db.select().from(tarjeta), db.select().from(pagoForma)]);
+/**
+ * Las que se crean solas y siguen el nombre de lo suyo: una por tarjeta (si la archivaste, no vuelve) y una por persona
+ * de Cuentas.
+ */
+async function sincronizarAutomaticas() {
+  const [tarjetas, personas, formas] = await Promise.all([db.select().from(tarjeta), db.select().from(pagoPersona), db.select().from(pagoForma)]);
   let orden = Math.max(0, ...formas.map((f) => f.orden));
-  for (const t of tarjetas) {
-    const f = formas.find((x) => x.tarjetaId === t.id);
-    if (!f) await db.insert(pagoForma).values({ nombre: nombreDeTarjeta(t), tipo: "credito", orden: ++orden, tarjetaId: t.id }).onConflictDoNothing();
-    else if (f.nombre !== nombreDeTarjeta(t)) await db.update(pagoForma).set({ nombre: nombreDeTarjeta(t) }).where(eq(pagoForma.id, f.id));
-  }
+  const asegurar = async (actual: FormaPago | undefined, nombre: string, nueva: Omit<typeof pagoForma.$inferInsert, "nombre" | "orden">) => {
+    if (!actual) await db.insert(pagoForma).values({ ...nueva, nombre, orden: ++orden }).onConflictDoNothing();
+    else if (actual.nombre !== nombre) await db.update(pagoForma).set({ nombre }).where(eq(pagoForma.id, actual.id));
+  };
+  for (const t of tarjetas) await asegurar(formas.find((x) => x.tarjetaId === t.id), nombreDeTarjeta(t), { tipo: "credito", tarjetaId: t.id });
+  for (const p of personas) await asegurar(formas.find((x) => x.personaId === p.id), nombreDePersona(p.nombre), { tipo: "tercero", personaId: p.id });
 }
 
 /** Todas, en orden (también las archivadas: el historial las nombra). */
 export async function listarFormas(): Promise<FormaPago[]> {
-  await sincronizarTarjetas();
+  await sincronizarAutomaticas();
   return db.select().from(pagoForma).orderBy(asc(pagoForma.orden), asc(pagoForma.id));
 }
 
@@ -59,6 +66,7 @@ export async function actualizarForma(id: number, d: { nombre?: string; tipo?: T
   const [f] = await db.select().from(pagoForma).where(eq(pagoForma.id, id));
   if (!f || f.archivada) throw new ErrorUsuario("Esa forma de pago ya no está.");
   if (d.nombre !== undefined && f.tarjetaId && d.nombre.trim() !== f.nombre) throw new ErrorUsuario("El nombre de una tarjeta se cambia en Tarjetas.");
+  if (f.personaId) throw new ErrorUsuario("Esta forma es de una persona: se cambia en Pagos → Cuentas.");
   const nombre = d.nombre === undefined ? undefined : nombreValido(d.nombre);
   if (nombre) await nombreLibre(nombre, id);
   await db
@@ -83,6 +91,7 @@ export async function ordenarFormas(ids: number[]) {
 export async function borrarForma(id: number) {
   const [f] = await db.select().from(pagoForma).where(eq(pagoForma.id, id));
   if (!f) return;
+  if (f.personaId) throw new ErrorUsuario("Esta forma es de una persona: se saca borrando la persona en Pagos → Cuentas.");
   await db.update(pagoFijo).set({ formaId: null }).where(eq(pagoFijo.formaId, id));
   // Los pendientes que la tenían marcada dejan de sugerirla.
   await db

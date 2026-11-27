@@ -6,7 +6,8 @@ import type { EstadoPago, FrecuenciaPago, RepartoPago } from "../db/schema.js";
 
 export type Moneda = "ARS" | "USD";
 /** Cada parte que se pagó. */
-export type ParteDePago = { monto: number; fecha: string };
+/** Cada parte pagada, con qué se pagó (las viejas no lo tienen: vale la forma del pago). */
+export type ParteDePago = { monto: number; fecha: string; formaId?: number };
 
 /** Cada cuántos meses (0 = una sola vez). */
 export const MESES_DE: Record<FrecuenciaPago, number> = { mensual: 1, bimestral: 2, trimestral: 3, cuatrimestral: 4, semestral: 6, anual: 12, unica: 0 };
