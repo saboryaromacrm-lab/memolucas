@@ -354,4 +354,10 @@ export type FijoPago = {
   nota: string;
 };
 
+/** Un pago fijo como lo propone la IA: sin id; si es de un lugar que no existe, trae el lugar a crear. */
+export type FijoPropuesto = Omit<FijoPago, "id" | "desde"> & { lugarNuevo?: { nombre: string; tipo: TipoLugar } };
+export type CampoFijo = "nombre" | "alcance" | "categoria" | "monto" | "variable" | "moneda" | "vence" | "aviso" | "frecuencia" | "medio" | "cuenta" | "nota";
+/** Lo que propone la IA contra la lista cargada: pagos nuevos, cambios (solo los campos que cambian) y los que se borran. */
+export type PropuestaPagos = { nuevos: FijoPropuesto[]; cambios: { id: number; despues: FijoPropuesto; campos: CampoFijo[] }[]; borrar: number[]; mensaje: string };
+
 export type ConfigPagos = { lugares: LugarPago[]; fijos: FijoPago[]; categorias: string[]; medios: string[]; diasAviso: number; mensajes: boolean };
