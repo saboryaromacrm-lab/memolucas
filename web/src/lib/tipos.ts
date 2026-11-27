@@ -360,21 +360,26 @@ export type FijoPago = {
 };
 
 /** Un pago fijo como lo propone la IA: sin id; si es de un lugar que no existe, trae el lugar a crear. */
-export type FijoPropuesto = Omit<FijoPago, "id" | "desde"> & { lugarNuevo?: { nombre: string; tipo: TipoLugar } };
+export type FijoPropuesto = Omit<FijoPago, "id" | "desde"> & {
+  lugarNuevo?: { nombre: string; tipo: TipoLugar };
+  /** Cómo figuraba en la imagen o el texto que leyó la IA (solo para comparar). */
+  original?: string;
+};
 export type CampoFijo = "nombre" | "alcance" | "categoria" | "monto" | "variable" | "moneda" | "vence" | "aviso" | "frecuencia" | "forma" | "cuenta" | "nota";
 /** Lo que propone la IA contra la lista cargada: pagos nuevos, cambios (solo los campos que cambian) y los que se borran. */
-export type PropuestaPagos = { nuevos: FijoPropuesto[]; cambios: { id: number; despues: FijoPropuesto; campos: CampoFijo[] }[]; borrar: number[]; mensaje: string };
+/** totalImagen: el total general que figura en la imagen o el PDF (null si no hay). */
+export type PropuestaPagos = { nuevos: FijoPropuesto[]; cambios: { id: number; despues: FijoPropuesto; campos: CampoFijo[] }[]; borrar: number[]; totalImagen: number | null; mensaje: string };
 
 export type TipoFormaPago = "transferencia" | "efectivo" | "debito_automatico" | "billetera" | "credito" | "debito" | "otro";
 /** Con qué se paga. tarjetaId: la de una tarjeta de Tarjetas (aparece sola). Archivada: ya no se elige, pero el historial la nombra. */
 export type FormaPago = { id: number; nombre: string; tipo: TipoFormaPago; orden: number; archivada: boolean; tarjetaId: number | null };
 /** notasIa: lo que la IA de Pagos tiene que saber de tus negocios. */
 export type ConfigPagos = { lugares: LugarPago[]; fijos: FijoPago[]; formas: FormaPago[]; categorias: string[]; diasAviso: number; mensajes: boolean; notasIa: string };
-/** Lo que leyó la IA para un mes: montos que cambian, pagos nuevos (con el monto del mes) y el control con el total que figura. */
+/** Lo que leyó la IA para un mes: a qué pago va cada monto (también los que ya tenían ese monto), los pagos nuevos y el total que figura. */
 export type PropuestaMes = {
-  cambios: { id: number; monto: number; antes: number; nombre: string; lugar: string; pagado: boolean }[];
+  periodo: string;
+  montos: (({ fijoId: number } | { itemId: number }) & { monto: number; antes: number; nombre: string; lugar: string; pagado: boolean; original: string })[];
   nuevos: FijoPropuesto[];
-  iguales: number;
-  control: { suma: number; total: number } | null;
+  totalImagen: number | null;
   mensaje: string;
 };

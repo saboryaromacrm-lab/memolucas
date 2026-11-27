@@ -166,7 +166,11 @@ export async function crearFijo(e: EntradaFijo) {
 }
 
 /** Un pago fijo propuesto por la IA: si es de un lugar que todavía no existe, trae el lugar a crear. */
-export type FijoPropuesto = EntradaFijo & { lugarNuevo?: { nombre: string; tipo: TipoLugar } };
+export type FijoPropuesto = EntradaFijo & {
+  lugarNuevo?: { nombre: string; tipo: TipoLugar };
+  /** Cómo figuraba en la imagen o el texto que leyó la IA (solo para mostrarlo en la revisión). */
+  original?: string;
+};
 
 /** Antes de tocar nada se revisa todo lo propuesto (así no queda a medias). */
 function validarPropuestos(lista: FijoPropuesto[]) {
@@ -208,18 +212,23 @@ export async function aplicarFijos(c: { nuevos: FijoPropuesto[]; cambios: (FijoP
  * Los montos de un mes que leyó la IA (el resumen de la contadora, por ejemplo) y revisaste: cada monto va al pago de
  * ese mes, y lo que no estaba se crea como pago fijo desde ese mes, con ese monto.
  */
-export async function aplicarMes(periodo: string, c: { montos: { id: number; monto: number }[]; nuevos: FijoPropuesto[] }) {
+/** Un monto del mes: al pago de un concepto de todos los meses (fijoId) o a un pago puntual del mes (itemId). */
+export type MontoDelMes = ({ fijoId: number } | { itemId: number }) & { monto: number };
+
+export async function aplicarMes(periodo: string, c: { montos: MontoDelMes[]; nuevos: FijoPropuesto[] }) {
   validarPropuestos(c.nuevos);
-  const ids = c.montos.map((m) => m.id);
-  if (ids.length) {
-    const hay = new Set((await db.select({ id: pagoMes.id }).from(pagoMes).where(and(inArray(pagoMes.id, ids), eq(pagoMes.periodo, periodo)))).map((r) => r.id));
-    if (ids.some((id) => !hay.has(id))) throw new ErrorUsuario("Algún pago ya no está en ese mes: volvé a leer el archivo.");
-  }
   const conLugar = creadorDeLugares();
   for (const e of c.nuevos) await crearFijo({ ...(await conLugar(e)), desde: periodo });
-  if (c.nuevos.length) await prepararMes(periodo);
-  for (const m of c.montos) await actualizarPagoDelMes(m.id, { monto: m.monto });
-  return { cambiados: c.montos.length, creados: c.nuevos.length };
+  await prepararMes(periodo);
+  // Cada monto va al pago de ese mes: el del concepto (lo de todos los meses) o, si no sale de uno, ese pago.
+  const filas = await db.select().from(pagoMes).where(eq(pagoMes.periodo, periodo));
+  const destinos = c.montos.map((m) => {
+    const fila = "fijoId" in m ? filas.find((r) => r.fijoId === m.fijoId) : filas.find((r) => r.id === m.itemId);
+    if (!fila) throw new ErrorUsuario(`Un pago elegido no está en ${nombreMes(periodo).toLowerCase()} (no se paga ese mes o ya no existe): revisalo.`);
+    return { id: fila.id, monto: m.monto };
+  });
+  for (const d of destinos) await actualizarPagoDelMes(d.id, { monto: d.monto });
+  return { cambiados: destinos.length, creados: c.nuevos.length };
 }
 
 /**
