@@ -5,7 +5,8 @@ import sharp from "sharp";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { db } from "../src/db/index.js";
 import { suscripcion, tarjeta } from "../src/db/schema.js";
-import type { AnalisisFoto } from "../src/bot/ia.js";
+import Anthropic from "@anthropic-ai/sdk";
+import { ErrorIA, type AnalisisFoto } from "../src/bot/ia.js";
 import { Procesador } from "../src/bot/procesador.js";
 import { fijarAzar } from "../src/bot/frases.js";
 import { abrir } from "../src/lib/cifrado.js";
@@ -248,6 +249,20 @@ describe("Pagos", () => {
       [express, undefined, "Alquiler"],
       [null, { nombre: "Fontana", tipo: "negocio" }, "Otros"],
     ]);
+  });
+
+  it("si la IA falla al armar la lista, el panel dice por qué (no «Error interno»)", async () => {
+    const { app, headers } = await panelConSesion();
+    const armar = () => app.inject({ method: "POST", url: "/api/pagos/ia/armar", headers, payload: { texto: "alquiler 650 mil el 5" } });
+    pedir.mockRejectedValueOnce(new ErrorIA("401 invalid x-api-key", { cause: Anthropic.APIError.generate(401, { error: { message: "invalid x-api-key" } }, undefined, new Headers()) }));
+    let r = await armar();
+    expect(r.statusCode).toBe(503);
+    expect(r.json().error).toContain("La clave de Claude falta o no funciona");
+    pedir.mockRejectedValueOnce(new ErrorIA("La respuesta del modelo quedó cortada"));
+    r = await armar();
+    expect(r.statusCode).toBe(502);
+    expect(r.json().error).toBe("La IA no pudo responder: La respuesta del modelo quedó cortada");
+    await app.close();
   });
 
   it("WhatsApp: la foto del comprobante se reconoce, se confirma con «sí» y queda con la foto; la de la boleta actualiza el mes", async () => {

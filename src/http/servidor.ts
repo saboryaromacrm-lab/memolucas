@@ -7,6 +7,9 @@ import jwt from "@fastify/jwt";
 import multipart from "@fastify/multipart";
 import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
+import { anotarFallaIA } from "../bot/estado-ia.js";
+import { registrar } from "../lib/log.js";
+import { CAUSA_FALLA_IA, ErrorIA, motivoFallaIA } from "../bot/ia.js";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import { ZodError } from "zod";
 import { entorno } from "../entorno.js";
@@ -88,13 +91,20 @@ export async function crearServidor() {
     }
   });
 
-  app.setErrorHandler((err, _req, reply) => {
+  app.setErrorHandler(async (err, req, reply) => {
     if (err instanceof ErrorUsuario) return reply.code(400).send({ error: err.message });
     if (err instanceof ZodError) return reply.code(400).send({ error: "Datos inválidos", detalle: err.issues });
     const e = err as { statusCode?: number; message?: string };
     if (e.statusCode && e.statusCode < 500) return reply.code(e.statusCode).send({ error: e.message });
-    console.error(err);
-    return reply.code(500).send({ error: "Error interno" });
+    // La IA no anda (sin crédito, la clave, Anthropic caído): se dice por qué y queda anotado (el cartel de Inicio).
+    const motivo = motivoFallaIA(err);
+    if (motivo) {
+      await anotarFallaIA(motivo);
+      return reply.code(503).send({ error: CAUSA_FALLA_IA[motivo] });
+    }
+    if (err instanceof ErrorIA) return reply.code(502).send({ error: `La IA no pudo responder: ${err.message}` });
+    await registrar("error", "http", `Falló ${req.method} ${req.url.split("?")[0]}`, err);
+    return reply.code(500).send({ error: "Error interno: el detalle quedó en Logs." });
   });
 
   await app.register(rutasSalud);
