@@ -1,9 +1,10 @@
-import { and, asc, count, eq, gte, inArray, isNotNull, lt, lte, ne, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, isNotNull, lt, lte, ne, or, sql, type SQL } from "drizzle-orm";
 import { DateTime } from "luxon";
 import { db } from "../db/index.js";
 import {
   pagoAnalisis,
   pagoFijo,
+  pagoForma,
   pagoLugar,
   pagoMes,
   suscripcion,
@@ -21,6 +22,7 @@ import { hoyIso } from "../lib/fechas.js";
 import { normalizar, plata } from "../lib/textos.js";
 import { almacenCifrado, comoWebp } from "./archivos-cifrados.js";
 import { actualizarConfig, obtenerConfig } from "./configuracion.js";
+import { formaActiva, formaDeTarjeta } from "./pagos-formas.js";
 import {
   aCsv,
   alertasDelMes,
@@ -115,7 +117,8 @@ export type EntradaFijo = Alcance & {
   dia: number | null;
   frecuencia: FrecuenciaPago;
   desde?: string;
-  medio: string;
+  /** Con qué se paga siempre; null: sin forma fija. */
+  formaId: number | null;
   cuenta: string;
   avisoDias: number | null;
   nota: string;
@@ -142,7 +145,7 @@ const columnasFijo = (e: EntradaFijo) => ({
   dia: e.dia === null ? null : Math.min(31, Math.max(1, Math.round(e.dia))),
   moneda: e.moneda,
   variable: e.variable,
-  medio: e.medio.trim(),
+  formaId: e.formaId,
   avisoDias: e.avisoDias,
   datosCifrados: sellar({ nombre: e.nombre.trim(), monto: Math.max(0, e.monto), cuenta: e.cuenta.trim(), nota: e.nota.trim() } satisfies DatosFijo),
 });
@@ -223,7 +226,7 @@ export async function actualizarFijo(id: number, e: EntradaFijo) {
         reparto: f.reparto,
         categoria: f.categoria,
         moneda: f.moneda,
-        medio: f.medio,
+        formaId: f.formaId ?? r.formaId,
         datosCifrados: sellar({ ...d, nombre: e.nombre.trim(), cuenta: e.cuenta.trim(), esperado } satisfies DatosMes),
         actualizadoEn: new Date(),
       })
@@ -278,6 +281,18 @@ export function vencimientosEnMes(s: Pick<Suscripcion, "fechaVto" | "frecuencia"
   return [...new Set(fechas)].filter((f) => !s.fechaInicio || f >= s.fechaInicio).sort();
 }
 
+/** La última forma con que se pagó (el mismo fijo, suscripción o tarjeta), si sigue activa: la que se sugiere. */
+async function ultimaForma(deLoMismo: SQL) {
+  const [r] = await db
+    .select({ id: pagoMes.formaId })
+    .from(pagoMes)
+    .innerJoin(pagoForma, eq(pagoForma.id, pagoMes.formaId))
+    .where(and(deLoMismo, inArray(pagoMes.estado, ["pagado", "parcial"]), eq(pagoForma.archivada, false)))
+    .orderBy(desc(pagoMes.periodo), desc(pagoMes.id))
+    .limit(1);
+  return r?.id ?? null;
+}
+
 /** Arma el mes (no repite lo que ya está) y pone al día lo que sale de las suscripciones y las tarjetas. */
 export async function prepararMes(periodo: string) {
   if (periodo < (await primerMes())) return;
@@ -304,7 +319,7 @@ export async function prepararMes(periodo: string) {
         categoria: f.categoria,
         moneda: f.moneda,
         fijoId: f.id,
-        medio: f.medio,
+        formaId: f.formaId ?? (await ultimaForma(eq(pagoMes.fijoId, f.id))),
         datosCifrados: sellar({ nombre: d.nombre, esperado: esperadoDe({ monto: d.monto, variable: f.variable }, await montosAnteriores(f.id, periodo)), boleta: null, pagos: [], cuenta: d.cuenta, nota: "" } satisfies DatosMes),
       })
       .onConflictDoNothing();
@@ -326,6 +341,7 @@ export async function prepararMes(periodo: string) {
             categoria: "Suscripciones",
             moneda: s.moneda,
             suscripcionId: s.id,
+            formaId: (s.tarjetaId ? await formaDeTarjeta(s.tarjetaId) : null) ?? (await ultimaForma(eq(pagoMes.suscripcionId, s.id))),
             estado: renovada ? "pagado" : "pendiente",
             pagadoEn: renovada ? vence : null,
             datosCifrados: sellar({ nombre: s.nombre, esperado: s.monto, boleta: null, pagos: renovada ? [{ monto: s.monto, fecha: vence }] : [], cuenta: "", nota: "" } satisfies DatosMes),
@@ -363,6 +379,7 @@ export async function prepararMes(periodo: string) {
           tipo: t.negocio ? "negocio" : "personal",
           categoria: "Tarjetas",
           tarjetaId: t.id,
+          formaId: await ultimaForma(eq(pagoMes.tarjetaId, t.id)),
           estado: pagos.length ? estadoDe(saldos.saldo, pagos) : "pendiente",
           pagadoEn: pagos.length ? hoy : null,
           datosCifrados: sellar({ nombre: `${t.nombre}${t.ultimos4 ? ` ···${t.ultimos4}` : ""}`, esperado: saldos.saldo, boleta: null, pagos, cuenta: "", nota: "" } satisfies DatosMes),
@@ -386,6 +403,13 @@ export async function prepararMes(periodo: string) {
 
 export type ItemPago = ReturnType<typeof aItem>;
 type Lugar = typeof pagoLugar.$inferSelect;
+/** Lo que hace falta para mostrar un pago: los lugares y el nombre de cada forma de pago. */
+type Catalogos = { lugares: Lugar[]; formas: Map<number, string> };
+
+async function catalogos(): Promise<Catalogos> {
+  const [lugares, formas] = await Promise.all([db.select().from(pagoLugar).orderBy(asc(pagoLugar.orden), asc(pagoLugar.id)), db.select().from(pagoForma)]);
+  return { lugares, formas: new Map(formas.map((f) => [f.id, f.nombre])) };
+}
 
 /** Lo que le toca a cada lugar: un solo lugar, cada uno con su parte si es repartido, o "General". */
 export type Parte = { lugarId: number | null; lugar: string; tipo: TipoLugar; porcentaje: number; monto: number; pagado: number };
@@ -403,7 +427,7 @@ function partesDe(r: PagoMes, lugares: Lugar[], monto: number, pagado: number): 
   return [{ lugarId: null, lugar: "General", tipo: r.tipo ?? "personal", porcentaje: 100, monto, pagado }];
 }
 
-function aItem(r: PagoMes, lugares: Lugar[], hoy: string) {
+function aItem(r: PagoMes, { lugares, formas }: Catalogos, hoy: string) {
   const d = abrirMes(r.datosCifrados);
   const monto = d.boleta ?? d.esperado;
   const pagado = totalPagado(d.pagos);
@@ -429,7 +453,9 @@ function aItem(r: PagoMes, lugares: Lugar[], hoy: string) {
     falta: r.estado === "omitido" ? 0 : Math.max(0, monto - pagado),
     pagos: d.pagos,
     vencido: (r.estado === "pendiente" || r.estado === "parcial") && r.vence !== null && r.vence < hoy,
-    medio: r.medio,
+    /** Pagado: con qué se pagó. Sin pagar: la que se sugiere al tocar «Pagado». */
+    formaId: r.formaId,
+    forma: r.formaId ? (formas.get(r.formaId) ?? null) : null,
     pagadoEn: r.pagadoEn,
     cuenta: d.cuenta,
     nota: d.nota,
@@ -456,15 +482,15 @@ async function filasDe(desde: string, hasta: string) {
 export async function verMes(periodo: string) {
   await prepararMes(periodo);
   const hoy = hoyIso();
-  const [filas, anteriores, lugares, [analisis]] = await Promise.all([
+  const [filas, anteriores, cat, [analisis]] = await Promise.all([
     filasDe(periodo, periodo),
     filasDe(sumarMeses(periodo, -1), sumarMeses(periodo, -1)),
-    db.select().from(pagoLugar).orderBy(asc(pagoLugar.orden), asc(pagoLugar.id)),
+    catalogos(),
     db.select().from(pagoAnalisis).where(eq(pagoAnalisis.periodo, periodo)),
   ]);
-  const items = filas.map((r) => aItem(r, lugares, hoy));
+  const items = filas.map((r) => aItem(r, cat, hoy));
   const vivos = items.filter((i) => i.estado !== "omitido");
-  const anterior = anteriores.map((r) => aItem(r, lugares, hoy)).filter((i) => i.estado !== "omitido");
+  const anterior = anteriores.map((r) => aItem(r, cat, hoy)).filter((i) => i.estado !== "omitido");
   const promedios = await Promise.all(
     items.map(async (i) => {
       if (!i.fijoId) return null;
@@ -490,7 +516,7 @@ export async function verMes(periodo: string) {
       anterior.length ? sumaPorMoneda(anterior.map((i) => ({ moneda: i.moneda, valor: i.monto }))) : null,
     ),
     analisis: analisis ? { texto: descifrar(analisis.textoCifrado) ?? "", creadoEn: analisis.creadoEn } : null,
-    lugares,
+    lugares: cat.lugares,
     primerMes: await primerMes(),
   };
 }
@@ -502,17 +528,19 @@ async function obtener(id: number) {
 }
 
 async function itemDe(id: number) {
-  const lugares = await db.select().from(pagoLugar);
-  return aItem(await obtener(id), lugares, hoyIso());
+  return aItem(await obtener(id), await catalogos(), hoyIso());
 }
 
 /**
  * Pagar: sin monto, lo que falta (un toque). Con monto menor, queda pagado en parte. Si sale de una suscripción, se
  * renueva; si es el resumen de una tarjeta, queda marcado lo pagado en Tarjetas.
  */
-export async function registrarPago(id: number, p: { monto?: number; fecha?: string; medio?: string } = {}) {
+export async function registrarPago(id: number, p: { monto?: number; fecha?: string; formaId?: number } = {}) {
   const r = await obtener(id);
   if (r.estado === "pagado") throw new ErrorUsuario("Ese pago ya está marcado como pagado.");
+  const formaId = p.formaId ?? r.formaId;
+  if (!formaId) throw new ErrorUsuario("Falta con qué lo pagaste.");
+  if (p.formaId && p.formaId !== r.formaId) await formaActiva(p.formaId);
   const d = abrirMes(r.datosCifrados);
   const monto = d.boleta ?? d.esperado;
   const parte = p.monto ?? Math.max(0, monto - totalPagado(d.pagos));
@@ -522,12 +550,32 @@ export async function registrarPago(id: number, p: { monto?: number; fecha?: str
   const estado = estadoDe(monto, pagos);
   await db
     .update(pagoMes)
-    .set({ estado, pagadoEn: fecha, medio: p.medio?.trim() || r.medio, datosCifrados: sellar({ ...d, pagos }), actualizadoEn: new Date() })
+    .set({ estado, pagadoEn: fecha, formaId, datosCifrados: sellar({ ...d, pagos }), actualizadoEn: new Date() })
     .where(eq(pagoMes.id, id));
   if (estado === "pagado" && r.suscripcionId) {
     const [s] = await db.select().from(suscripcion).where(eq(suscripcion.id, r.suscripcionId));
     if (s && s.fechaVto === r.vence) await renovarSuscripcion(s.id);
   }
+  if (r.tarjetaId) await marcarPago(r.tarjetaId, totalPagado(pagos));
+  avisar();
+  return itemDe(id);
+}
+
+/**
+ * Corregir un pago ya hecho (lo asentaste después, con otra forma, otro monto): cambia la última parte pagada y la
+ * forma de pago, sin desmarcarlo.
+ */
+export async function corregirPago(id: number, c: { monto: number; fecha: string; formaId: number }) {
+  const r = await obtener(id);
+  const d = abrirMes(r.datosCifrados);
+  if (!d.pagos.length || (r.estado !== "pagado" && r.estado !== "parcial")) throw new ErrorUsuario("Ese pago todavía no está pagado.");
+  if (!(c.monto > 0)) throw new ErrorUsuario("Falta el monto que pagaste.");
+  if (c.formaId !== r.formaId) await formaActiva(c.formaId);
+  const pagos = [...d.pagos.slice(0, -1), { monto: c.monto, fecha: c.fecha }];
+  await db
+    .update(pagoMes)
+    .set({ estado: estadoDe(d.boleta ?? d.esperado, pagos), pagadoEn: c.fecha, formaId: c.formaId, datosCifrados: sellar({ ...d, pagos }), actualizadoEn: new Date() })
+    .where(eq(pagoMes.id, id));
   if (r.tarjetaId) await marcarPago(r.tarjetaId, totalPagado(pagos));
   avisar();
   return itemDe(id);
@@ -556,7 +604,7 @@ export async function omitirPago(id: number, omitido: boolean) {
 
 /** El monto y el vencimiento de este mes (los de la boleta), y la nota. Con una fecha nueva, los avisos vuelven a salir. */
 /** vence null: sin vencimiento. */
-export async function actualizarPagoDelMes(id: number, c: { monto?: number; vence?: string | null; nota?: string; medio?: string }) {
+export async function actualizarPagoDelMes(id: number, c: { monto?: number; vence?: string | null; nota?: string }) {
   const r = await obtener(id);
   const d = abrirMes(r.datosCifrados);
   const nuevo = { ...d, ...(c.monto !== undefined ? { boleta: Math.max(0, c.monto) } : {}), ...(c.nota !== undefined ? { nota: c.nota.trim() } : {}) };
@@ -566,7 +614,6 @@ export async function actualizarPagoDelMes(id: number, c: { monto?: number; venc
     .set({
       datosCifrados: sellar(nuevo),
       ...(venceCambia ? { vence: c.vence, avisoPrevioEnviado: false, avisoDiaEnviado: false } : {}),
-      ...(c.medio !== undefined ? { medio: c.medio.trim() } : {}),
       ...(r.estado !== "omitido" && nuevo.pagos.length ? { estado: estadoDe(nuevo.boleta ?? nuevo.esperado, nuevo.pagos) } : {}),
       actualizadoEn: new Date(),
     })
@@ -576,12 +623,15 @@ export async function actualizarPagoDelMes(id: number, c: { monto?: number; venc
 }
 
 /** Sin lugar, es general (de negocio o personal). */
-export type EntradaSuelto = { nombre: string; lugarId: number | null; tipo?: TipoLugar; categoria: string; monto: number; moneda: Moneda; fecha: string; medio: string; nota: string; pagado: boolean };
+/** formaId: con qué se pagó (hace falta si ya está pagado). */
+export type EntradaSuelto = { nombre: string; lugarId: number | null; tipo?: TipoLugar; categoria: string; monto: number; moneda: Moneda; fecha: string; formaId: number | null; nota: string; pagado: boolean };
 
 /** Un pago que no está entre los fijos: ya pagado, o para pagar en esa fecha. */
 export async function crearSuelto(e: EntradaSuelto) {
   if (!e.nombre.trim()) throw new ErrorUsuario("Falta qué pagaste.");
   if (!(e.monto > 0)) throw new ErrorUsuario("Falta el monto.");
+  if (e.pagado && !e.formaId) throw new ErrorUsuario("Falta con qué lo pagaste.");
+  if (e.formaId) await formaActiva(e.formaId);
   const pagos = e.pagado ? [{ monto: e.monto, fecha: e.fecha }] : [];
   const [r] = await db
     .insert(pagoMes)
@@ -593,7 +643,7 @@ export async function crearSuelto(e: EntradaSuelto) {
       moneda: e.moneda,
       estado: e.pagado ? "pagado" : "pendiente",
       pagadoEn: e.pagado ? e.fecha : null,
-      medio: e.medio.trim(),
+      formaId: e.formaId,
       datosCifrados: sellar({ nombre: e.nombre.trim(), esperado: e.monto, boleta: null, pagos, cuenta: "", nota: e.nota.trim() } satisfies DatosMes),
     })
     .returning({ id: pagoMes.id });
@@ -674,8 +724,8 @@ export async function resumenPagos(periodo: string) {
   const desde = sumarMeses(periodo, -11);
   const hoy = hoyIso();
   // 11 meses para atrás siempre llegan al enero del año del mes: alcanzan para el año también.
-  const [filas, lugares] = await Promise.all([filasDe(desde, periodo), db.select().from(pagoLugar)]);
-  const items = filas.map((r) => aItem(r, lugares, hoy)).filter((i) => i.estado !== "omitido");
+  const [filas, cat] = await Promise.all([filasDe(desde, periodo), catalogos()]);
+  const items = filas.map((r) => aItem(r, cat, hoy)).filter((i) => i.estado !== "omitido");
   const meses = Array.from({ length: 12 }, (_, k) => {
     const p = sumarMeses(desde, k);
     const delMes = items.filter((i) => i.periodo === p);
@@ -691,6 +741,8 @@ export async function resumenPagos(periodo: string) {
     porLugar: agrupar(porPartes(lista, (p) => p.lugar)),
     porCategoria: agrupar(lista.map((i) => ({ nombre: i.categoria, moneda: i.moneda, monto: i.monto, pagado: i.pagado }))),
     porTipo: agrupar(porPartes(lista, (p) => (p.tipo === "negocio" ? "Negocio" : "Personal"))),
+    // Solo lo pagado: con qué se pagó.
+    porForma: agrupar(lista.filter((i) => i.pagado > 0).map((i) => ({ nombre: i.forma ?? "Sin forma de pago", moneda: i.moneda, monto: i.pagado, pagado: i.pagado }))),
   });
   return {
     periodo,
@@ -702,15 +754,16 @@ export async function resumenPagos(periodo: string) {
 }
 
 export async function exportarCsv(desde: string, hasta: string) {
-  const [filas, lugares] = await Promise.all([filasDe(desde, hasta), db.select().from(pagoLugar)]);
+  const [filas, cat] = await Promise.all([filasDe(desde, hasta), catalogos()]);
   const hoy = hoyIso();
   // Un renglón por lugar: el repartido sale en cada local con su parte, así cada uno cierra sus números.
   return aCsv(
     filas.flatMap((r) => {
-      const i = aItem(r, lugares, hoy);
+      const i = aItem(r, cat, hoy);
       return i.partes.map(
         (p): FilaCsv => ({
           ...i,
+          forma: i.pagado > 0 ? (i.forma ?? "") : "",
           lugar: p.lugar,
           tipo: p.tipo === "negocio" ? "Negocio" : "Personal",
           esperado: p.monto,
@@ -728,14 +781,14 @@ export async function exportarCsv(desde: string, hasta: string) {
 export async function pagosPendientes() {
   const hasta = mesActual();
   await prepararMes(hasta);
-  const [filas, lugares] = await Promise.all([
+  const [filas, cat] = await Promise.all([
     db
       .select()
       .from(pagoMes)
       .where(and(gte(pagoMes.periodo, sumarMeses(hasta, -1)), lte(pagoMes.periodo, sumarMeses(hasta, 1)), inArray(pagoMes.estado, ["pendiente", "parcial"]))),
-    db.select().from(pagoLugar),
+    catalogos(),
   ]);
-  return filas.map((r) => aItem(r, lugares, hoyIso()));
+  return filas.map((r) => aItem(r, cat, hoyIso()));
 }
 
 /** Los pendientes que coinciden con lo que dijo ("la luz del express 1"): primero los que tienen todas las palabras. */
@@ -754,10 +807,10 @@ export async function buscarPendientes(texto: string) {
 
 /** Lo pagado en un rango (para "¿cuánto pagué de luz este año?"), con el total. */
 export async function historialPagos(desde: string, hasta: string, buscar?: string) {
-  const [filas, lugares] = await Promise.all([filasDe(desde, hasta), db.select().from(pagoLugar)]);
+  const [filas, cat] = await Promise.all([filasDe(desde, hasta), catalogos()]);
   const filtro = buscar ? normalizar(buscar) : "";
   const items = filas
-    .map((r) => aItem(r, lugares, hoyIso()))
+    .map((r) => aItem(r, cat, hoyIso()))
     .filter((i) => i.pagado > 0 && (!filtro || filtro.split(/\s+/).every((p) => normalizar(`${i.nombre} ${i.lugar} ${i.categoria}`).includes(p))));
   return { items, total: sumaPorMoneda(items.map((i) => ({ moneda: i.moneda, valor: i.pagado }))) };
 }
@@ -774,15 +827,15 @@ export async function guardarAnalisis(periodo: string, texto: string) {
 export async function pagosParaAvisar() {
   const hasta = sumarMeses(mesActual(), 1);
   await prepararMes(mesActual());
-  const [filas, fijos, lugares] = await Promise.all([
+  const [filas, fijos, cat] = await Promise.all([
     db
       .select()
       .from(pagoMes)
       .where(and(isNotNull(pagoMes.fijoId), lte(pagoMes.periodo, hasta), inArray(pagoMes.estado, ["pendiente", "parcial"]), or(eq(pagoMes.avisoPrevioEnviado, false), eq(pagoMes.avisoDiaEnviado, false)))),
     db.select().from(pagoFijo),
-    db.select().from(pagoLugar),
+    catalogos(),
   ]);
-  return filas.map((r) => ({ fila: r, item: aItem(r, lugares, hoyIso()), avisoDias: fijos.find((f) => f.id === r.fijoId)?.avisoDias ?? null }));
+  return filas.map((r) => ({ fila: r, item: aItem(r, cat, hoyIso()), avisoDias: fijos.find((f) => f.id === r.fijoId)?.avisoDias ?? null }));
 }
 
 export async function marcarAvisado(id: number, cual: "previo" | "dia") {

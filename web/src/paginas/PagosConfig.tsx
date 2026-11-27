@@ -1,10 +1,11 @@
-import { useState } from "react";
-import { Building2, Home, Pencil, Plus, Sparkles, Trash2 } from "lucide-react";
+import { useState, type ReactNode } from "react";
+import { ArrowDown, ArrowUp, Building2, Home, Pencil, Plus, Sparkles, Trash2 } from "lucide-react";
+import { ElegirForma, IconoForma, TIPOS_FORMA } from "../componentes/FormasPago";
 import { Boton, Cargando, Interruptor, MenuAcciones, Modal, useAccion } from "../componentes/ui";
 import { del, post, put } from "../lib/api";
 import { aCampo, aNumero, plata } from "../lib/numeros";
 import { describirAlcance, FRECUENCIAS_PAGO, nombreMes, periodoActual } from "../lib/pagos";
-import type { AlcancePago, CampoFijo, ConfigPagos, FijoPago, FijoPropuesto, FrecuenciaPago, LugarPago, Moneda, PropuestaPagos, TipoLugar } from "../lib/tipos";
+import type { AlcancePago, CampoFijo, ConfigPagos, FijoPago, FijoPropuesto, FormaPago, FrecuenciaPago, LugarPago, Moneda, PropuestaPagos, TipoFormaPago, TipoLugar } from "../lib/tipos";
 import { useDatos } from "../lib/vivo";
 
 /** Cada cosa que propone la IA, con su casilla para revisar antes de aplicar. */
@@ -16,10 +17,12 @@ type ItemIa = (
 /** Filtro de la lista: todos, un lugar, los generales o los repartidos. */
 type FiltroLugar = number | "todos" | "general" | "repartido";
 
+const nombreForma = (formas: FormaPago[], id: number | null) => (id === null ? null : (formas.find((f) => f.id === id)?.nombre ?? null));
+
 const textoAviso = (d: number | null, general: number) => (d === null ? `${general} días antes` : d < 0 ? "No avisar" : d === 0 ? "El día que vence" : `${d} ${d === 1 ? "día" : "días"} antes`);
 
 export function PagosConfig() {
-  const { datos } = useDatos<ConfigPagos>("/api/pagos/config", ["pagos"]);
+  const { datos } = useDatos<ConfigPagos>("/api/pagos/config", ["pagos", "tarjetas"]);
   const [lugar, setLugar] = useState<FiltroLugar>("todos");
   const [editando, setEditando] = useState<FijoPago | "nuevo" | null>(null);
   const accion = useAccion();
@@ -37,7 +40,10 @@ export function PagosConfig() {
       <CargarConIa config={datos} />
 
       <div className="grid gap-4 lg:grid-cols-[17rem_1fr]">
-        <Lugares lugares={datos.lugares} fijos={datos.fijos} elegido={lugar} onElegir={setLugar} />
+        <div className="space-y-4 self-start">
+          <Lugares lugares={datos.lugares} fijos={datos.fijos} elegido={lugar} onElegir={setLugar} />
+          <Formas formas={datos.formas} />
+        </div>
 
         <section className="tarjeta overflow-hidden">
           <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
@@ -63,7 +69,7 @@ export function PagosConfig() {
                   </div>
                   <div className="text-xs text-slate-600">
                     {f.dia ? `Día ${f.dia}` : "Sin vto."} · {FRECUENCIAS_PAGO[f.frecuencia].toLowerCase()}
-                    <div className="text-slate-400">{f.medio || "Medio sin definir"}</div>
+                    <div className="text-slate-400">{nombreForma(datos.formas, f.formaId) ?? "Sin forma fija"}</div>
                   </div>
                   <div className="hidden text-xs text-slate-500 sm:block">{textoAviso(f.avisoDias, datos.diasAviso)}</div>
                   <div className="col-start-2 row-span-2 row-start-1 self-center sm:col-start-auto sm:row-span-1">
@@ -129,7 +135,7 @@ const ETIQUETA_CAMPO: Record<CampoFijo, string> = {
   vence: "Vencimiento",
   aviso: "Aviso",
   frecuencia: "Frecuencia",
-  medio: "Medio de pago",
+  forma: "Forma de pago",
   cuenta: "Cuenta",
   nota: "Nota",
 };
@@ -160,7 +166,7 @@ function CargarConIa({ config }: { config: ConfigPagos }) {
       vence: f.dia ? `día ${f.dia}` : "sin vencimiento",
       aviso: textoAviso(f.avisoDias, config.diasAviso).toLowerCase(),
       frecuencia: FRECUENCIAS_PAGO[f.frecuencia].toLowerCase(),
-      medio: f.medio,
+      forma: nombreForma(config.formas, f.formaId) ?? "sin forma fija",
       cuenta: f.cuenta,
       nota: f.nota,
     })[c] || "—";
@@ -277,7 +283,7 @@ function CargarConIa({ config }: { config: ConfigPagos }) {
                           f.monto ? `${f.variable ? "~ " : ""}${plata(f.monto, f.moneda)}` : "sin monto",
                           f.dia ? `día ${f.dia}` : "sin vencimiento",
                           FRECUENCIAS_PAGO[f.frecuencia].toLowerCase(),
-                          f.medio,
+                          nombreForma(config.formas, f.formaId),
                           f.cuenta,
                           f.nota,
                         ]
@@ -398,11 +404,11 @@ function ModalFijo({ fijo, lugarInicial, config, onCerrar }: { fijo: FijoPago | 
     conVencimiento: fijo ? fijo.dia !== null : false,
     frecuencia: (fijo?.frecuencia ?? "mensual") as FrecuenciaPago,
     desde: fijo?.desde ?? periodoActual(),
-    medio: fijo?.medio ?? "",
     cuenta: fijo?.cuenta ?? "",
     aviso: fijo?.avisoDias === null || fijo?.avisoDias === undefined ? "" : String(fijo.avisoDias),
     nota: fijo?.nota ?? "",
   });
+  const [formaId, setFormaId] = useState<number | null>(fijo?.formaId ?? null);
   const [alcance, setAlcance] = useState<AlcancePago>(fijo?.alcance ?? "lugar");
   const [tipoGeneral, setTipoGeneral] = useState<TipoLugar>(fijo?.tipo ?? "personal");
   // Entre qué lugares se reparte: lugarId → porcentaje escrito (solo con porcentajes).
@@ -424,6 +430,7 @@ function ModalFijo({ fijo, lugarInicial, config, onCerrar }: { fijo: FijoPago | 
       tipo: alcance === "general" ? tipoGeneral : null,
       reparto: alcance === "repartido" ? elegidos.map((id) => ({ lugarId: id, porcentaje: conPorcentajes ? (aNumero(reparto[id]) ?? 0) : null })) : null,
       monto,
+      formaId,
       dia: f.conVencimiento ? Number(f.dia) : null,
       avisoDias: f.aviso === "" ? null : Number(f.aviso),
     };
@@ -579,15 +586,6 @@ function ModalFijo({ fijo, lugarInicial, config, onCerrar }: { fijo: FijoPago | 
           <span className="mt-0.5 block text-[11px] text-slate-400">Primer mes: {nombreMes(f.desde || periodoActual())}</span>
         </label>
         <label className="block">
-          <span className="etiqueta">Cómo lo pagás</span>
-          <input className="campo" list="medios-fijo" placeholder="Transferencia…" {...campo("medio")} />
-          <datalist id="medios-fijo">
-            {config.medios.map((m) => (
-              <option key={m} value={m} />
-            ))}
-          </datalist>
-        </label>
-        <label className="block">
           <span className="etiqueta">N.º de cliente o cuenta</span>
           <input className="campo" placeholder="Opcional" {...campo("cuenta")} />
         </label>
@@ -604,9 +602,121 @@ function ModalFijo({ fijo, lugarInicial, config, onCerrar }: { fijo: FijoPago | 
             <option value="-1">No avisar</option>
           </select>
         </label>
+        <div className="col-span-2">
+          <span className="etiqueta">Con qué lo pagás</span>
+          <ElegirForma formas={config.formas} valor={formaId} onCambio={setFormaId} ninguna="Sin forma fija" />
+          <span className="mt-1 block text-[11px] text-slate-400">Aparece marcada al tocar «Pagado». Sin forma fija, aparece la última que usaste.</span>
+        </div>
         <label className="col-span-2 block">
           <span className="etiqueta">Nota</span>
           <input className="campo" placeholder="Opcional" {...campo("nota")} />
+        </label>
+      </div>
+    </Modal>
+  );
+}
+
+/** Con qué pagás: las que cargás y las tarjetas de Tarjetas (aparecen solas). Se ordenan con las flechas. */
+function Formas({ formas }: { formas: FormaPago[] }) {
+  const [nombre, setNombre] = useState("");
+  const [tipo, setTipo] = useState<TipoFormaPago>("transferencia");
+  const [editando, setEditando] = useState<FormaPago | null>(null);
+  const accion = useAccion();
+  const activas = formas.filter((f) => !f.archivada);
+  const agregar = async () => {
+    if (await accion(() => post("/api/pagos/formas", { nombre, tipo }), "Forma de pago agregada")) setNombre("");
+  };
+  const mover = (k: number, paso: -1 | 1) => {
+    const ids = activas.map((f) => f.id);
+    [ids[k], ids[k + paso]] = [ids[k + paso], ids[k]];
+    void accion(() => put("/api/pagos/formas/orden", { ids }));
+  };
+  const opcionesTipo = Object.entries(TIPOS_FORMA).map(([v, t]) => (
+    <option key={v} value={v}>
+      {t.texto}
+    </option>
+  ));
+  return (
+    <section className="tarjeta overflow-hidden">
+      <h2 className="px-4 py-3 text-sm font-semibold text-slate-800">Formas de pago</h2>
+      <ul className="border-t border-slate-100">
+        {activas.map((f, k) => (
+          <li key={f.id} className="flex items-center gap-2 border-t border-slate-100 py-1.5 pl-4 pr-1 text-sm text-slate-700 first:border-t-0">
+            <IconoForma tipo={f.tipo} className="size-4 text-slate-400" />
+            <span className="min-w-0 flex-1 truncate" title={f.tarjetaId ? "De Tarjetas: el nombre se cambia allá" : TIPOS_FORMA[f.tipo].texto}>
+              {f.nombre}
+            </span>
+            <MenuAcciones
+              etiqueta={`Acciones de ${f.nombre}`}
+              acciones={[
+                k > 0 && { texto: "Subir", icono: <ArrowUp />, onClick: () => mover(k, -1) },
+                k < activas.length - 1 && { texto: "Bajar", icono: <ArrowDown />, onClick: () => mover(k, 1) },
+                !f.tarjetaId && { texto: "Editar", icono: <Pencil />, onClick: () => setEditando(f) },
+                {
+                  texto: "Sacar de la lista",
+                  icono: <Trash2 />,
+                  peligro: true,
+                  onClick: () => confirm(`¿Sacar «${f.nombre}» de la lista? Los pagos que ya hiciste con ella la siguen mostrando.`) && void accion(() => del(`/api/pagos/formas/${f.id}`), "Forma de pago quitada"),
+                },
+              ]}
+            />
+          </li>
+        ))}
+        {!activas.length && <li className="px-4 py-3 text-sm text-slate-500">Agregá con qué pagás: transferencia, efectivo, Mercado Pago…</li>}
+      </ul>
+      <form
+        className="grid grid-cols-[1fr_auto] gap-2 border-t border-slate-100 p-3"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (nombre.trim()) void agregar();
+        }}
+      >
+        <input className="campo col-span-2" placeholder="Nueva: Transferencia Galicia…" value={nombre} onChange={(e) => setNombre(e.target.value)} />
+        <select className="campo w-auto min-w-0" value={tipo} onChange={(e) => setTipo(e.target.value as TipoFormaPago)} aria-label="Tipo de forma de pago">
+          {opcionesTipo}
+        </select>
+        <Boton chico type="submit" disabled={!nombre.trim()} icono={<Plus className="size-3.5" />}>
+          Agregar
+        </Boton>
+      </form>
+      {editando && <ModalForma forma={editando} opcionesTipo={opcionesTipo} onCerrar={() => setEditando(null)} />}
+    </section>
+  );
+}
+
+function ModalForma({ forma, opcionesTipo, onCerrar }: { forma: FormaPago; opcionesTipo: ReactNode; onCerrar: () => void }) {
+  const [nombre, setNombre] = useState(forma.nombre);
+  const [tipo, setTipo] = useState(forma.tipo);
+  const accion = useAccion();
+  const guardar = async () => {
+    if (await accion(() => put(`/api/pagos/formas/${forma.id}`, { nombre, tipo }), "Guardado")) onCerrar();
+  };
+  return (
+    <Modal
+      abierto
+      onCerrar={onCerrar}
+      titulo={`Editar ${forma.nombre}`}
+      ancho="max-w-sm"
+      pie={
+        <>
+          <Boton onClick={onCerrar}>Cancelar</Boton>
+          <Boton variante="primario" disabled={!nombre.trim()} onClick={() => void guardar()}>
+            Guardar
+          </Boton>
+        </>
+      }
+    >
+      <p className="mb-3 text-sm text-slate-500">El nombre nuevo se ve en todos los pagos, también en los que ya hiciste.</p>
+      <div className="space-y-3">
+        <label className="block">
+          <span className="etiqueta">Nombre</span>
+          <input className="campo" autoFocus value={nombre} onChange={(e) => setNombre(e.target.value)} />
+        </label>
+        <label className="block">
+          <span className="etiqueta">Tipo</span>
+          <select className="campo" value={tipo} onChange={(e) => setTipo(e.target.value as TipoFormaPago)}>
+            {opcionesTipo}
+          </select>
         </label>
       </div>
     </Modal>

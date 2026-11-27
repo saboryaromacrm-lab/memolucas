@@ -47,6 +47,7 @@ import { EMOJIS_CONFIRMACION, TEXTO_AYUDA, detectarComando, esAfirmativo, esNega
 import { extraerUrls, leerEnlace, textoSinUrls, type VistaPreviaWa } from "../servicios/enlaces.js";
 import { analizarEnlace, analizarFoto, interpretar, motivoFallaIA, responderConNotas, type AnalisisFoto, type Interpretacion } from "./ia.js";
 import { actualizarPagoDelMes, buscarPendientes, guardarComprobante, pagosPendientes, registrarPago, type ItemPago } from "../servicios/pagos.js";
+import { buscarForma, formasActivas } from "../servicios/pagos-formas.js";
 import { cuandoVence, diaDe } from "../servicios/vencimientos.js";
 import { anotarFallaIA, revisarIA, textoFallaIA } from "./estado-ia.js";
 import { ErrorAudio, transcribir } from "../servicios/audio.js";
@@ -136,8 +137,11 @@ type DatosBorrador = {
   guardar?: { links: { concepto: string; url: string }[]; nota: { titulo: string; contenido: string; categoria: string } | null };
   /** Todo lo que se dice en el video resumido (se manda si piden "texto completo"). */
   transcripcion?: string | null;
-  /** Foto de un comprobante: de qué pago es (null: se preguntó cuál), cuánto y cuándo. */
-  pago?: { registroId: number | null; monto: number; fecha: string | null };
+  /**
+   * Un pago para marcar (de la foto de un comprobante o de «pagué la luz»): de cuál es (null: se preguntó cuál), cuánto
+   * y cuándo. eligiendoForma: se preguntó con qué se pagó.
+   */
+  pago?: { registroId: number | null; monto: number; fecha: string | null; eligiendoForma?: boolean };
 };
 
 /** "¿Es el ABL de Casa?" después de la foto de un comprobante. */
@@ -440,6 +444,12 @@ export class Procesador {
         await guardarBorrador({ ...b.datos, pago: { ...b.datos.pago, registroId: null } });
         return this.decir("Ok. ¿De cuál de tus pagos es? Decime, por ejemplo, «es la luz del Express 1».", { intencion: "falta_info" });
       }
+      case "formaPago": {
+        const b = await borradorActivo(a.borradorId);
+        const registroId = b?.datos.pago?.registroId;
+        if (!b || !registroId) return this.decir(frases.yaCerrado());
+        return this.pagoDeFoto(b.id, b.datos, registroId, a.formaIds[elegida]);
+      }
     }
   }
 
@@ -543,11 +553,18 @@ export class Procesador {
     return this.decir(`${pregunta} Respondé *sí* o decime cuál es.`, { intencion: "falta_info" });
   }
 
-  /** El comprobante es de ese pago: lo marca pagado con el monto y la fecha de la foto, y guarda la foto cifrada. */
-  private async pagoDeFoto(borradorId: number, d: DatosBorrador, registroId: number) {
+  /**
+   * Marca el pago con el monto y la fecha (los de la foto, si vino de un comprobante, que se guarda cifrado). Si no se
+   * sabe con qué se pagó (ni lo dijo ni el pago tiene una forma de siempre), primero lo pregunta.
+   */
+  private async pagoDeFoto(borradorId: number, d: DatosBorrador, registroId: number, formaElegida?: number) {
+    const p = (await pagosPendientes()).find((i) => i.id === registroId);
+    if (!p) return this.decir("🤔 Ese pago ya no está entre lo que falta pagar.");
+    const formaId = formaElegida ?? p.formaId;
+    if (!formaId) return this.preguntarForma(d, p);
     let hecho: ItemPago;
     try {
-      hecho = await registrarPago(registroId, { ...(d.pago!.monto > 0 ? { monto: d.pago!.monto } : {}), ...(d.pago!.fecha ? { fecha: d.pago!.fecha } : {}) });
+      hecho = await registrarPago(registroId, { formaId, ...(d.pago!.monto > 0 ? { monto: d.pago!.monto } : {}), ...(d.pago!.fecha ? { fecha: d.pago!.fecha } : {}) });
     } catch (err) {
       if (err instanceof ErrorUsuario) return this.decir(`🤔 ${err.message}`);
       throw err;
@@ -566,7 +583,19 @@ export class Procesador {
           .map((i) => `${i.nombre} · ${i.lugar}`)
           .join(", ")}${faltan.length > 5 ? "…" : ""}.`
       : "Ya pagaste todo lo del mes 🙌";
-    return this.decir(`✅ Anotado: *${hecho.nombre} · ${hecho.lugar}* ${plata(hecho.pagado, hecho.moneda)}${parte}, con el comprobante.\n${resto}`, { intencion: "pago_registrado" });
+    const con = [hecho.forma && `con ${hecho.forma}`, adj && "comprobante guardado"].filter(Boolean).join(", ");
+    return this.decir(`✅ Anotado: *${hecho.nombre} · ${hecho.lugar}* ${plata(hecho.pagado, hecho.moneda)}${parte}${con ? ` (${con})` : ""}.\n${resto}`, { intencion: "pago_registrado" });
+  }
+
+  /** «¿Con qué pagaste…?»: una encuesta con las formas de pago (o la lista, si no hay encuestas o son muchas). */
+  private async preguntarForma(d: DatosBorrador, p: ItemPago) {
+    const formas = await formasActivas();
+    if (!formas.length) return this.decir("🤔 Para anotarlo me falta con qué lo pagaste: cargá tus formas de pago en el panel, en Pagos → Configuración.");
+    const borradorId = await guardarBorrador({ ...d, pago: { monto: 0, fecha: null, ...d.pago, registroId: p.id, eligiendoForma: true } });
+    const pregunta = `💳 ¿Con qué pagaste ${p.nombre} · ${p.lugar}?`;
+    // WhatsApp acepta hasta 12 opciones por encuesta.
+    if (formas.length <= 12 && (await this.encuesta(pregunta, formas.map((f) => f.nombre), { tipo: "formaPago", borradorId, formaIds: formas.map((f) => f.id) }))) return;
+    return this.decir(`${pregunta} Decime cuál: ${formas.map((f) => f.nombre).join(", ")}.`, { intencion: "falta_info" });
   }
 
   /** Mensaje con la propuesta y, si hay una fecha propuesta, la encuesta para responder con un toque. */
@@ -659,20 +688,26 @@ export class Procesador {
 
     // 4) Respuesta rápida a una propuesta (foto o link).
     const borrador = await borradorActivo();
-    // El comprobante de un pago: "sí" (es ese), "no" (pregunta cuál) o cuál es ("es la luz del Express 1").
+    // Un pago para marcar: "sí" (es ese), "no" (pregunta cuál), cuál es ("es la luz del Express 1") o con qué se pagó.
     const pagoFoto = !enGrupo() ? borrador?.datos.pago : undefined;
     if (borrador && pagoFoto) {
-      if (pagoFoto.registroId && esAfirmativo(texto)) return void (await anotar("pago_registrado"), await this.pagoDeFoto(borrador.id, borrador.datos, pagoFoto.registroId));
-      if (pagoFoto.registroId && esNegativo(texto)) {
-        await anotar("falta_info");
-        await guardarBorrador({ ...borrador.datos, pago: { ...pagoFoto, registroId: null } });
-        return this.decir("Ok. ¿De cuál de tus pagos es? Decime, por ejemplo, «es la luz del Express 1».", { intencion: "falta_info" });
+      if (pagoFoto.eligiendoForma) {
+        // Contestó con qué pagó (en lugar de votar la encuesta). Si no nombra una forma, sigue como un mensaje cualquiera.
+        const forma = pagoFoto.registroId ? await buscarForma(texto) : undefined;
+        if (forma) return void (await anotar("pago_registrado"), await this.pagoDeFoto(borrador.id, borrador.datos, pagoFoto.registroId!, forma.id));
+      } else {
+        if (pagoFoto.registroId && esAfirmativo(texto)) return void (await anotar("pago_registrado"), await this.pagoDeFoto(borrador.id, borrador.datos, pagoFoto.registroId));
+        if (pagoFoto.registroId && esNegativo(texto)) {
+          await anotar("falta_info");
+          await guardarBorrador({ ...borrador.datos, pago: { ...pagoFoto, registroId: null } });
+          return this.decir("Ok. ¿De cuál de tus pagos es? Decime, por ejemplo, «es la luz del Express 1».", { intencion: "falta_info" });
+        }
+        const candidatos = await buscarPendientes(texto);
+        if (candidatos.length === 1) return void (await anotar("pago_registrado"), await this.pagoDeFoto(borrador.id, borrador.datos, candidatos[0].id));
+        if (candidatos.length > 1)
+          return this.decir(`¿Cuál de estos? ${candidatos.map((i) => `${i.nombre} · ${i.lugar}`).join(", ")}`, { intencion: "falta_info" });
+        // No coincide con ninguno: sigue como un mensaje cualquiera.
       }
-      const candidatos = await buscarPendientes(texto);
-      if (candidatos.length === 1) return void (await anotar("pago_registrado"), await this.pagoDeFoto(borrador.id, borrador.datos, candidatos[0].id));
-      if (candidatos.length > 1)
-        return this.decir(`¿Cuál de estos? ${candidatos.map((i) => `${i.nombre} · ${i.lugar}`).join(", ")}`, { intencion: "falta_info" });
-      // No coincide con ninguno: sigue como un mensaje cualquiera.
     }
     if (borrador?.datos.transcripcion && PIDE_TEXTO_COMPLETO.test(normalizar(texto))) {
       await anotar("texto_completo");
@@ -863,8 +898,11 @@ export class Procesador {
       const r = await preguntarAlAgente(texto, "whatsapp", entranteId);
       if ("tope" in r) return this.decir(textoTope(r.tope), { intencion: "agente_tope" });
       // Si solo confirma lo que hizo, contesta con un emoji: va como reacción.
-      if (esSoloEmoji(r.texto)) return this.reaccionarODecir(r.texto.trim(), "Hecho", `${r.texto.trim()} Listo.`, "agente");
-      return this.decir(r.texto, { intencion: "agente" });
+      if (esSoloEmoji(r.texto)) await this.reaccionarODecir(r.texto.trim(), "Hecho", `${r.texto.trim()} Listo.`, "agente");
+      else await this.decir(r.texto, { intencion: "agente" });
+      // «Pagué la luz» sin decir con qué: va la encuesta de la forma de pago.
+      const p = r.pedirForma && (await pagosPendientes()).find((i) => i.id === r.pedirForma!.registroId);
+      if (p) await this.preguntarForma({ pago: r.pedirForma }, p);
     } catch (err) {
       if (!motivoFallaIA(err)) await registrar("error", "agente", "Falló el asistente", err);
       return this.falloIA(err, d);

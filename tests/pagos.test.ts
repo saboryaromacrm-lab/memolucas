@@ -18,11 +18,13 @@ import {
   borrarLugar,
   borrarPago,
   buscarPendientes,
+  corregirPago,
   crearFijo,
   crearLugar,
   crearSuelto,
   desmarcarPago,
   historialPagos,
+  listarFijos,
   omitirPago,
   registrarPago,
   resumenPagos,
@@ -30,8 +32,9 @@ import {
   type EntradaFijo,
 } from "../src/servicios/pagos.js";
 import { avisarPagos, mensajesDelMesPagos } from "../src/servicios/pagos-avisos.js";
-import { crearSuscripcion } from "../src/servicios/suscripciones.js";
-import { crearTarjeta, SIN_SALDOS } from "../src/servicios/tarjetas.js";
+import { borrarForma, crearForma, listarFormas } from "../src/servicios/pagos-formas.js";
+import { crearSuscripcion, pagarSuscripcionCon } from "../src/servicios/suscripciones.js";
+import { actualizarTarjeta, borrarTarjeta, crearTarjeta, SIN_SALDOS } from "../src/servicios/tarjetas.js";
 import { armarFijosConIa } from "../src/bot/ia-pagos.js";
 import { baseLimpia, enviadorFalso, panelConSesion, reloj } from "./ayuda.js";
 
@@ -44,6 +47,9 @@ vi.mock("../src/bot/ia.js", async (orig) => ({
 }));
 
 const Z = "America/Argentina/Buenos_Aires";
+/** Las formas de pago de las pruebas (se crean en cada una). */
+let transferencia: number;
+let efectivo: number;
 const local = (iso: string) => DateTime.fromISO(iso, { zone: Z }).toJSDate();
 const fijo = (lugarId: number, e: Partial<EntradaFijo>): EntradaFijo => ({
   alcance: "lugar",
@@ -57,7 +63,7 @@ const fijo = (lugarId: number, e: Partial<EntradaFijo>): EntradaFijo => ({
   moneda: "ARS",
   dia: 10,
   frecuencia: "mensual",
-  medio: "Transferencia",
+  formaId: transferencia,
   cuenta: "",
   avisoDias: null,
   nota: "",
@@ -75,6 +81,8 @@ describe("Pagos", () => {
     pedir.mockReset();
     analizarFoto.mockReset();
     fijarAzar(() => 0);
+    transferencia = (await crearForma({ nombre: "Transferencia", tipo: "transferencia" })).id;
+    efectivo = (await crearForma({ nombre: "Efectivo", tipo: "efectivo" })).id;
     express = (await crearLugar({ nombre: "Express 1", tipo: "negocio" })).id;
     casa = (await crearLugar({ nombre: "Casa", tipo: "personal" })).id;
   });
@@ -105,7 +113,7 @@ describe("Pagos", () => {
     expect(await registrarPago(alquiler.id)).toMatchObject({ estado: "pagado", pagado: 650000, falta: 0, pagadoEn: "2026-11-26" });
     await expect(registrarPago(alquiler.id)).rejects.toThrow("ya está marcado");
     await desmarcarPago(alquiler.id);
-    expect(await registrarPago(alquiler.id, { monto: 300000, medio: "Efectivo" })).toMatchObject({ estado: "parcial", falta: 350000, medio: "Efectivo" });
+    expect(await registrarPago(alquiler.id, { monto: 300000, formaId: efectivo })).toMatchObject({ estado: "parcial", falta: 350000, forma: "Efectivo" });
     expect(await registrarPago(alquiler.id)).toMatchObject({ estado: "pagado", pagado: 650000 });
 
     const luz = await item("2026-11", "Luz");
@@ -139,9 +147,9 @@ describe("Pagos", () => {
       ["ChatGPT Plus", "General", 20, "USD", "pendiente", "suscripcion"],
       ["Visa ···1376", "General", 386540, "ARS", "pendiente", "tarjeta"],
     ]);
-    await registrarPago(nov.items[1].id);
+    await registrarPago(nov.items[1].id, { formaId: efectivo });
     expect((await db.select().from(suscripcion).where(eq(suscripcion.id, chatgpt.id)))[0].fechaVto).toBe("2026-12-28");
-    await registrarPago(nov.items[2].id, { monto: 100000 });
+    await registrarPago(nov.items[2].id, { monto: 100000, formaId: transferencia });
     const [t] = await db.select().from(tarjeta).where(eq(tarjeta.id, visa.id));
     expect(abrir<{ pagado?: number }>(t.datosCifrados, {}).pagado).toBe(100000);
     expect((await verMes("2026-12")).items.map((i) => [i.nombre, i.vence, i.estado])).toEqual([
@@ -152,7 +160,7 @@ describe("Pagos", () => {
 
   it("sueltos, cambios en lo fijo y lugares con pagos", async () => {
     const { id } = await crearFijo(fijo(express, { nombre: "Internet", monto: 30000, dia: 12 }));
-    const arreglo = await crearSuelto({ nombre: "Arreglo heladera", lugarId: express, categoria: "Otros", monto: 85000, moneda: "ARS", fecha: "2026-11-20", medio: "Efectivo", nota: "", pagado: true });
+    const arreglo = await crearSuelto({ nombre: "Arreglo heladera", lugarId: express, categoria: "Otros", monto: 85000, moneda: "ARS", fecha: "2026-11-20", formaId: efectivo, nota: "", pagado: true });
     expect(arreglo).toMatchObject({ estado: "pagado", origen: "suelto", periodo: "2026-11" });
     await expect(borrarPago((await item("2026-11", "Internet")).id)).rejects.toThrow("No se paga este mes");
     await borrarPago(arreglo.id);
@@ -161,7 +169,7 @@ describe("Pagos", () => {
     expect(await item("2026-11", "Internet Fibra")).toMatchObject({ lugar: "Casa", monto: 35000, vence: "2026-11-20" });
     await expect(borrarLugar(casa)).rejects.toThrow("tiene pagos");
 
-    await registrarPago((await item("2026-11", "Internet Fibra")).id);
+    await registrarPago((await item("2026-11", "Internet Fibra")).id, { formaId: transferencia });
     await verMes("2026-12");
     await borrarFijo(id);
     expect((await verMes("2026-11")).items.map((i) => [i.nombre, i.estado])).toEqual([["Internet Fibra", "pagado"]]); // Lo pagado queda.
@@ -195,7 +203,7 @@ describe("Pagos", () => {
     ]);
     const { app, headers } = await panelConSesion();
     const csv = (await app.inject({ url: "/api/pagos/exportar?desde=2026-11&hasta=2026-11", headers })).body;
-    expect(csv).toContain("Express 1;Negocio;Honorarios;Contador;ARS;42500,00;0,00;Pendiente;;Transferencia;50 % de $ 85.000,00 repartido;");
+    expect(csv).toContain("Express 1;Negocio;Honorarios;Contador;ARS;42500,00;0,00;Pendiente;;;50 % de $ 85.000,00 repartido;");
     expect(csv).toContain("Fontana;Negocio;Honorarios;Contador;ARS;42500,00");
     expect(csv).toContain("General;Personal;Préstamos y cuotas;Cuota Fiat;ARS;300000,00");
     await app.close();
@@ -243,7 +251,9 @@ describe("Pagos", () => {
     const { app, headers } = await panelConSesion();
     const mes = (await app.inject({ url: "/api/pagos/mes?periodo=2026-11", headers })).json();
     const id = mes.items[0].id;
-    expect((await app.inject({ method: "POST", url: `/api/pagos/${id}/pagar`, headers, payload: {} })).json()).toMatchObject({ estado: "pagado" });
+    // Sin la forma de pago no se marca.
+    expect((await app.inject({ method: "POST", url: `/api/pagos/${id}/pagar`, headers, payload: {} })).statusCode).toBe(400);
+    expect((await app.inject({ method: "POST", url: `/api/pagos/${id}/pagar`, headers, payload: { formaId: transferencia } })).json()).toMatchObject({ estado: "pagado", forma: "Transferencia" });
     const foto = await sharp({ create: { width: 2000, height: 1000, channels: 3, background: "#fff" } }).png().toBuffer();
     expect((await app.inject({ method: "PUT", url: `/api/pagos/${id}/comprobante`, headers: { ...headers, "content-type": "image/png" }, payload: foto })).statusCode).toBe(200);
     const c = await app.inject({ url: `/api/pagos/${id}/comprobante`, headers });
@@ -300,10 +310,10 @@ describe("Pagos", () => {
       mensaje: "",
       nuevos: [
         // Para un lugar que ya existe la IA deja el tipo vacío, y escribe la moneda y la frecuencia a su manera: no rompe.
-        { alcance: "lugar", lugar: "express 1", tipo: "", repartir_entre: [], nombre: "Alquiler", categoria: "Alquiler", monto: 650000, variable: false, moneda: "pesos", dia: 5, frecuencia: "Bimestral", medio: "Transferencia", cuenta: "", nota: "" },
-        { alcance: "lugar", lugar: "Fontana", tipo: "negocio", repartir_entre: [], nombre: "Luz", categoria: "Electricidad", monto: 0, variable: true, moneda: "USD", dia: 15, frecuencia: "mensual", medio: "", cuenta: "", nota: "" },
-        { alcance: "repartido", lugar: "", tipo: "", repartir_entre: [], nombre: "Contador", categoria: "Honorarios", monto: 85000, variable: false, moneda: "ARS", dia: 10, frecuencia: "mensual", medio: "", cuenta: "", nota: "" },
-        { alcance: "general", lugar: "", tipo: "personal", repartir_entre: [], nombre: "Cuota Fiat", categoria: "Préstamos y cuotas", monto: 300000, variable: false, moneda: "ARS", dia: 0, frecuencia: "mensual", medio: "", cuenta: "", nota: "" },
+        { alcance: "lugar", lugar: "express 1", tipo: "", repartir_entre: [], nombre: "Alquiler", categoria: "Alquiler", monto: 650000, variable: false, moneda: "pesos", dia: 5, frecuencia: "Bimestral", forma: "transferencia", cuenta: "", nota: "" },
+        { alcance: "lugar", lugar: "Fontana", tipo: "negocio", repartir_entre: [], nombre: "Luz", categoria: "Electricidad", monto: 0, variable: true, moneda: "USD", dia: 15, frecuencia: "mensual", forma: "", cuenta: "", nota: "" },
+        { alcance: "repartido", lugar: "", tipo: "", repartir_entre: [], nombre: "Contador", categoria: "Honorarios", monto: 85000, variable: false, moneda: "ARS", dia: 10, frecuencia: "mensual", forma: "", cuenta: "", nota: "" },
+        { alcance: "general", lugar: "", tipo: "personal", repartir_entre: [], nombre: "Cuota Fiat", categoria: "Préstamos y cuotas", monto: 300000, variable: false, moneda: "ARS", dia: 0, frecuencia: "mensual", forma: "", cuenta: "", nota: "" },
       ],
     });
     const { nuevos: fijos } = await armarFijosConIa("en el express 1 pago alquiler 650 mil el 5, y en Fontana la luz a mitad de mes");
@@ -385,6 +395,93 @@ describe("Pagos", () => {
     await app.close();
   });
 
+  it("formas de pago: las tarjetas aparecen solas, lo usado se archiva y el historial lo sigue nombrando", async () => {
+    await expect(crearForma({ nombre: " transferencia ", tipo: "otro" })).rejects.toThrow("Ya tenés «Transferencia».");
+    const visa = await crearTarjeta({ ...SIN_SALDOS, nombre: "Visa Galicia", ultimos4: "1376", cierre: null, vencimiento: null });
+    expect((await listarFormas()).map((f) => [f.nombre, f.tipo])).toEqual([
+      ["Transferencia", "transferencia"],
+      ["Efectivo", "efectivo"],
+      ["Visa Galicia ···1376", "credito"],
+    ]);
+    await actualizarTarjeta(visa.id, { ...SIN_SALDOS, nombre: "Visa Gold", ultimos4: "1376", cierre: null, vencimiento: null });
+    expect((await listarFormas()).at(-1)?.nombre).toBe("Visa Gold ···1376");
+
+    // Pagada con efectivo y después se borra la forma: queda archivada y el pago la sigue mostrando.
+    const gym = await crearFijo(fijo(casa, { nombre: "Gimnasio", monto: 25000, formaId: efectivo }));
+    await registrarPago((await item("2026-11", "Gimnasio")).id);
+    await borrarForma(efectivo);
+    expect((await listarFormas()).find((f) => f.id === efectivo)?.archivada).toBe(true);
+    expect(await item("2026-11", "Gimnasio")).toMatchObject({ estado: "pagado", forma: "Efectivo" });
+    expect((await listarFijos()).find((f) => f.id === gym.id)?.formaId).toBeNull();
+    await expect(registrarPago((await crearSuelto({ nombre: "Café", lugarId: null, categoria: "Otros", monto: 100, moneda: "ARS", fecha: "2026-11-26", formaId: null, nota: "", pagado: false })).id, { formaId: efectivo })).rejects.toThrow("Esa forma de pago ya no está");
+    // Una que nunca se usó se borra del todo; la de una tarjeta borrada queda archivada.
+    const mp = await crearForma({ nombre: "Mercado Pago", tipo: "billetera" });
+    await borrarForma(mp.id);
+    await borrarTarjeta(visa.id);
+    expect((await listarFormas()).map((f) => [f.nombre, f.archivada])).toEqual([
+      ["Transferencia", false],
+      ["Efectivo", true],
+      ["Visa Gold ···1376", true],
+    ]);
+  });
+
+  it("formas de pago: se sugiere la del fijo o la última usada, se corrige un pago hecho y el resumen las suma", async () => {
+    const luz = await crearFijo(fijo(express, { nombre: "Luz", monto: 70000, formaId: null }));
+    const nov = await item("2026-11", "Luz");
+    expect(nov.formaId).toBeNull();
+    await expect(registrarPago(nov.id)).rejects.toThrow("Falta con qué lo pagaste.");
+    await registrarPago(nov.id, { formaId: efectivo, fecha: "2026-11-20" });
+    // El mes que viene aparece marcada la última que usaste.
+    expect((await item("2026-12", "Luz")).formaId).toBe(efectivo);
+    // Si el fijo tiene una de siempre, gana esa (también en los meses ya armados sin pagar).
+    await actualizarFijo(luz.id, fijo(express, { nombre: "Luz", monto: 70000, formaId: transferencia }));
+    expect((await item("2026-12", "Luz")).formaId).toBe(transferencia);
+
+    // La suscripción que se paga con una tarjeta sugiere esa tarjeta.
+    const visa = await crearTarjeta({ ...SIN_SALDOS, nombre: "Visa", ultimos4: "", cierre: null, vencimiento: null });
+    const formaVisa = (await listarFormas()).find((f) => f.tarjetaId === visa.id)!.id;
+    const netflix = await crearSuscripcion({ nombre: "Netflix", url: "", fechaInicio: null, fechaVto: "2026-12-10", monto: 9999, moneda: "ARS", frecuencia: "mensual", observacion: "" });
+    await pagarSuscripcionCon(netflix.id, visa.id);
+    expect((await item("2026-12", "Netflix")).formaId).toBe(formaVisa);
+
+    // Lo asentaste mal: se corrige forma, fecha y monto sin desmarcarlo (con menos, queda en parte).
+    expect(await corregirPago(nov.id, { monto: 50000, fecha: "2026-11-18", formaId: transferencia })).toMatchObject({ estado: "parcial", pagado: 50000, pagadoEn: "2026-11-18", forma: "Transferencia" });
+    await expect(corregirPago((await item("2026-12", "Luz")).id, { monto: 1, fecha: "2026-12-01", formaId: efectivo })).rejects.toThrow("todavía no está pagado");
+
+    // Un pago suelto ya pagado necesita la forma.
+    await expect(crearSuelto({ nombre: "Arreglo", lugarId: null, categoria: "Otros", monto: 8000, moneda: "ARS", fecha: "2026-11-21", formaId: null, nota: "", pagado: true })).rejects.toThrow("Falta con qué lo pagaste.");
+    await crearSuelto({ nombre: "Arreglo", lugarId: null, categoria: "Otros", monto: 8000, moneda: "ARS", fecha: "2026-11-21", formaId: efectivo, nota: "", pagado: true });
+    expect((await resumenPagos("2026-11")).mes.porForma.map((g) => [g.nombre, g.total.ARS])).toEqual([
+      ["Transferencia", 50000],
+      ["Efectivo", 8000],
+    ]);
+  });
+
+  it("WhatsApp: si no se sabe con qué se pagó, lo pregunta con una encuesta y lo anota con lo que contesta", async () => {
+    await crearFijo(fijo(casa, { nombre: "ABL", categoria: "Impuestos y tasas", monto: 38400, dia: 30, formaId: null }));
+    const abl = await item("2026-11", "ABL");
+    const respuestas: string[] = [];
+    const encuestas: [string, string[]][] = [];
+    let n = 0;
+    const bot = new Procesador({
+      responder: async (t: string) => (respuestas.push(t), `OUT${++n}`),
+      responderImagen: async () => null,
+      responderEncuesta: async (nombre: string, opciones: string[]) => (encuestas.push([nombre, opciones]), { id: `ENC${++n}`, secreto: "x" }),
+      descifrarVoto: () => null,
+      descargarMedia: async () => sharp({ create: { width: 40, height: 40, channels: 3, background: "#fff" } }).jpeg().toBuffer(),
+      reaccionar: async () => {},
+    });
+    const YO = "5491112345678@s.whatsapp.net";
+    analizarFoto.mockResolvedValue({ tipo: "comprobante", descripcion: "", util: false, titulo: null, fecha_evento: null, monto: null, lugar: null, propuesta_fecha_hora: null, propuesta_avisos_previos_min: [], mensaje: "", texto_visible: null, monto_numero: 38400, pago_id: abl.id });
+    await bot.procesar({ key: { id: "F1", remoteJid: YO }, message: { imageMessage: { mimetype: "image/jpeg", fileLength: 1000 } } });
+    await bot.procesar({ key: { id: "T1", remoteJid: YO }, message: { conversation: "sí" } });
+    expect(encuestas.at(-1)).toEqual(["💳 ¿Con qué pagaste ABL · Casa?", ["Transferencia", "Efectivo"]]);
+    expect((await item("2026-11", "ABL")).estado).toBe("pendiente");
+    await bot.procesar({ key: { id: "T2", remoteJid: YO }, message: { conversation: "en efectivo" } });
+    expect(respuestas.at(-1)).toBe("✅ Anotado: *ABL · Casa* $ 38.400,00 (con Efectivo, comprobante guardado).\nYa pagaste todo lo del mes 🙌");
+    expect(await item("2026-11", "ABL")).toMatchObject({ estado: "pagado", forma: "Efectivo", comprobante: "image/webp" });
+  });
+
   it("WhatsApp: la foto del comprobante se reconoce, se confirma con «sí» y queda con la foto; la de la boleta actualiza el mes", async () => {
     await crearFijo(fijo(casa, { nombre: "ABL", categoria: "Impuestos y tasas", monto: 38400, dia: 30 }));
     await crearFijo(fijo(express, { nombre: "Luz", monto: 70000, variable: true, dia: 28 }));
@@ -426,7 +523,7 @@ describe("Pagos", () => {
     expect(analizarFoto.mock.calls[0][4]).toContain(`${abl.id} | ABL · Casa`);
     expect(encuestas).toEqual(["🧾 Veo un pago de $ 38.400,00 del 26/11. ¿Es ABL · Casa ($ 38.400,00)?"]);
     await bot.procesar(texto("sí"));
-    expect(respuestas.at(-1)).toBe("✅ Anotado: *ABL · Casa* $ 38.400,00, con el comprobante.\nTe falta: Luz · Express 1.");
+    expect(respuestas.at(-1)).toBe("✅ Anotado: *ABL · Casa* $ 38.400,00 (con Transferencia, comprobante guardado).\nTe falta: Luz · Express 1.");
     expect(await item("2026-11", "ABL")).toMatchObject({ estado: "pagado", comprobante: "image/webp", pagadoEn: "2026-11-26" });
 
     analizarFoto.mockResolvedValue(analisis({ tipo: "factura", monto_numero: 96200, fecha_evento: "2026-11-29T00:00:00-03:00", pago_id: luz.id }));
@@ -438,6 +535,6 @@ describe("Pagos", () => {
     await bot.procesar(foto());
     expect(respuestas.at(-1)).toBe("🧾 Veo un pago de $ 96.200,00. ¿De cuál de tus pagos es? Decime, por ejemplo, «es la luz del Express 1».");
     await bot.procesar(texto("es la luz del express"));
-    expect(respuestas.at(-1)).toBe("✅ Anotado: *Luz · Express 1* $ 96.200,00, con el comprobante.\nYa pagaste todo lo del mes 🙌");
+    expect(respuestas.at(-1)).toBe("✅ Anotado: *Luz · Express 1* $ 96.200,00 (con Transferencia, comprobante guardado).\nYa pagaste todo lo del mes 🙌");
   });
 });

@@ -308,7 +308,9 @@ export type ItemPago = {
   falta: number;
   pagos: { monto: number; fecha: string }[];
   vencido: boolean;
-  medio: string;
+  /** Pagado: con qué se pagó. Sin pagar: la que aparece marcada al tocar «Pagado». */
+  formaId: number | null;
+  forma: string | null;
   pagadoEn: string | null;
   cuenta: string;
   nota: string;
@@ -330,7 +332,7 @@ export type MesPagos = {
 };
 
 export type GrupoPagos = { nombre: string; total: Totales; pagado: Totales };
-export type CortePagos = { total: Totales; pagado: Totales; porLugar: GrupoPagos[]; porCategoria: GrupoPagos[]; porTipo: GrupoPagos[] };
+export type CortePagos = { total: Totales; pagado: Totales; porLugar: GrupoPagos[]; porCategoria: GrupoPagos[]; porTipo: GrupoPagos[]; porForma: GrupoPagos[] };
 export type ResumenPagos = { periodo: string; meses: { periodo: string; total: Totales; pagado: Totales }[]; mes: CortePagos; anterior: CortePagos; anio: CortePagos & { desde: string } };
 
 export type FijoPago = {
@@ -348,7 +350,8 @@ export type FijoPago = {
   dia: number | null;
   frecuencia: FrecuenciaPago;
   desde: string;
-  medio: string;
+  /** Con qué se paga siempre; null: sin forma fija. */
+  formaId: number | null;
   cuenta: string;
   avisoDias: number | null;
   nota: string;
@@ -356,8 +359,11 @@ export type FijoPago = {
 
 /** Un pago fijo como lo propone la IA: sin id; si es de un lugar que no existe, trae el lugar a crear. */
 export type FijoPropuesto = Omit<FijoPago, "id" | "desde"> & { lugarNuevo?: { nombre: string; tipo: TipoLugar } };
-export type CampoFijo = "nombre" | "alcance" | "categoria" | "monto" | "variable" | "moneda" | "vence" | "aviso" | "frecuencia" | "medio" | "cuenta" | "nota";
+export type CampoFijo = "nombre" | "alcance" | "categoria" | "monto" | "variable" | "moneda" | "vence" | "aviso" | "frecuencia" | "forma" | "cuenta" | "nota";
 /** Lo que propone la IA contra la lista cargada: pagos nuevos, cambios (solo los campos que cambian) y los que se borran. */
 export type PropuestaPagos = { nuevos: FijoPropuesto[]; cambios: { id: number; despues: FijoPropuesto; campos: CampoFijo[] }[]; borrar: number[]; mensaje: string };
 
-export type ConfigPagos = { lugares: LugarPago[]; fijos: FijoPago[]; categorias: string[]; medios: string[]; diasAviso: number; mensajes: boolean };
+export type TipoFormaPago = "transferencia" | "efectivo" | "debito_automatico" | "billetera" | "credito" | "debito" | "otro";
+/** Con qué se paga. tarjetaId: la de una tarjeta de Tarjetas (aparece sola). Archivada: ya no se elige, pero el historial la nombra. */
+export type FormaPago = { id: number; nombre: string; tipo: TipoFormaPago; orden: number; archivada: boolean; tarjetaId: number | null };
+export type ConfigPagos = { lugares: LugarPago[]; fijos: FijoPago[]; formas: FormaPago[]; categorias: string[]; diasAviso: number; mensajes: boolean };

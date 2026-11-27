@@ -12,6 +12,7 @@ import {
   borrarLugar,
   borrarPago,
   COMPROBANTE_MAX_BYTES,
+  corregirPago,
   crearFijo,
   crearLugar,
   crearSuelto,
@@ -26,7 +27,8 @@ import {
   resumenPagos,
   verMes,
 } from "../../servicios/pagos.js";
-import { CATEGORIAS, MEDIOS, periodoDe } from "../../servicios/pagos-reglas.js";
+import { actualizarForma, borrarForma, crearForma, listarFormas, ordenarFormas, TIPOS_FORMA } from "../../servicios/pagos-formas.js";
+import { CATEGORIAS, periodoDe } from "../../servicios/pagos-reglas.js";
 import { hoyIso } from "../../lib/fechas.js";
 import { ErrorUsuario } from "../../servicios/recordatorios.js";
 
@@ -37,6 +39,8 @@ const Moneda = z.enum(["ARS", "USD"]);
 const Monto = z.number().min(0).max(1e12);
 const TipoLugar = z.enum(["negocio", "personal"]);
 const Lugar = z.object({ nombre: z.string().max(60), tipo: TipoLugar });
+const IdForma = z.number().int().positive();
+const Forma = z.object({ nombre: z.string().max(60), tipo: z.enum(TIPOS_FORMA) });
 /** A qué corresponde: un lugar, repartido entre varios (iguales o con %) o general (de negocio o personal). */
 const Alcance = z.object({
   alcance: z.enum(["lugar", "repartido", "general"]),
@@ -54,7 +58,7 @@ const Fijo = Alcance.extend({
   dia: z.number().int().min(1).max(31).nullable(),
   frecuencia: z.enum(["mensual", "bimestral", "trimestral", "cuatrimestral", "semestral", "anual", "unica"]),
   desde: Periodo.optional(),
-  medio: z.string().max(60),
+  formaId: IdForma.nullable(),
   cuenta: z.string().max(120),
   avisoDias: z.number().int().min(-1).max(30).nullable(),
   nota: z.string().max(500),
@@ -78,7 +82,7 @@ export const rutasPagos: FastifyPluginAsync = async (app) => {
   // ── Configuración: lugares, fijos y ajustes ──
   app.get("/pagos/config", async () => {
     const cfg = await obtenerConfig();
-    return { lugares: await listarLugares(), fijos: await listarFijos(), categorias: CATEGORIAS, medios: MEDIOS, diasAviso: cfg.pagosDiasAviso, mensajes: cfg.pagosMensajes };
+    return { lugares: await listarLugares(), fijos: await listarFijos(), formas: await listarFormas(), categorias: CATEGORIAS, diasAviso: cfg.pagosDiasAviso, mensajes: cfg.pagosMensajes };
   });
   app.put("/pagos/ajustes", async (req) => {
     const a = z.object({ diasAviso: z.number().int().min(0).max(30), mensajes: z.boolean() }).partial().parse(req.body);
@@ -93,6 +97,20 @@ export const rutasPagos: FastifyPluginAsync = async (app) => {
   });
   app.delete("/pagos/lugares/:id", async (req) => {
     await borrarLugar(Id.parse(req.params).id);
+    return { ok: true };
+  });
+
+  app.post("/pagos/formas", async (req) => crearForma(Forma.parse(req.body)));
+  app.put("/pagos/formas/orden", async (req) => {
+    await ordenarFormas(z.object({ ids: z.array(IdForma).max(200) }).parse(req.body).ids);
+    return { ok: true };
+  });
+  app.put("/pagos/formas/:id", async (req) => {
+    await actualizarForma(Id.parse(req.params).id, Forma.partial().parse(req.body));
+    return { ok: true };
+  });
+  app.delete("/pagos/formas/:id", async (req) => {
+    await borrarForma(Id.parse(req.params).id);
     return { ok: true };
   });
 
@@ -122,13 +140,15 @@ export const rutasPagos: FastifyPluginAsync = async (app) => {
   app.post("/pagos", async (req) =>
     crearSuelto(
       z
-        .object({ nombre: z.string().max(120), lugarId: z.number().int().positive().nullable(), tipo: TipoLugar.optional(), categoria: z.string().max(60), monto: Monto, moneda: Moneda, fecha: Fecha, medio: z.string().max(60), nota: z.string().max(500), pagado: z.boolean() })
+        .object({ nombre: z.string().max(120), lugarId: z.number().int().positive().nullable(), tipo: TipoLugar.optional(), categoria: z.string().max(60), monto: Monto, moneda: Moneda, fecha: Fecha, formaId: IdForma.nullable(), nota: z.string().max(500), pagado: z.boolean() })
         .parse(req.body),
     ),
   );
   app.post("/pagos/:id/pagar", async (req) =>
-    registrarPago(Id.parse(req.params).id, z.object({ monto: Monto.optional(), fecha: Fecha.optional(), medio: z.string().max(60).optional() }).parse(req.body ?? {})),
+    registrarPago(Id.parse(req.params).id, z.object({ monto: Monto.optional(), fecha: Fecha.optional(), formaId: IdForma }).parse(req.body ?? {})),
   );
+  /** Corregir un pago ya hecho: la última parte (monto y fecha) y con qué se pagó. */
+  app.put("/pagos/:id/pago", async (req) => corregirPago(Id.parse(req.params).id, z.object({ monto: Monto, fecha: Fecha, formaId: IdForma }).parse(req.body)));
   app.post("/pagos/:id/desmarcar", async (req) => {
     await desmarcarPago(Id.parse(req.params).id);
     return { ok: true };
@@ -138,7 +158,7 @@ export const rutasPagos: FastifyPluginAsync = async (app) => {
     return { ok: true };
   });
   app.put("/pagos/:id", async (req) =>
-    actualizarPagoDelMes(Id.parse(req.params).id, z.object({ monto: Monto, vence: Fecha.nullable(), nota: z.string().max(500), medio: z.string().max(60) }).partial().parse(req.body)),
+    actualizarPagoDelMes(Id.parse(req.params).id, z.object({ monto: Monto, vence: Fecha.nullable(), nota: z.string().max(500) }).partial().parse(req.body)),
   );
   app.delete("/pagos/:id", async (req) => {
     await borrarPago(Id.parse(req.params).id);

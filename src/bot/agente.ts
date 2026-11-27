@@ -16,6 +16,7 @@ import { cargarCompra, listarTarjetas, marcarPago } from "../servicios/tarjetas.
 import { agregarAlBloc, verBloc } from "../servicios/bloc.js";
 import { cargarSaldoIA, fijarSaldoIA } from "../servicios/credito-ia.js";
 import { actualizarPagoDelMes, buscarPendientes, crearSuelto, historialPagos, listarLugares, pagosPendientes, registrarPago, verMes, type ItemPago } from "../servicios/pagos.js";
+import { buscarForma, formasActivas } from "../servicios/pagos-formas.js";
 import { periodoDe } from "../servicios/pagos-reglas.js";
 import { diasParaVencer } from "../servicios/vencimientos.js";
 import { buscarMensajesWa, cancelarProgramadoWa, DIAS_GUARDADO, enviarWa, fijarAliasWa, leerChatWa, listarChatsWa, programadosWa, type MensajeLeido } from "../servicios/wa-personal.js";
@@ -35,7 +36,7 @@ const Fecha = z.string().describe("ISO 8601 con offset, ej. 2026-11-24T09:00:00-
 
 /** Lo que devuelve cada herramienta: JSON, o el error explicado (para que el modelo se lo diga al usuario). */
 /** Un pago, corto, para el asistente. */
-const resumirPago = (i: Pick<ItemPago, "id" | "nombre" | "lugar" | "vence" | "monto" | "pagado" | "moneda" | "estado"> & { vencido?: boolean }) => ({
+const resumirPago = (i: Pick<ItemPago, "id" | "nombre" | "lugar" | "vence" | "monto" | "pagado" | "moneda" | "estado" | "forma"> & { vencido?: boolean }) => ({
   id: i.id,
   pago: `${i.nombre} · ${i.lugar}`,
   vence: i.vence,
@@ -43,7 +44,16 @@ const resumirPago = (i: Pick<ItemPago, "id" | "nombre" | "lugar" | "vence" | "mo
   pagado: i.pagado,
   moneda: i.moneda,
   estado: i.vencido ? "vencido" : i.estado,
+  // Con qué se pagó (sin pagar, la forma es solo la que se sugiere).
+  ...(i.pagado > 0 && i.forma ? { forma: i.forma } : {}),
 });
+
+/** Por WhatsApp, el pago al que le falta la forma: después de la respuesta va la encuesta para elegirla. */
+export type PedidoForma = { registroId: number; monto: number; fecha: string | null };
+/** Lo que una herramienta deja para hacer después de la respuesta. */
+type Despues = { pedirForma?: PedidoForma };
+
+const textoFormas = async () => (await formasActivas()).map((f) => f.nombre).join(", ");
 
 async function seguro(fn: () => Promise<unknown>): Promise<string> {
   try {
@@ -85,7 +95,7 @@ async function videoResumido(url: string) {
   }
 }
 
-function herramientas(origen: Canal) {
+function herramientas(origen: Canal, despues: Despues) {
   return [
     betaZodTool({
       name: "ver_agenda",
@@ -242,20 +252,32 @@ function herramientas(origen: Canal) {
     betaZodTool({
       name: "registrar_pago",
       description:
-        "Marca como pagado uno de los pagos del mes (\"pagué la luz del Express 1\"). pago: qué y dónde, como lo dijo. Sin monto, se toma lo que faltaba; con un monto menor queda pagado en parte. Si hay varios parecidos devuelve las opciones: preguntale cuál y volvé a llamar con el id.",
+        "Marca como pagado uno de los pagos del mes (\"pagué la luz del Express 1\"). pago: qué y dónde, como lo dijo. Sin monto, se toma lo que faltaba; con un monto menor queda pagado en parte. Si hay varios parecidos devuelve las opciones: preguntale cuál y volvé a llamar con el id. forma: con qué pagó, si lo dijo; si no, se usa la de siempre o se le pregunta.",
       inputSchema: z.object({
         pago: z.string().optional(),
         id: z.number().int().optional().describe("El id, si ya sabés cuál es"),
         monto: z.number().optional(),
         fecha: z.string().optional().describe("AAAA-MM-DD; sin fecha, hoy"),
-        medio: z.string().optional().describe("Transferencia, Efectivo, Débito automático…"),
+        forma: z.string().optional().describe("Con qué pagó, como lo dijo: transferencia, efectivo, la visa…"),
       }),
       run: (p) =>
         seguro(async () => {
-          const candidatos = p.id ? [{ id: p.id }] : await buscarPendientes(p.pago ?? "");
+          const candidatos = p.id ? (await pagosPendientes()).filter((i) => i.id === p.id) : await buscarPendientes(p.pago ?? "");
           if (!candidatos.length) return "Error: no encontré ese pago entre lo que falta pagar. Si no está entre sus pagos, cargalo con cargar_pago_suelto.";
-          if (candidatos.length > 1) return { elegir: (candidatos as ItemPago[]).map(resumirPago) };
-          const hecho = await registrarPago(candidatos[0].id, { monto: p.monto, fecha: p.fecha, medio: p.medio });
+          if (candidatos.length > 1) return { elegir: candidatos.map(resumirPago) };
+          const item = candidatos[0];
+          const forma = p.forma ? await buscarForma(p.forma) : undefined;
+          if (p.forma && !forma) return `Error: no tiene la forma de pago «${p.forma}». Sus formas: ${await textoFormas()}. Preguntale con cuál pagó.`;
+          const formaId = forma?.id ?? item.formaId;
+          if (!formaId) {
+            if (!(await formasActivas()).length) return "Error: todavía no cargó sus formas de pago: que las cargue en el panel, en Pagos → Configuración.";
+            if (origen === "whatsapp") {
+              despues.pedirForma = { registroId: item.id, monto: p.monto ?? 0, fecha: p.fecha ?? null };
+              return { falta_forma: true, nota: "Le llega una encuesta para elegir con qué lo pagó y ahí queda anotado: no se lo preguntes ni digas que ya quedó pagado. Contestá corto, por ejemplo «Dale, elegí con qué lo pagaste 👇»." };
+            }
+            return { falta_forma: true, formas: await textoFormas(), nota: "Preguntale con cuál lo pagó y volvé a llamar con forma." };
+          }
+          const hecho = await registrarPago(item.id, { monto: p.monto, fecha: p.fecha, formaId });
           return { pagado: resumirPago(hecho), faltan: (await pagosPendientes()).filter((i) => i.periodo === hecho.periodo).map(resumirPago) };
         }),
     }),
@@ -282,7 +304,7 @@ function herramientas(origen: Canal) {
         monto: z.number(),
         moneda: z.enum(["ARS", "USD"]).optional(),
         fecha: z.string().optional().describe("AAAA-MM-DD; sin fecha, hoy"),
-        medio: z.string().optional(),
+        forma: z.string().optional().describe("Con qué pagó (hace falta si ya está pagado)"),
         ya_pagado: z.boolean().optional(),
       }),
       run: (p) =>
@@ -290,6 +312,9 @@ function herramientas(origen: Canal) {
           const conLugar = p.lugar && !/general/i.test(p.lugar) ? p.lugar : null;
           const lugar = conLugar ? (await listarLugares()).find((l) => normalizar(l.nombre) === normalizar(conLugar)) : undefined;
           if (conLugar && !lugar) return `Error: no tengo el lugar «${conLugar}». Sus lugares: ${(await listarLugares()).map((l) => l.nombre).join(", ")} (o "general").`;
+          const pagado = p.ya_pagado ?? true;
+          const forma = p.forma ? await buscarForma(p.forma) : undefined;
+          if ((pagado && !p.forma) || (p.forma && !forma)) return `Error: falta con qué lo pagó. Sus formas de pago: ${await textoFormas()}. Preguntale con cuál y volvé a llamar con forma.`;
           const r = await crearSuelto({
             nombre: p.nombre,
             lugarId: lugar?.id ?? null,
@@ -298,9 +323,9 @@ function herramientas(origen: Canal) {
             monto: p.monto,
             moneda: p.moneda ?? "ARS",
             fecha: p.fecha ?? hoyIso(),
-            medio: p.medio ?? "",
+            formaId: forma?.id ?? null,
             nota: "",
-            pagado: p.ya_pagado ?? true,
+            pagado,
           });
           return resumirPago(r);
         }),
@@ -447,7 +472,8 @@ async function historial(origen: Canal, sinId?: number): Promise<Anthropic.Beta.
   return mensajes;
 }
 
-export type RespuestaAgente = { texto: string } | { tope: number };
+/** pedirForma: por WhatsApp, después del texto va la encuesta de con qué se pagó. */
+export type RespuestaAgente = { texto: string; pedirForma?: PedidoForma } | { tope: number };
 
 /** La respuesta es solo un emoji (una confirmación): por WhatsApp va como reacción. */
 export const esSoloEmoji = (texto: string) => /^\p{Extended_Pictographic}\uFE0F?$/u.test(texto.trim());
@@ -463,6 +489,7 @@ export async function preguntarAlAgente(texto: string, origen: Canal, sinMensaje
   const cfg = await obtenerConfig();
   if ((await gastoDelMes()).costoUsd >= cfg.agenteTopeUsd) return { tope: cfg.agenteTopeUsd };
   const ya = ahora();
+  const despues: Despues = {};
   const runner = cliente(cfg).beta.messages.toolRunner({
     model: MODELO,
     max_tokens: 8000,
@@ -474,7 +501,7 @@ export async function preguntarAlAgente(texto: string, origen: Canal, sinMensaje
     // Caché automática: herramientas, sistema y conversación se reusan entre mensajes.
     cache_control: { type: "ephemeral" },
     system: sistema(cfg.nombreUsuario),
-    tools: [...herramientas(origen), { type: "web_search_20260209", name: "web_search", max_uses: 3, user_location: { type: "approximate", country: "AR", timezone: zona() } }],
+    tools: [...herramientas(origen, despues), { type: "web_search_20260209", name: "web_search", max_uses: 3, user_location: { type: "approximate", country: "AR", timezone: zona() } }],
     messages: [...(await historial(origen, sinMensajeId)), { role: "user", content: `[Ahora: ${ya.setLocale("es").toFormat("cccc dd/MM/yyyy HH:mm")} (${zona()})]\n${texto}` }],
   });
   let ultimo: Anthropic.Beta.BetaMessage | null = null;
@@ -485,5 +512,5 @@ export async function preguntarAlAgente(texto: string, origen: Canal, sinMensaje
   if (!ultimo) throw new ErrorIA("El asistente no respondió");
   if (ultimo.stop_reason === "refusal") return { texto: "Con eso no te puedo ayudar 🙏" };
   const respuesta = ultimo.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("").trim();
-  return { texto: respuesta || "Me enredé con eso 😅 ¿Me lo pedís de otra forma?" };
+  return { texto: respuesta || "Me enredé con eso 😅 ¿Me lo pedís de otra forma?", ...despues };
 }

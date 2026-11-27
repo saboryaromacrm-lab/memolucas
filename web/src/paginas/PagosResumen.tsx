@@ -6,7 +6,7 @@ import { mesCorto, nombreMes, plataTotales, sumarMeses } from "../lib/pagos";
 import type { GrupoPagos, ResumenPagos } from "../lib/tipos";
 import { useDatos } from "../lib/vivo";
 
-/** Resumen: los últimos 12 meses, el mes y el año por lugar y por categoría, y el CSV para el contador. */
+/** Resumen: los últimos 12 meses, el mes y el año por lugar, por categoría y por forma de pago, y el CSV para el contador. */
 export function PagosResumen({ periodo }: { periodo: string }) {
   const { datos } = useDatos<ResumenPagos>(`/api/pagos/resumen?periodo=${periodo}`, ["pagos"]);
   const [desde, setDesde] = useState(sumarMeses(periodo, -2));
@@ -63,6 +63,7 @@ export function PagosResumen({ periodo }: { periodo: string }) {
         <Tabla titulo="Por lugar" mes={datos.mes.porLugar} anio={datos.anio.porLugar} />
         <Tabla titulo="Por categoría" mes={datos.mes.porCategoria} anio={datos.anio.porCategoria} />
         <Tabla titulo="Negocio y personal" mes={datos.mes.porTipo} anio={datos.anio.porTipo} />
+        <Tabla titulo="Por forma de pago" mes={datos.mes.porForma} anio={datos.anio.porForma} />
         <section className="tarjeta p-4">
           <h2 className="text-sm font-semibold text-slate-800">Exportar para el contador</h2>
           <p className="mt-1 text-xs text-slate-500">Un archivo CSV que se abre directo con Excel: cada pago con su lugar, categoría, monto, si se pagó, cuándo y cómo.</p>

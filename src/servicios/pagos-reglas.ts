@@ -25,8 +25,6 @@ export const CATEGORIAS = [
   "Otros",
 ];
 
-export const MEDIOS = ["Transferencia", "Efectivo", "Débito automático", "Mercado Pago", "Tarjeta de crédito"];
-
 /** "2026-11" de una fecha "2026-11-26". */
 export const periodoDe = (fecha: string) => fecha.slice(0, 7);
 export const sumarMeses = (periodo: string, n: number) => DateTime.fromISO(`${periodo}-01`).plus({ months: n }).toFormat("yyyy-MM");
@@ -141,7 +139,8 @@ export type FilaCsv = {
   pagado: number;
   estado: EstadoPago;
   pagadoEn: string | null;
-  medio: string;
+  /** Con qué se pagó ("" si todavía no se pagó). */
+  forma: string;
   reparto: string;
   nota: string;
 };
@@ -155,9 +154,9 @@ export function aCsv(filas: FilaCsv[]): string {
     return /[";\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
   };
   const fecha = (iso: string | null) => (iso ? iso.split("-").reverse().join("/") : "");
-  const encabezado = ["Mes", "Vence", "Lugar", "Tipo", "Categoría", "Pago", "Moneda", "Esperado", "Pagado", "Estado", "Pagado el", "Medio", "Reparto", "Nota"];
+  const encabezado = ["Mes", "Vence", "Lugar", "Tipo", "Categoría", "Pago", "Moneda", "Esperado", "Pagado", "Estado", "Pagado el", "Forma de pago", "Reparto", "Nota"];
   const lineas = filas.map((f) =>
-    [f.periodo, fecha(f.vence), f.lugar, f.tipo, f.categoria, f.nombre, f.moneda, f.esperado, f.pagado, ESTADOS[f.estado], fecha(f.pagadoEn), f.medio, f.reparto, f.nota]
+    [f.periodo, fecha(f.vence), f.lugar, f.tipo, f.categoria, f.nombre, f.moneda, f.esperado, f.pagado, ESTADOS[f.estado], fecha(f.pagadoEn), f.forma, f.reparto, f.nota]
       .map(celda)
       .join(";"),
   );

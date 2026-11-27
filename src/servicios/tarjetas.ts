@@ -11,6 +11,7 @@ import { obtenerConfig } from "./configuracion.js";
 import { enFila } from "./disparador.js";
 import { enviador } from "./enviador.js";
 import { registrarMensaje } from "./mensajes.js";
+import { archivarFormaDeTarjeta } from "./pagos-formas.js";
 import { ErrorUsuario } from "./recordatorios.js";
 import { sumarPeriodo } from "./suscripciones.js";
 import { cuandoVence, diaDe, diasParaVencer, momentoAviso, sePuedeAvisar } from "./vencimientos.js";
@@ -284,6 +285,7 @@ export async function actualizarTarjeta(id: number, d: DatosTarjeta) {
 
 /** Se borra con sus cuotas, resúmenes y consumos. */
 export async function borrarTarjeta(id: number) {
+  await archivarFormaDeTarjeta(id);
   await db.delete(tarjeta).where(eq(tarjeta.id, id));
   bus.avisar("tarjetas");
 }

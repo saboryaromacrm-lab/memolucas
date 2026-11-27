@@ -63,7 +63,7 @@ describe("reglas de Pagos", () => {
 
   it("el CSV abre bien en Excel: punto y coma, coma decimal y tildes", () => {
     const csv = aCsv([
-      { periodo: "2026-11", vence: "2026-11-10", lugar: "Fontana", tipo: "Negocio", categoria: "Alquiler", nombre: "Alquiler; local", moneda: "ARS", esperado: 800000, pagado: 800000.5, estado: "pagado", pagadoEn: "2026-11-09", medio: "Transferencia", reparto: "", nota: "" },
+      { periodo: "2026-11", vence: "2026-11-10", lugar: "Fontana", tipo: "Negocio", categoria: "Alquiler", nombre: "Alquiler; local", moneda: "ARS", esperado: 800000, pagado: 800000.5, estado: "pagado", pagadoEn: "2026-11-09", forma: "Transferencia", reparto: "", nota: "" },
     ]);
     expect(csv.startsWith("﻿Mes;Vence;Lugar;Tipo;Categoría;Pago")).toBe(true);
     expect(csv).toContain('2026-11;10/11/2026;Fontana;Negocio;Alquiler;"Alquiler; local";ARS;800000,00;800000,50;Pagado;09/11/2026;Transferencia;;');
