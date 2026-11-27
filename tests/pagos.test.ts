@@ -35,7 +35,7 @@ import { avisarPagos, mensajesDelMesPagos } from "../src/servicios/pagos-avisos.
 import { borrarForma, crearForma, listarFormas } from "../src/servicios/pagos-formas.js";
 import { crearSuscripcion, pagarSuscripcionCon } from "../src/servicios/suscripciones.js";
 import { actualizarTarjeta, borrarTarjeta, crearTarjeta, SIN_SALDOS } from "../src/servicios/tarjetas.js";
-import { armarFijosConIa } from "../src/bot/ia-pagos.js";
+import { armarFijosConIa, cargarMesConIa } from "../src/bot/ia-pagos.js";
 import { baseLimpia, enviadorFalso, panelConSesion, reloj } from "./ayuda.js";
 
 const pedir = vi.fn();
@@ -378,6 +378,53 @@ describe("Pagos", () => {
     const mal = await aplicar({ nuevos: [fijo(casa, { nombre: "Gas" })], cambios: [], borrar: [gym] });
     expect(mal.statusCode).toBe(400);
     expect((await verMes("2026-11")).items.some((i) => i.nombre === "Gas")).toBe(false);
+    await app.close();
+  });
+
+  it("la IA lee el resumen de la contadora (foto o PDF): montos del mes, pagos nuevos y control del total", async () => {
+    await actualizarConfig({ pagosNotasIa: "Coffit es otro negocio." });
+    const coffit = (await crearLugar({ nombre: "Coffit", tipo: "negocio" })).id;
+    await crearFijo(fijo(coffit, { nombre: "F-931", categoria: "Sueldos y cargas", monto: 450000, variable: true }));
+    await crearFijo(fijo(coffit, { nombre: "IPS", categoria: "Sueldos y cargas", monto: 26930, variable: true }));
+    const f931 = await item("2026-11", "F-931");
+    const ips = await item("2026-11", "IPS");
+    pedir.mockResolvedValue({
+      montos: [
+        { id: f931.id, monto: 493430 },
+        { id: ips.id, monto: 26930 }, // Mismo monto: no se muestra como cambio.
+        { id: f931.id, monto: 1 }, // Repetido: se toma el primero.
+        { id: 999, monto: 5 }, // No existe: se ignora.
+      ],
+      nuevos: [
+        { alcance: "lugar", lugar: "Coffit", tipo: "negocio", repartir_entre: [], nombre: "UTHGRA", categoria: "Sueldos y cargas", monto: 35412, variable: true, moneda: "ARS", dia: 0, frecuencia: "mensual", forma: "", cuenta: "", nota: "" },
+      ],
+      total: 556000,
+      mensaje: "",
+    });
+    const png = await sharp({ create: { width: 2400, height: 1200, channels: 3, background: "#fff" } }).png().toBuffer();
+    const r = await cargarMesConIa("2026-11", "", { mime: "image/png", datos: png });
+    // A la IA le llega la imagen achicada, los pagos del mes con su id y lo que te dijo de tus negocios.
+    const [, , system, mensajes] = pedir.mock.calls[0];
+    expect(mensajes[0].content[0]).toMatchObject({ type: "image", source: { media_type: "image/webp" } });
+    expect(system).toContain(`#${f931.id} | F-931 · Coffit | 450000 ARS | pendiente`);
+    expect(system).toContain("Coffit es otro negocio.");
+    expect(r.cambios).toEqual([{ id: f931.id, monto: 493430, antes: 450000, nombre: "F-931", lugar: "Coffit", pagado: false }]);
+    expect(r.iguales).toBe(1);
+    expect(r.nuevos.map((n) => [n.nombre, n.lugarId, n.monto, n.variable, n.dia])).toEqual([["UTHGRA", coffit, 35412, true, null]]);
+    // La suma no da el total: la pantalla avisa.
+    expect(r.control).toEqual({ suma: 493430 + 26930 + 35412, total: 556000 });
+
+    // Se aplica: el monto va al pago del mes y lo nuevo queda como fijo desde ese mes.
+    const { app, headers } = await panelConSesion();
+    const res = await app.inject({ method: "POST", url: "/api/pagos/mes/aplicar", headers, payload: { periodo: "2026-11", montos: [{ id: f931.id, monto: 493430 }], nuevos: r.nuevos } });
+    expect(res.json()).toEqual({ cambiados: 1, creados: 1 });
+    expect(await item("2026-11", "F-931")).toMatchObject({ monto: 493430, boleta: 493430 });
+    expect(await item("2026-11", "UTHGRA")).toMatchObject({ monto: 35412, lugar: "Coffit", vence: null });
+    expect((await item("2026-12", "UTHGRA")).monto).toBe(35412);
+    // Sin texto ni archivo no se puede; un PDF falso tampoco.
+    expect((await app.inject({ method: "POST", url: "/api/pagos/ia/mes", headers, payload: { periodo: "2026-11", texto: "" } })).statusCode).toBe(400);
+    const pdf = await app.inject({ method: "POST", url: "/api/pagos/ia/mes", headers, payload: { periodo: "2026-11", archivo: { mime: "application/pdf", base64: Buffer.from("hola").toString("base64") } } });
+    expect(pdf.json().error).toBe("Ese archivo no es un PDF.");
     await app.close();
   });
 

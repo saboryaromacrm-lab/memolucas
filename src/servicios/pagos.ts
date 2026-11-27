@@ -168,33 +168,58 @@ export async function crearFijo(e: EntradaFijo) {
 /** Un pago fijo propuesto por la IA: si es de un lugar que todavía no existe, trae el lugar a crear. */
 export type FijoPropuesto = EntradaFijo & { lugarNuevo?: { nombre: string; tipo: TipoLugar } };
 
-/**
- * Lo que propuso la IA y revisaste: agrega, cambia y borra. Se revisa todo antes de tocar nada (así no queda a medias);
- * los lugares nuevos se crean una sola vez aunque los nombren varios pagos.
- */
-export async function aplicarFijos(c: { nuevos: FijoPropuesto[]; cambios: (FijoPropuesto & { id: number })[]; borrar: number[] }) {
-  for (const e of [...c.nuevos, ...c.cambios]) {
+/** Antes de tocar nada se revisa todo lo propuesto (así no queda a medias). */
+function validarPropuestos(lista: FijoPropuesto[]) {
+  for (const e of lista) {
     if (!e.nombre.trim()) throw new ErrorUsuario("Falta el nombre de un pago.");
     if (e.alcance === "lugar" && !e.lugarId && !e.lugarNuevo?.nombre.trim()) throw new ErrorUsuario(`Falta el lugar de «${e.nombre}».`);
     if (e.alcance !== "lugar") alcanceValido(e);
   }
+}
+
+/** Crea los lugares nuevos que nombran los pagos propuestos, una sola vez aunque los nombren varios. */
+function creadorDeLugares() {
+  const creados = new Map<string, number>();
+  return async (e: FijoPropuesto): Promise<EntradaFijo> => {
+    if (e.alcance !== "lugar" || e.lugarId || !e.lugarNuevo) return e;
+    const clave = normalizar(e.lugarNuevo.nombre);
+    const lugarId = creados.get(clave) ?? (await crearLugar(e.lugarNuevo)).id;
+    creados.set(clave, lugarId);
+    return { ...e, lugarId };
+  };
+}
+
+/** Lo que propuso la IA y revisaste: agrega, cambia y borra. */
+export async function aplicarFijos(c: { nuevos: FijoPropuesto[]; cambios: (FijoPropuesto & { id: number })[]; borrar: number[] }) {
+  validarPropuestos([...c.nuevos, ...c.cambios]);
   const ids = [...c.cambios.map((e) => e.id), ...c.borrar];
   if (ids.length) {
     const hay = new Set((await db.select({ id: pagoFijo.id }).from(pagoFijo).where(inArray(pagoFijo.id, ids))).map((f) => f.id));
     if (ids.some((id) => !hay.has(id))) throw new ErrorUsuario("Algún pago ya no existe: volvé a armar los cambios.");
   }
-  const lugaresNuevos = new Map<string, number>();
-  const conLugar = async (e: FijoPropuesto): Promise<EntradaFijo> => {
-    if (e.alcance !== "lugar" || e.lugarId || !e.lugarNuevo) return e;
-    const clave = normalizar(e.lugarNuevo.nombre);
-    const lugarId = lugaresNuevos.get(clave) ?? (await crearLugar(e.lugarNuevo)).id;
-    lugaresNuevos.set(clave, lugarId);
-    return { ...e, lugarId };
-  };
+  const conLugar = creadorDeLugares();
   for (const e of c.nuevos) await crearFijo(await conLugar(e));
   for (const { id, ...e } of c.cambios) await actualizarFijo(id, await conLugar(e));
   for (const id of c.borrar) await borrarFijo(id);
   return { creados: c.nuevos.length, cambiados: c.cambios.length, borrados: c.borrar.length };
+}
+
+/**
+ * Los montos de un mes que leyó la IA (el resumen de la contadora, por ejemplo) y revisaste: cada monto va al pago de
+ * ese mes, y lo que no estaba se crea como pago fijo desde ese mes, con ese monto.
+ */
+export async function aplicarMes(periodo: string, c: { montos: { id: number; monto: number }[]; nuevos: FijoPropuesto[] }) {
+  validarPropuestos(c.nuevos);
+  const ids = c.montos.map((m) => m.id);
+  if (ids.length) {
+    const hay = new Set((await db.select({ id: pagoMes.id }).from(pagoMes).where(and(inArray(pagoMes.id, ids), eq(pagoMes.periodo, periodo)))).map((r) => r.id));
+    if (ids.some((id) => !hay.has(id))) throw new ErrorUsuario("Algún pago ya no está en ese mes: volvé a leer el archivo.");
+  }
+  const conLugar = creadorDeLugares();
+  for (const e of c.nuevos) await crearFijo({ ...(await conLugar(e)), desde: periodo });
+  if (c.nuevos.length) await prepararMes(periodo);
+  for (const m of c.montos) await actualizarPagoDelMes(m.id, { monto: m.monto });
+  return { cambiados: c.montos.length, creados: c.nuevos.length };
 }
 
 /**

@@ -225,6 +225,13 @@
       "when": 1795787771211,
       "tag": "0031_bloc_fijadas",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1795790881499,
+      "tag": "0032_pagos_notas_ia",
+      "breakpoints": true
     }
   ]
 }
