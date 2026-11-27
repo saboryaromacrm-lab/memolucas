@@ -39,6 +39,16 @@ describe("Bloc", () => {
     expect((await app.inject({ url: "/api/bloc" })).statusCode).toBe(401);
   });
 
+  it("fijar en pantalla queda guardado y no cambia la versión (no pisa lo que se está escribiendo)", async () => {
+    const p = (await api("POST", "", { titulo: "Claves del día", texto: "llamar al contador" })).json;
+    expect(p.fijada).toBe(false);
+    expect((await api("PUT", `/${p.id}/fijada`, { fijada: true })).status).toBe(200);
+    expect((await pestanas())[0]).toMatchObject({ fijada: true, version: 1 });
+    await api("PUT", `/${p.id}/fijada`, { fijada: false });
+    expect((await pestanas())[0]).toMatchObject({ fijada: false });
+    expect((await api("PUT", "/999/fijada", { fijada: true })).status).toBe(400);
+  });
+
   it("si otro dispositivo escribió antes, gana lo último y lo pisado queda en el historial", async () => {
     const p = (await api("POST", "", { titulo: "Notas", texto: "hola" })).json;
     // La compu guarda sobre la versión 1…

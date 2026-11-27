@@ -1,0 +1,1 @@
+ALTER TABLE "bloc_pestana" ADD COLUMN "fijada" boolean DEFAULT false NOT NULL;

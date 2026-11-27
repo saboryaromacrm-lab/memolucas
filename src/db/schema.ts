@@ -169,6 +169,8 @@ export const blocPestana = pgTable("bloc_pestana", {
   textoCifrado: text("texto_cifrado").notNull(),
   orden: integer("orden").notNull().default(0),
   version: integer("version").notNull().default(1),
+  /** Fijada en pantalla: en la compu, en la ventanita que queda encima de todo; en el celular, arriba del Bloc. */
+  fijada: boolean("fijada").notNull().default(false),
   cerradaEn: ts("cerrada_en"),
   creadoEn: creadoEn(),
   actualizadoEn: ts("actualizado_en").notNull().defaultNow(),

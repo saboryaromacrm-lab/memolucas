@@ -218,6 +218,13 @@
       "when": 1795785261379,
       "tag": "0030_sin_medio_de_texto",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1795787771211,
+      "tag": "0031_bloc_fijadas",
+      "breakpoints": true
     }
   ]
 }
