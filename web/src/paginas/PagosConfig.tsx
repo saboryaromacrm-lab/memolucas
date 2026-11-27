@@ -1,11 +1,12 @@
 import { useState, type ReactNode } from "react";
-import { ArrowDown, ArrowUp, Building2, Home, Pencil, Plus, Sparkles, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, Building2, ChevronRight, Home, Pencil, Plus, Sparkles, Trash2 } from "lucide-react";
 import { archivoParaIa, CampoIa } from "../componentes/CampoIa";
 import { IconoForma, TIPOS_FORMA } from "../componentes/FormasPago";
 import { Boton, Cargando, Interruptor, MenuAcciones, Modal, useAccion } from "../componentes/ui";
 import { del, post, put } from "../lib/api";
 import { plata } from "../lib/numeros";
-import { agrupar, describirAlcance, FRECUENCIAS_PAGO, grupoDeAlcance, periodoActual, plataTotales, totalPorMes } from "../lib/pagos";
+import { agrupar, describirAlcance, FRECUENCIAS_PAGO, grupoDeAlcance, periodoActual, textoPorMes } from "../lib/pagos";
+import { sinTildes } from "../lib/textos";
 import { useRecordado } from "../lib/recordado";
 import type { CategoriaPago, ConfigPagos, FijoPago, FormaPago, LugarPago, PropuestaPagos, TipoFormaPago, TipoLugar } from "../lib/tipos";
 import { ModalFijo } from "./PagosFijo";
@@ -24,6 +25,10 @@ export function PagosConfig() {
   const [lugar, setLugar] = useState<FiltroLugar>("todos");
   const [editando, setEditando] = useState<FijoPago | "nuevo" | null>(null);
   const [verPor, setVerPor] = useRecordado<{ v: "lugar" | "categoria" }>("pagos-ver-por", { v: "lugar" });
+  // Lo que dejaste abierto (de entrada, todo plegado).
+  const [abiertosGuardados, setAbiertos] = useRecordado<{ claves: string[] }>("pagos-abiertos", { claves: [] });
+  const abiertos = new Set(abiertosGuardados.claves);
+  const alternar = (k: string) => setAbiertos({ claves: abiertos.has(k) ? [...abiertos].filter((x) => x !== k) : [...abiertos, k] });
   const accion = useAccion();
   if (!datos) return <Cargando />;
   // Un repartido aparece en cada uno de sus lugares.
@@ -37,6 +42,23 @@ export function PagosConfig() {
     const k = datos.categorias.findIndex((c) => c.nombre === nombre);
     return { clave: nombre, titulo: nombre, orden: k < 0 ? 999 : k };
   };
+  /** Los pagos con el mismo nombre (Luz, Agua…) van juntos dentro de su categoría. */
+  const grupoDeConcepto = (f: FijoPago) => ({ clave: sinTildes(f.nombre.trim()), titulo: f.nombre.trim(), orden: 0 });
+  const fila = (f: FijoPago) => (
+    <FilaFijo
+      key={f.id}
+      f={f}
+      config={datos}
+      detalle={[verPor.v === "categoria" || lugar !== "todos" ? describirAlcance(f, datos.lugares) : "", f.cuenta].filter(Boolean).join(" · ")}
+      onEditar={() => setEditando(f)}
+      onBorrar={() => confirm(`¿Borrar ${f.nombre}? Sale de los meses que vienen; lo ya pagado queda en el historial.`) && void accion(() => del(`/api/pagos/fijos/${f.id}`), "Pago borrado")}
+    />
+  );
+  // Abrir todo: los grupos y subgrupos de lo que se ve.
+  const todasLasClaves = agrupar(fijos, (f) => (verPor.v === "lugar" ? grupoDeAlcance(f, datos.lugares) : grupoDeCategoria(f.categoria))).flatMap((g) => {
+    const k1 = `${verPor.v}:${g.clave}`;
+    return [k1, ...(verPor.v === "lugar" ? agrupar(g.items, (f) => grupoDeCategoria(f.categoria)) : agrupar(g.items, grupoDeConcepto)).map((sub) => `${k1}:${sub.clave}`)];
+  });
   const titulo = lugar === "todos" ? "todos" : lugar === "general" ? "general" : lugar === "repartido" ? "repartidos" : (datos.lugares.find((l) => l.id === lugar)?.nombre ?? "");
 
   return (
@@ -66,42 +88,40 @@ export function PagosConfig() {
                   </button>
                 ))}
               </div>
+              <Boton chico variante="fantasma" onClick={() => setAbiertos({ claves: todasLasClaves })}>
+                Abrir todo
+              </Boton>
+              <Boton chico variante="fantasma" onClick={() => setAbiertos({ claves: [] })}>
+                Plegar todo
+              </Boton>
               <Boton chico variante="primario" icono={<Plus className="size-3.5" />} disabled={!datos.lugares.length} onClick={() => setEditando("nuevo")}>
-                Pago fijo
+                Pago
               </Boton>
             </div>
           </div>
           {!fijos.length ? (
-            <p className="border-t border-slate-100 px-4 py-6 text-center text-sm text-slate-500">Todavía no cargaste pagos{lugar === "todos" ? "" : " en este lugar"}. Usá «Cargá o cambiá con IA» o «+ Pago fijo».</p>
+            <p className="border-t border-slate-100 px-4 py-6 text-center text-sm text-slate-500">Todavía no cargaste pagos{lugar === "todos" ? "" : " en este lugar"}. Usá «Cargá o cambiá con IA» o «+ Pago».</p>
           ) : (
-            agrupar(fijos, (f) => (verPor.v === "lugar" ? grupoDeAlcance(f, datos.lugares) : grupoDeCategoria(f.categoria))).map((g) => (
-              <div key={g.clave} className="border-t border-slate-200">
-                <h3 className="flex flex-wrap items-baseline justify-between gap-x-3 bg-slate-50 px-4 py-2 text-sm">
-                  <span className="font-semibold text-slate-800">{g.titulo}</span>
-                  <span className="text-xs text-slate-500">
-                    {g.items.length} {g.items.length === 1 ? "pago" : "pagos"} · {plataTotales(totalPorMes(g.items))} por mes
-                  </span>
-                </h3>
-                {/* Por lugar, adentro va por categoría; por categoría, cada pago dice su lugar. */}
-                {(verPor.v === "lugar" ? agrupar(g.items, (f) => grupoDeCategoria(f.categoria)) : [{ clave: "", titulo: "", orden: 0, items: g.items }]).map((sub) => (
-                  <div key={sub.clave}>
-                    {sub.titulo && <h4 className="px-4 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">{sub.titulo}</h4>}
-                    <ul className="divide-y divide-slate-100">
-                      {sub.items.map((f) => (
-                        <FilaFijo
-                          key={f.id}
-                          f={f}
-                          config={datos}
-                          detalle={[verPor.v === "categoria" || lugar !== "todos" ? describirAlcance(f, datos.lugares) : "", f.cuenta].filter(Boolean).join(" · ")}
-                          onEditar={() => setEditando(f)}
-                          onBorrar={() => confirm(`¿Borrar ${f.nombre}? Sale de los meses que vienen; lo ya pagado queda en el historial.`) && void accion(() => del(`/api/pagos/fijos/${f.id}`), "Pago borrado")}
-                        />
-                      ))}
-                    </ul>
-                  </div>
-                ))}
-              </div>
-            ))
+            // Por lugar: lugar → categoría → pagos. Por categoría: categoría → concepto (Luz, Agua…) → cada lugar.
+            agrupar(fijos, (f) => (verPor.v === "lugar" ? grupoDeAlcance(f, datos.lugares) : grupoDeCategoria(f.categoria))).map((g) => {
+              const k1 = `${verPor.v}:${g.clave}`;
+              return (
+                <GrupoPlegable key={k1} titulo={g.titulo} detalle={`${g.items.length} ${g.items.length === 1 ? "pago" : "pagos"} · ${textoPorMes(g.items)}`} abierto={abiertos.has(k1)} onAlternar={() => alternar(k1)}>
+                  {(verPor.v === "lugar" ? agrupar(g.items, (f) => grupoDeCategoria(f.categoria)) : agrupar(g.items, grupoDeConcepto)).map((sub) => {
+                    const k2 = `${k1}:${sub.clave}`;
+                    const filas = <ul className="divide-y divide-slate-100">{sub.items.map(fila)}</ul>;
+                    // Un concepto con un solo pago va directo, sin otro nivel.
+                    if (verPor.v === "categoria" && sub.items.length === 1) return <div key={k2}>{filas}</div>;
+                    const cuantos = verPor.v === "categoria" ? `${sub.items.length} lugares` : `${sub.items.length} ${sub.items.length === 1 ? "pago" : "pagos"}`;
+                    return (
+                      <GrupoPlegable key={k2} subgrupo titulo={sub.titulo} detalle={`${cuantos} · ${textoPorMes(sub.items)}`} abierto={abiertos.has(k2)} onAlternar={() => alternar(k2)}>
+                        {filas}
+                      </GrupoPlegable>
+                    );
+                  })}
+                </GrupoPlegable>
+              );
+            })
           )}
         </section>
       </div>
@@ -213,6 +233,27 @@ function CargarConIa({ config }: { config: ConfigPagos }) {
   );
 }
 
+/** Un grupo de la lista que se abre y se pliega: título, cuántos y lo que sale por mes. */
+function GrupoPlegable({ titulo, detalle, abierto, onAlternar, subgrupo = false, children }: { titulo: string; detalle: string; abierto: boolean; onAlternar: () => void; subgrupo?: boolean; children: ReactNode }) {
+  return (
+    <div className={subgrupo ? "border-t border-slate-100" : "border-t border-slate-200"}>
+      <button
+        type="button"
+        onClick={onAlternar}
+        aria-expanded={abierto}
+        className={`flex w-full flex-wrap items-center justify-between gap-x-3 gap-y-0.5 text-left text-sm hover:bg-slate-100 ${subgrupo ? "py-2 pl-8 pr-4" : "bg-slate-50 px-4 py-2.5"}`}
+      >
+        <span className={`flex items-center gap-1.5 ${subgrupo ? "font-medium text-slate-700" : "font-semibold text-slate-800"}`}>
+          <ChevronRight className={`size-4 shrink-0 text-slate-400 transition ${abierto ? "rotate-90" : ""}`} />
+          {titulo}
+        </span>
+        <span className="text-xs text-slate-500">{detalle}</span>
+      </button>
+      {abierto && <div className={subgrupo ? "pl-4" : ""}>{children}</div>}
+    </div>
+  );
+}
+
 /** Un pago fijo de la lista: nombre, detalle, monto, vencimiento, forma y aviso. */
 function FilaFijo({ f, config, detalle, onEditar, onBorrar }: { f: FijoPago; config: ConfigPagos; detalle: string; onEditar: () => void; onBorrar: () => void }) {
   return (
@@ -223,8 +264,8 @@ function FilaFijo({ f, config, detalle, onEditar, onBorrar }: { f: FijoPago; con
       </button>
       <div className="text-right text-sm tabular-nums text-slate-900 sm:text-left">
         {f.variable && "~ "}
-        {f.monto ? plata(f.monto, f.moneda) : "Sin monto"}
-        <div className="text-[11px] text-slate-400">{f.variable ? "variable" : "fijo"}</div>
+        {f.estimado ? plata(f.estimado, f.moneda) : "Sin monto"}
+        <div className="text-[11px] text-slate-400">{!f.variable ? "fijo" : f.estimado && f.estimado !== f.monto ? "promedio de lo pagado" : "variable"}</div>
       </div>
       <div className="text-xs text-slate-600">
         {f.dia ? `Día ${f.dia}` : "Sin vto."} · {FRECUENCIAS_PAGO[f.frecuencia].toLowerCase()}

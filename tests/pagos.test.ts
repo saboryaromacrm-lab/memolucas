@@ -516,6 +516,17 @@ describe("Pagos", () => {
     ]);
   });
 
+  it("el estimado de un variable es el promedio de lo pagado; sin pagos, el monto aproximado", async () => {
+    const luz = (await crearFijo(fijo(express, { nombre: "Luz", monto: 50000, variable: true }))).id;
+    const alquiler = (await crearFijo(fijo(express, { nombre: "Alquiler", monto: 650000 }))).id;
+    const estimado = async (id: number) => (await listarFijos()).find((f) => f.id === id)!.estimado;
+    expect(await estimado(luz)).toBe(50000);
+    await registrarPago((await item("2026-11", "Luz")).id, { monto: 70000 });
+    await registrarPago((await item("2026-12", "Luz")).id, { monto: 90000 });
+    expect(await estimado(luz)).toBe(80000);
+    expect(await estimado(alquiler)).toBe(650000);
+  });
+
   it("categorías: la lista es tuya; renombrar cambia todos los pagos y borrar pide a cuál pasarlos", async () => {
     const alquiler = (await listarCategorias()).find((c) => c.nombre === "Alquiler")!;
     await crearFijo(fijo(express, { nombre: "Alquiler local", categoria: "Alquiler", monto: 650000 }));

@@ -48,7 +48,7 @@ const INSIGNIA: Record<Fila["tipo"], [string, string]> = {
   monto: ["Monto", "bg-sky-100 text-sky-800"],
 };
 
-export const comoPropuesta = ({ id: _, desde: __, ...f }: FijoPago): FijoPropuesto => f;
+export const comoPropuesta = ({ id: _, desde: __, estimado: ___, ...f }: FijoPago): FijoPropuesto => f;
 const claveAlcance = (a: Alcanzable) =>
   a.lugarNuevo ? `n:${sinTildes(a.lugarNuevo.nombre)}` : a.alcance === "lugar" ? `l:${a.lugarId}` : a.alcance === "general" ? `g:${a.tipo}` : `r:${(a.reparto ?? []).map((r) => r.lugarId).sort().join(",")}`;
 const mismoCampo = (a: FijoPropuesto, b: FijoPropuesto, c: CampoFijo) => {

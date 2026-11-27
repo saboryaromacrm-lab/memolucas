@@ -151,9 +151,24 @@ const columnasFijo = (e: EntradaFijo) => ({
   datosCifrados: sellar({ nombre: e.nombre.trim(), monto: Math.max(0, e.monto), cuenta: e.cuenta.trim(), nota: e.nota.trim() } satisfies DatosFijo),
 });
 
+/**
+ * Los fijos, cada uno con su estimado: el monto, o en los variables el promedio de los últimos 3 meses pagados (si
+ * todavía no se pagó ninguno, el monto aproximado).
+ */
 export async function listarFijos() {
-  const filas = await db.select().from(pagoFijo).orderBy(asc(pagoFijo.lugarId), asc(pagoFijo.dia), asc(pagoFijo.id));
-  return filas.map(({ datosCifrados, ...f }) => ({ ...f, ...abrirFijo(datosCifrados) }));
+  const [filas, pagados] = await Promise.all([
+    db.select().from(pagoFijo).orderBy(asc(pagoFijo.lugarId), asc(pagoFijo.dia), asc(pagoFijo.id)),
+    db
+      .select()
+      .from(pagoMes)
+      .where(and(isNotNull(pagoMes.fijoId), inArray(pagoMes.estado, ["pagado", "parcial"])))
+      .orderBy(asc(pagoMes.periodo)),
+  ]);
+  return filas.map(({ datosCifrados, ...f }) => {
+    const d = abrirFijo(datosCifrados);
+    const anteriores = pagados.filter((r) => r.fijoId === f.id).map((r) => totalPagado(abrirMes(r.datosCifrados).pagos));
+    return { ...f, ...d, estimado: esperadoDe({ monto: d.monto, variable: f.variable }, anteriores) };
+  });
 }
 
 export async function crearFijo(e: EntradaFijo) {

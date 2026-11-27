@@ -357,10 +357,12 @@ export type FijoPago = {
   cuenta: string;
   avisoDias: number | null;
   nota: string;
+  /** Lo que se estima por vez: el monto o, si es variable, el promedio de lo último pagado. */
+  estimado: number;
 };
 
 /** Un pago fijo como lo propone la IA: sin id; si es de un lugar que no existe, trae el lugar a crear. */
-export type FijoPropuesto = Omit<FijoPago, "id" | "desde"> & {
+export type FijoPropuesto = Omit<FijoPago, "id" | "desde" | "estimado"> & {
   lugarNuevo?: { nombre: string; tipo: TipoLugar };
   /** Cómo figuraba en la imagen o el texto que leyó la IA (solo para comparar). */
   original?: string;
