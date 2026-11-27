@@ -16,7 +16,7 @@ import { ErrorUsuario } from "./recordatorios.js";
 import { cuandoVence, momentoAviso, sePuedeAvisar } from "./vencimientos.js";
 
 export type DatosSuscripcion = Pick<Suscripcion, "nombre" | "url" | "fechaInicio" | "fechaVto" | "monto" | "moneda" | "frecuencia" | "observacion"> &
-  Partial<Pick<Suscripcion, "tarjetaId" | "sinTarjeta">>;
+  Partial<Pick<Suscripcion, "tarjetaId" | "sinTarjeta" | "negocio">>;
 
 export const PERIODOS: Record<FrecuenciaSuscripcion, DurationLikeObject> = { "7dias": { days: 7 }, quincenal: { days: 15 }, mensual: { months: 1 }, anual: { years: 1 } };
 

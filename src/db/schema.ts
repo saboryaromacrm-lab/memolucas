@@ -240,6 +240,8 @@ export const suscripcion = pgTable(
     /** Con qué tarjeta se paga (suma al próximo resumen de esa tarjeta). sinTarjeta: se paga con otro medio. */
     tarjetaId: integer("tarjeta_id").references(() => tarjeta.id, { onDelete: "set null" }),
     sinTarjeta: boolean("sin_tarjeta").notNull().default(false),
+    /** Es del negocio (en Pagos cuenta como "General · negocio"; si no, personal). */
+    negocio: boolean("negocio").notNull().default(false),
     creadoEn: creadoEn(),
     actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
   },
@@ -264,6 +266,8 @@ export const tarjeta = pgTable("tarjeta", {
   avisoCierrePara: date("aviso_cierre_para"),
   /** Límites, disponibles, saldo y pago mínimo. */
   datosCifrados: text("datos_cifrados").notNull(),
+  /** Es del negocio (en Pagos cuenta como "General · negocio"; si no, personal). */
+  negocio: boolean("negocio").notNull().default(false),
   creadoEn: creadoEn(),
   actualizadoEn: ts("actualizado_en").notNull().defaultNow(),
 });
@@ -358,13 +362,24 @@ export const pagoLugar = pgTable("pago_lugar", {
 });
 
 export type FrecuenciaPago = "mensual" | "bimestral" | "trimestral" | "cuatrimestral" | "semestral" | "anual" | "unica";
+/**
+ * A qué corresponde un pago: un lugar (el alquiler del local), repartido entre varios (el contador, entre los locales)
+ * o general, sin lugar físico (la tarjeta, la cuota del auto), que igual es de negocio o personal.
+ */
+export type AlcancePago = "lugar" | "repartido" | "general";
+/** Entre qué lugares se reparte: sin porcentajes, en partes iguales. */
+export type RepartoPago = { lugarId: number; porcentaje: number | null }[];
 
 /** Lo que se paga siempre (alquiler, luz, sueldos…): cada mes que le toca aparece solo en la lista del mes. */
 export const pagoFijo = pgTable("pago_fijo", {
   id: serial("id").primaryKey(),
-  lugarId: integer("lugar_id")
-    .notNull()
-    .references(() => pagoLugar.id, { onDelete: "restrict" }),
+  /** Solo con alcance "lugar". */
+  lugarId: integer("lugar_id").references(() => pagoLugar.id, { onDelete: "restrict" }),
+  alcance: text("alcance").$type<AlcancePago>().notNull().default("lugar"),
+  /** Con alcance "general": de negocio o personal. */
+  tipo: text("tipo").$type<TipoLugar>(),
+  /** Con alcance "repartido". */
+  reparto: jsonb("reparto").$type<RepartoPago>(),
   categoria: text("categoria").notNull(),
   frecuencia: text("frecuencia").$type<FrecuenciaPago>().notNull().default("mensual"),
   /** Día del mes en que vence (si el mes es más corto, el último día). */
@@ -396,6 +411,9 @@ export const pagoMes = pgTable(
     periodo: text("periodo").notNull(),
     vence: date("vence").notNull(),
     lugarId: integer("lugar_id").references(() => pagoLugar.id, { onDelete: "restrict" }),
+    alcance: text("alcance").$type<AlcancePago>().notNull().default("lugar"),
+    tipo: text("tipo").$type<TipoLugar>(),
+    reparto: jsonb("reparto").$type<RepartoPago>(),
     categoria: text("categoria").notNull(),
     moneda: text("moneda").$type<"ARS" | "USD">().notNull().default("ARS"),
     estado: text("estado").$type<EstadoPago>().notNull().default("pendiente"),

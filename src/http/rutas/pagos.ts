@@ -37,7 +37,14 @@ const Moneda = z.enum(["ARS", "USD"]);
 const Monto = z.number().min(0).max(1e12);
 const TipoLugar = z.enum(["negocio", "personal"]);
 const Lugar = z.object({ nombre: z.string().max(60), tipo: TipoLugar });
-const Fijo = z.object({
+/** A qué corresponde: un lugar, repartido entre varios (iguales o con %) o general (de negocio o personal). */
+const Alcance = z.object({
+  alcance: z.enum(["lugar", "repartido", "general"]),
+  lugarId: z.number().int().positive().nullable(),
+  tipo: TipoLugar.nullable(),
+  reparto: z.array(z.object({ lugarId: z.number().int().positive(), porcentaje: z.number().min(0).max(100).nullable() })).max(50).nullable(),
+});
+const Fijo = Alcance.extend({
   nombre: z.string().max(120),
   categoria: z.string().max(60),
   monto: Monto,
@@ -88,16 +95,16 @@ export const rutasPagos: FastifyPluginAsync = async (app) => {
     return { ok: true };
   });
 
-  app.post("/pagos/fijos", async (req) => crearFijo({ ...Fijo.parse(req.body), lugarId: z.object({ lugarId: z.number().int().positive() }).parse(req.body).lugarId }));
+  app.post("/pagos/fijos", async (req) => crearFijo(Fijo.parse(req.body)));
   /** Lo que armó la IA y revisaste: los lugares nuevos se crean. */
   app.post("/pagos/fijos/lote", async (req) => {
     const { fijos } = z
-      .object({ fijos: z.array(Fijo.extend({ lugarId: z.number().int().positive().nullable(), lugarNuevo: Lugar.optional() })).max(200) })
+      .object({ fijos: z.array(Fijo.extend({ lugarNuevo: Lugar.optional() })).max(200) })
       .parse(req.body);
     return crearFijos(fijos);
   });
   app.put("/pagos/fijos/:id", async (req) => {
-    await actualizarFijo(Id.parse(req.params).id, { ...Fijo.parse(req.body), lugarId: z.object({ lugarId: z.number().int().positive() }).parse(req.body).lugarId });
+    await actualizarFijo(Id.parse(req.params).id, Fijo.parse(req.body));
     return { ok: true };
   });
   app.delete("/pagos/fijos/:id", async (req) => {
@@ -113,7 +120,7 @@ export const rutasPagos: FastifyPluginAsync = async (app) => {
   app.post("/pagos", async (req) =>
     crearSuelto(
       z
-        .object({ nombre: z.string().max(120), lugarId: z.number().int().positive().nullable(), categoria: z.string().max(60), monto: Monto, moneda: Moneda, fecha: Fecha, medio: z.string().max(60), nota: z.string().max(500), pagado: z.boolean() })
+        .object({ nombre: z.string().max(120), lugarId: z.number().int().positive().nullable(), tipo: TipoLugar.optional(), categoria: z.string().max(60), monto: Monto, moneda: Moneda, fecha: Fecha, medio: z.string().max(60), nota: z.string().max(500), pagado: z.boolean() })
         .parse(req.body),
     ),
   );

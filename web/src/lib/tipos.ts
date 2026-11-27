@@ -205,6 +205,8 @@ export type Suscripcion = {
   /** Con qué tarjeta se paga; sinTarjeta: con otro medio. */
   tarjetaId: number | null;
   sinTarjeta: boolean;
+  /** Es del negocio: en Pagos cuenta como "General · negocio". */
+  negocio: boolean;
 };
 /** Con qué tarjeta parece pagarse una suscripción (aparece en sus débitos). */
 export type SugerenciaTarjeta = { tarjetaId: number; tarjeta: string; comoAparece: string };
@@ -247,6 +249,8 @@ export type Tarjeta = {
   id: number;
   nombre: string;
   ultimos4: string;
+  /** Es del negocio: en Pagos su resumen cuenta como "General · negocio". */
+  negocio: boolean;
   cierre: string | null;
   vencimiento: string | null;
   limiteCompra: number;
@@ -278,14 +282,21 @@ export type FrecuenciaPago = "mensual" | "bimestral" | "trimestral" | "cuatrimes
 
 export type LugarPago = { id: number; nombre: string; tipo: TipoLugar; orden: number; fijos?: number };
 
+export type AlcancePago = "lugar" | "repartido" | "general";
+export type RepartoPago = { lugarId: number; porcentaje: number | null }[];
+/** Lo que le toca a cada lugar (uno solo, cada uno con su parte si es repartido, o "General"). */
+export type PartePago = { lugarId: number | null; lugar: string; tipo: TipoLugar; porcentaje: number; monto: number; pagado: number };
+
 export type ItemPago = {
   id: number;
   periodo: string;
   vence: string;
   nombre: string;
   lugarId: number | null;
+  alcance: AlcancePago;
   lugar: string;
   tipo: TipoLugar;
+  partes: PartePago[];
   categoria: string;
   moneda: Moneda;
   estado: EstadoPago;
@@ -323,7 +334,10 @@ export type ResumenPagos = { periodo: string; meses: { periodo: string; total: T
 
 export type FijoPago = {
   id: number;
-  lugarId: number;
+  alcance: AlcancePago;
+  lugarId: number | null;
+  tipo: TipoLugar | null;
+  reparto: RepartoPago | null;
   nombre: string;
   categoria: string;
   monto: number;

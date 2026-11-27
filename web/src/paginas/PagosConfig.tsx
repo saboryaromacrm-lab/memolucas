@@ -3,34 +3,41 @@ import { Building2, Home, Pencil, Plus, Sparkles, Trash2 } from "lucide-react";
 import { Boton, Cargando, Interruptor, MenuAcciones, Modal, useAccion } from "../componentes/ui";
 import { del, post, put } from "../lib/api";
 import { aCampo, aNumero, plata } from "../lib/numeros";
-import { FRECUENCIAS_PAGO, nombreMes, periodoActual } from "../lib/pagos";
-import type { ConfigPagos, FijoPago, FrecuenciaPago, LugarPago, Moneda, TipoLugar } from "../lib/tipos";
+import { describirAlcance, FRECUENCIAS_PAGO, nombreMes, periodoActual } from "../lib/pagos";
+import type { AlcancePago, ConfigPagos, FijoPago, FrecuenciaPago, LugarPago, Moneda, TipoLugar } from "../lib/tipos";
 import { useDatos } from "../lib/vivo";
 
 /** Lo que armó la IA, para revisar antes de guardar. */
-type Propuesto = Omit<FijoPago, "id" | "desde" | "lugarId"> & { lugarId: number | null; lugarNuevo?: { nombre: string; tipo: TipoLugar }; elegido: boolean };
+type Propuesto = Omit<FijoPago, "id" | "desde"> & { lugarNuevo?: { nombre: string; tipo: TipoLugar }; elegido: boolean };
+/** Filtro de la lista: todos, un lugar, los generales o los repartidos. */
+type FiltroLugar = number | "todos" | "general" | "repartido";
 
 const textoAviso = (d: number | null, general: number) => (d === null ? `${general} días antes` : d < 0 ? "No avisar" : d === 0 ? "El día que vence" : `${d} ${d === 1 ? "día" : "días"} antes`);
 
 export function PagosConfig() {
   const { datos } = useDatos<ConfigPagos>("/api/pagos/config", ["pagos"]);
-  const [lugar, setLugar] = useState<number | "todos">("todos");
+  const [lugar, setLugar] = useState<FiltroLugar>("todos");
   const [editando, setEditando] = useState<FijoPago | "nuevo" | null>(null);
   const accion = useAccion();
   if (!datos) return <Cargando />;
-  const fijos = datos.fijos.filter((f) => lugar === "todos" || f.lugarId === lugar);
-  const nombreLugar = (id: number) => datos.lugares.find((l) => l.id === id)?.nombre ?? "—";
+  // Un repartido aparece en cada uno de sus lugares.
+  const fijos = datos.fijos.filter(
+    (f) =>
+      lugar === "todos" ||
+      (lugar === "general" ? f.alcance === "general" : lugar === "repartido" ? f.alcance === "repartido" : f.lugarId === lugar || !!f.reparto?.some((r) => r.lugarId === lugar)),
+  );
+  const titulo = lugar === "todos" ? "todos" : lugar === "general" ? "general" : lugar === "repartido" ? "repartidos" : (datos.lugares.find((l) => l.id === lugar)?.nombre ?? "");
 
   return (
     <div className="space-y-4">
       <CargarConIa config={datos} />
 
       <div className="grid gap-4 lg:grid-cols-[17rem_1fr]">
-        <Lugares lugares={datos.lugares} elegido={lugar} onElegir={setLugar} />
+        <Lugares lugares={datos.lugares} fijos={datos.fijos} elegido={lugar} onElegir={setLugar} />
 
         <section className="tarjeta overflow-hidden">
           <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
-            <h2 className="text-sm font-semibold text-slate-800">Qué pagás · {lugar === "todos" ? "todos los lugares" : nombreLugar(lugar)}</h2>
+            <h2 className="text-sm font-semibold text-slate-800">Qué pagás · {titulo}</h2>
             <Boton chico variante="primario" icono={<Plus className="size-3.5" />} disabled={!datos.lugares.length} onClick={() => setEditando("nuevo")}>
               Pago fijo
             </Boton>
@@ -43,7 +50,7 @@ export function PagosConfig() {
                 <li key={f.id} className="grid grid-cols-[1fr_auto] items-center gap-x-3 gap-y-1 px-4 py-3 sm:grid-cols-[1fr_9rem_10rem_9rem_auto]">
                   <button onClick={() => setEditando(f)} className="min-w-0 text-left">
                     <div className="font-medium text-slate-900">{f.nombre}</div>
-                    <div className="truncate text-xs text-slate-500">{[lugar === "todos" && nombreLugar(f.lugarId), f.categoria, f.cuenta].filter(Boolean).join(" · ")}</div>
+                    <div className="truncate text-xs text-slate-500">{[(lugar === "todos" || f.alcance !== "lugar") && describirAlcance(f, datos.lugares), f.categoria, f.cuenta].filter(Boolean).join(" · ")}</div>
                   </button>
                   <div className="text-right text-sm tabular-nums text-slate-900 sm:text-left">
                     {f.variable && "~ "}
@@ -103,7 +110,7 @@ export function PagosConfig() {
         />
       </section>
 
-      {editando && <ModalFijo fijo={editando === "nuevo" ? null : editando} lugarInicial={lugar === "todos" ? datos.lugares[0]?.id : lugar} config={datos} onCerrar={() => setEditando(null)} />}
+      {editando && <ModalFijo fijo={editando === "nuevo" ? null : editando} lugarInicial={typeof lugar === "number" ? lugar : datos.lugares[0]?.id} config={datos} onCerrar={() => setEditando(null)} />}
     </div>
   );
 }
@@ -127,7 +134,7 @@ function CargarConIa({ config }: { config: ConfigPagos }) {
       setTexto("");
     }
   };
-  const nombreLugar = (p: Propuesto) => config.lugares.find((l) => l.id === p.lugarId)?.nombre ?? p.lugarNuevo?.nombre ?? "—";
+  const nombreLugar = (p: Propuesto) => (p.lugarNuevo ? p.lugarNuevo.nombre : describirAlcance(p, config.lugares));
 
   return (
     <section className="rounded-xl border border-teal-200 bg-gradient-to-br from-teal-50 to-white p-4">
@@ -200,7 +207,7 @@ function CargarConIa({ config }: { config: ConfigPagos }) {
   );
 }
 
-function Lugares({ lugares, elegido, onElegir }: { lugares: LugarPago[]; elegido: number | "todos"; onElegir: (l: number | "todos") => void }) {
+function Lugares({ lugares, fijos, elegido, onElegir }: { lugares: LugarPago[]; fijos: FijoPago[]; elegido: FiltroLugar; onElegir: (l: FiltroLugar) => void }) {
   const [nombre, setNombre] = useState("");
   const [tipo, setTipo] = useState<TipoLugar>("negocio");
   const accion = useAccion();
@@ -247,6 +254,17 @@ function Lugares({ lugares, elegido, onElegir }: { lugares: LugarPago[]; elegido
             />
           </li>
         ))}
+        {(["repartido", "general"] as const).map((a) => {
+          const n = fijos.filter((f) => f.alcance === a).length;
+          return (
+            <li key={a} className="border-t border-slate-100">
+              <button className={fila(elegido === a)} onClick={() => onElegir(a)} title={a === "general" ? "Lo que no tiene lugar físico: la tarjeta, la cuota del auto…" : "Lo que es de varios locales: el contador, el abogado…"}>
+                <span className="flex items-center gap-2 italic">{a === "general" ? "General (sin lugar)" : "Repartidos"}</span>
+                <span className="shrink-0 text-xs text-slate-400">{n ? `${n} ${n === 1 ? "pago" : "pagos"}` : ""}</span>
+              </button>
+            </li>
+          );
+        })}
       </ul>
       <form
         className="grid grid-cols-[1fr_auto] gap-2 border-t border-slate-100 p-3"
@@ -284,12 +302,30 @@ function ModalFijo({ fijo, lugarInicial, config, onCerrar }: { fijo: FijoPago | 
     aviso: fijo?.avisoDias === null || fijo?.avisoDias === undefined ? "" : String(fijo.avisoDias),
     nota: fijo?.nota ?? "",
   });
+  const [alcance, setAlcance] = useState<AlcancePago>(fijo?.alcance ?? "lugar");
+  const [tipoGeneral, setTipoGeneral] = useState<TipoLugar>(fijo?.tipo ?? "personal");
+  // Entre qué lugares se reparte: lugarId → porcentaje escrito (solo con porcentajes).
+  const [reparto, setReparto] = useState<Record<number, string>>(() => Object.fromEntries((fijo?.reparto ?? []).map((r) => [r.lugarId, r.porcentaje === null ? "" : aCampo(r.porcentaje)])));
+  const [conPorcentajes, setConPorcentajes] = useState(!!fijo?.reparto?.length && fijo.reparto.every((r) => r.porcentaje !== null));
   const accion = useAccion();
   const campo = (k: keyof typeof f) => ({ value: String(f[k]), onChange: (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value }) });
   const monto = aNumero(f.monto) ?? 0;
-  const valido = f.nombre.trim() && f.lugarId && Number(f.dia) >= 1 && Number(f.dia) <= 31;
+  const elegidos = Object.keys(reparto).map(Number);
+  const suma = elegidos.reduce((s, id) => s + (aNumero(reparto[id]) ?? 0), 0);
+  const repartoValido = elegidos.length >= 2 && (!conPorcentajes || Math.abs(suma - 100) < 0.01);
+  const valido = f.nombre.trim() && Number(f.dia) >= 1 && Number(f.dia) <= 31 && (alcance === "lugar" ? !!f.lugarId : alcance === "repartido" ? repartoValido : true);
+  const alternar = (id: number) => setReparto((r) => (id in r ? Object.fromEntries(Object.entries(r).filter(([k]) => Number(k) !== id)) : { ...r, [id]: "" }));
   const guardar = async () => {
-    const cuerpo = { ...f, lugarId: Number(f.lugarId), monto, dia: Number(f.dia), avisoDias: f.aviso === "" ? null : Number(f.aviso) };
+    const cuerpo = {
+      ...f,
+      alcance,
+      lugarId: alcance === "lugar" ? Number(f.lugarId) : null,
+      tipo: alcance === "general" ? tipoGeneral : null,
+      reparto: alcance === "repartido" ? elegidos.map((id) => ({ lugarId: id, porcentaje: conPorcentajes ? (aNumero(reparto[id]) ?? 0) : null })) : null,
+      monto,
+      dia: Number(f.dia),
+      avisoDias: f.aviso === "" ? null : Number(f.aviso),
+    };
     const ok = await accion(() => (fijo ? put(`/api/pagos/fijos/${fijo.id}`, cuerpo) : post("/api/pagos/fijos", cuerpo)), fijo ? "Guardado" : "Pago agregado");
     if (ok) onCerrar();
   };
@@ -313,17 +349,82 @@ function ModalFijo({ fijo, lugarInicial, config, onCerrar }: { fijo: FijoPago | 
           <span className="etiqueta">Qué pagás</span>
           <input className="campo" autoFocus placeholder="Alquiler, luz, ABL, sueldos…" {...campo("nombre")} />
         </label>
-        <label className="block">
-          <span className="etiqueta">Lugar</span>
-          <select className="campo" {...campo("lugarId")}>
-            {config.lugares.map((l) => (
-              <option key={l.id} value={l.id}>
-                {l.nombre}
-              </option>
+        <div className="col-span-2">
+          <span className="etiqueta">A qué corresponde</span>
+          <div className="grid grid-cols-3 gap-1 rounded-lg bg-slate-100 p-1">
+            {(
+              [
+                ["lugar", "Un lugar"],
+                ["repartido", "Repartido"],
+                ["general", "General"],
+              ] as const
+            ).map(([a, texto]) => (
+              <button
+                key={a}
+                type="button"
+                onClick={() => setAlcance(a)}
+                className={`min-h-9 rounded-md text-sm font-medium ${alcance === a ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-800"}`}
+              >
+                {texto}
+              </button>
             ))}
-          </select>
-        </label>
-        <label className="block">
+          </div>
+          {alcance === "lugar" && (
+            <select className="campo mt-2" {...campo("lugarId")} aria-label="Lugar">
+              {config.lugares.map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.nombre}
+                </option>
+              ))}
+            </select>
+          )}
+          {alcance === "general" && (
+            <div className="mt-2">
+              <p className="mb-1.5 text-xs text-slate-500">Sin lugar físico (la tarjeta, la cuota del auto, el celular…). Igual cuenta como negocio o personal.</p>
+              <select className="campo" value={tipoGeneral} onChange={(e) => setTipoGeneral(e.target.value as TipoLugar)} aria-label="De negocio o personal">
+                <option value="personal">Personal</option>
+                <option value="negocio">Del negocio</option>
+              </select>
+            </div>
+          )}
+          {alcance === "repartido" && (
+            <div className="mt-2 space-y-2">
+              <p className="text-xs text-slate-500">Se paga una vez, y cada lugar suma su parte en el resumen (el contador, el abogado…).</p>
+              <div className="flex flex-wrap gap-2">
+                <Boton chico type="button" onClick={() => setReparto(Object.fromEntries(config.lugares.filter((l) => l.tipo === "negocio").map((l) => [l.id, reparto[l.id] ?? ""])))}>
+                  Todos los negocios
+                </Boton>
+                <label className="flex items-center gap-1.5 text-xs text-slate-600">
+                  <input type="checkbox" className="size-4 accent-marca-oscuro" checked={conPorcentajes} onChange={(e) => setConPorcentajes(e.target.checked)} />
+                  Con porcentajes (si no, partes iguales)
+                </label>
+              </div>
+              <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
+                {config.lugares.map((l) => (
+                  <li key={l.id} className="flex items-center gap-2 px-3 py-1.5">
+                    <label className="flex flex-1 items-center gap-2 text-sm text-slate-700">
+                      <input type="checkbox" className="size-4 accent-marca-oscuro" checked={l.id in reparto} onChange={() => alternar(l.id)} />
+                      {l.nombre}
+                    </label>
+                    {conPorcentajes && l.id in reparto && (
+                      <span className="flex items-center gap-1 text-sm text-slate-500">
+                        <input className="campo w-20 py-1 text-right" inputMode="decimal" value={reparto[l.id]} onChange={(e) => setReparto({ ...reparto, [l.id]: e.target.value })} aria-label={`Porcentaje de ${l.nombre}`} />%
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+              <p className={`text-xs ${repartoValido ? "text-slate-500" : "text-red-600"}`}>
+                {elegidos.length < 2
+                  ? "Elegí al menos 2 lugares."
+                  : conPorcentajes
+                    ? `Suma ${Math.round(suma * 100) / 100} %${Math.abs(suma - 100) < 0.01 ? "" : " (tiene que dar 100 %)"}`
+                    : `${elegidos.length} lugares en partes iguales${monto ? `: ${plata(monto / elegidos.length, f.moneda)} cada uno` : ""}.`}
+              </p>
+            </div>
+          )}
+        </div>
+        <label className="col-span-2 block">
           <span className="etiqueta">Categoría</span>
           <input className="campo" list="categorias-fijo" {...campo("categoria")} />
           <datalist id="categorias-fijo">

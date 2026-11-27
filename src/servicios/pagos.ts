@@ -1,20 +1,35 @@
-import { and, asc, count, eq, gte, inArray, isNotNull, lt, lte, ne, or } from "drizzle-orm";
+import { and, asc, count, eq, gte, inArray, isNotNull, lt, lte, ne, or, sql } from "drizzle-orm";
 import { DateTime } from "luxon";
 import { db } from "../db/index.js";
-import { pagoAnalisis, pagoFijo, pagoLugar, pagoMes, suscripcion, tarjeta, type FrecuenciaPago, type PagoMes, type Suscripcion, type TipoLugar } from "../db/schema.js";
+import {
+  pagoAnalisis,
+  pagoFijo,
+  pagoLugar,
+  pagoMes,
+  suscripcion,
+  tarjeta,
+  type AlcancePago,
+  type FrecuenciaPago,
+  type PagoMes,
+  type RepartoPago,
+  type Suscripcion,
+  type TipoLugar,
+} from "../db/schema.js";
 import { abrir, cifrar, descifrar, sellar } from "../lib/cifrado.js";
 import { bus } from "../lib/eventos.js";
 import { hoyIso } from "../lib/fechas.js";
-import { normalizar } from "../lib/textos.js";
+import { normalizar, plata } from "../lib/textos.js";
 import { almacenCifrado, comoWebp } from "./archivos-cifrados.js";
 import { actualizarConfig, obtenerConfig } from "./configuracion.js";
 import {
   aCsv,
   alertasDelMes,
+  errorDeReparto,
   esperadoDe,
   estadoDe,
   nombreMes,
   periodoDe,
+  repartir,
   sumarMeses,
   tocaEnMes,
   totalPagado,
@@ -46,12 +61,14 @@ const mesActual = () => periodoDe(hoyIso());
 
 // ───────────── Lugares ─────────────
 
+/** Los lugares, con cuántos pagos fijos tiene cada uno (también los repartidos en los que entra). */
 export async function listarLugares() {
   const [lugares, fijos] = await Promise.all([
     db.select().from(pagoLugar).orderBy(asc(pagoLugar.orden), asc(pagoLugar.id)),
-    db.select({ lugarId: pagoFijo.lugarId, n: count() }).from(pagoFijo).groupBy(pagoFijo.lugarId),
+    db.select({ lugarId: pagoFijo.lugarId, reparto: pagoFijo.reparto }).from(pagoFijo),
   ]);
-  return lugares.map((l) => ({ ...l, fijos: fijos.find((f) => f.lugarId === l.id)?.n ?? 0 }));
+  const entra = (id: number) => fijos.filter((f) => f.lugarId === id || f.reparto?.some((r) => r.lugarId === id)).length;
+  return lugares.map((l) => ({ ...l, fijos: entra(l.id) }));
 }
 
 export async function crearLugar(d: { nombre: string; tipo: TipoLugar }) {
@@ -73,9 +90,10 @@ export async function actualizarLugar(id: number, d: { nombre?: string; tipo?: T
 }
 
 export async function borrarLugar(id: number) {
+  const enReparto = sql`@> ${JSON.stringify([{ lugarId: id }])}::jsonb`;
   const [[{ fijos }], [{ pagos }]] = await Promise.all([
-    db.select({ fijos: count() }).from(pagoFijo).where(eq(pagoFijo.lugarId, id)),
-    db.select({ pagos: count() }).from(pagoMes).where(eq(pagoMes.lugarId, id)),
+    db.select({ fijos: count() }).from(pagoFijo).where(or(eq(pagoFijo.lugarId, id), sql`${pagoFijo.reparto} ${enReparto}`)),
+    db.select({ pagos: count() }).from(pagoMes).where(or(eq(pagoMes.lugarId, id), sql`${pagoMes.reparto} ${enReparto}`)),
   ]);
   if (fijos || pagos) throw new ErrorUsuario("Ese lugar tiene pagos cargados: pasalos a otro lugar o borralos antes.");
   await db.delete(pagoLugar).where(eq(pagoLugar.id, id));
@@ -84,8 +102,10 @@ export async function borrarLugar(id: number) {
 
 // ───────────── Lo que se paga siempre (los fijos) ─────────────
 
-export type EntradaFijo = {
-  lugarId: number;
+/** A qué corresponde: el lugar, el reparto o, si es general, de negocio o personal. */
+export type Alcance = { alcance: AlcancePago; lugarId: number | null; tipo: TipoLugar | null; reparto: RepartoPago | null };
+
+export type EntradaFijo = Alcance & {
   nombre: string;
   categoria: string;
   monto: number;
@@ -100,8 +120,22 @@ export type EntradaFijo = {
   nota: string;
 };
 
+/** Deja solo lo que corresponde al alcance, y frena lo que no cierra (sin lugar, reparto de un solo lugar…). */
+export function alcanceValido(a: Alcance): Alcance {
+  if (a.alcance === "lugar") {
+    if (!a.lugarId) throw new ErrorUsuario("Elegí el lugar.");
+    return { alcance: "lugar", lugarId: a.lugarId, tipo: null, reparto: null };
+  }
+  if (a.alcance === "repartido") {
+    const error = errorDeReparto(a.reparto ?? []);
+    if (error) throw new ErrorUsuario(error);
+    return { alcance: "repartido", lugarId: null, tipo: null, reparto: a.reparto };
+  }
+  return { alcance: "general", lugarId: null, tipo: a.tipo ?? "personal", reparto: null };
+}
+
 const columnasFijo = (e: EntradaFijo) => ({
-  lugarId: e.lugarId,
+  ...alcanceValido(e),
   categoria: e.categoria.trim() || "Otros",
   frecuencia: e.frecuencia,
   dia: Math.min(31, Math.max(1, Math.round(e.dia))),
@@ -128,9 +162,13 @@ export async function crearFijo(e: EntradaFijo) {
 }
 
 /** Varios a la vez (lo que arma la IA). Los lugares nuevos se crean antes. */
-export async function crearFijos(lista: (Omit<EntradaFijo, "lugarId"> & { lugarId: number | null; lugarNuevo?: { nombre: string; tipo: TipoLugar } })[]) {
+export async function crearFijos(lista: (EntradaFijo & { lugarNuevo?: { nombre: string; tipo: TipoLugar } })[]) {
   const nuevos = new Map<string, number>();
   for (const e of lista) {
+    if (e.alcance !== "lugar") {
+      await crearFijo(e);
+      continue;
+    }
     let lugarId = e.lugarId;
     if (!lugarId && e.lugarNuevo) {
       const clave = normalizar(e.lugarNuevo.nombre);
@@ -167,6 +205,9 @@ export async function actualizarFijo(id: number, e: EntradaFijo) {
       .set({
         vence: venceEn(f.dia, r.periodo),
         lugarId: f.lugarId,
+        alcance: f.alcance,
+        tipo: f.tipo,
+        reparto: f.reparto,
         categoria: f.categoria,
         moneda: f.moneda,
         medio: f.medio,
@@ -244,6 +285,9 @@ export async function prepararMes(periodo: string) {
         periodo,
         vence: venceEn(f.dia, periodo),
         lugarId: f.lugarId,
+        alcance: f.alcance,
+        tipo: f.tipo,
+        reparto: f.reparto,
         categoria: f.categoria,
         moneda: f.moneda,
         fijoId: f.id,
@@ -264,6 +308,8 @@ export async function prepararMes(periodo: string) {
           .values({
             periodo,
             vence,
+            alcance: "general",
+            tipo: s.negocio ? "negocio" : "personal",
             categoria: "Suscripciones",
             moneda: s.moneda,
             suscripcionId: s.id,
@@ -272,7 +318,13 @@ export async function prepararMes(periodo: string) {
             datosCifrados: sellar({ nombre: s.nombre, esperado: s.monto, boleta: null, pagos: renovada ? [{ monto: s.monto, fecha: vence }] : [], cuenta: "", nota: "" } satisfies DatosMes),
           })
           .onConflictDoNothing();
-      } else if (renovada && ya.estado === "pendiente") {
+      } else if (ya.tipo !== (s.negocio ? "negocio" : "personal")) {
+        await db
+          .update(pagoMes)
+          .set({ tipo: s.negocio ? "negocio" : "personal" })
+          .where(eq(pagoMes.id, ya.id));
+      }
+      if (ya && renovada && ya.estado === "pendiente") {
         const d = abrirMes(ya.datosCifrados);
         await db
           .update(pagoMes)
@@ -294,6 +346,8 @@ export async function prepararMes(periodo: string) {
         .values({
           periodo,
           vence: t.vencimiento,
+          alcance: "general",
+          tipo: t.negocio ? "negocio" : "personal",
           categoria: "Tarjetas",
           tarjetaId: t.id,
           estado: pagos.length ? estadoDe(saldos.saldo, pagos) : "pendiente",
@@ -304,10 +358,11 @@ export async function prepararMes(periodo: string) {
     } else {
       const d = abrirMes(ya.datosCifrados);
       const nuevosPagos = d.pagos.length || !pagos.length ? d.pagos : pagos;
-      if (d.esperado !== saldos.saldo || nuevosPagos !== d.pagos)
+      if (d.esperado !== saldos.saldo || nuevosPagos !== d.pagos || ya.tipo !== (t.negocio ? "negocio" : "personal"))
         await db
           .update(pagoMes)
           .set({
+            tipo: t.negocio ? "negocio" : "personal",
             estado: ya.estado === "omitido" ? "omitido" : nuevosPagos.length ? estadoDe(saldos.saldo, nuevosPagos) : "pendiente",
             datosCifrados: sellar({ ...d, esperado: saldos.saldo, pagos: nuevosPagos }),
           })
@@ -319,19 +374,38 @@ export async function prepararMes(periodo: string) {
 export type ItemPago = ReturnType<typeof aItem>;
 type Lugar = typeof pagoLugar.$inferSelect;
 
+/** Lo que le toca a cada lugar: un solo lugar, cada uno con su parte si es repartido, o "General". */
+export type Parte = { lugarId: number | null; lugar: string; tipo: TipoLugar; porcentaje: number; monto: number; pagado: number };
+
+function partesDe(r: PagoMes, lugares: Lugar[], monto: number, pagado: number): Parte[] {
+  if (r.alcance === "repartido" && r.reparto?.length) {
+    const pagos = repartir(pagado, r.reparto);
+    return repartir(monto, r.reparto).map((m, k) => {
+      const l = lugares.find((x) => x.id === m.lugarId);
+      return { lugarId: m.lugarId, lugar: l?.nombre ?? "Lugar borrado", tipo: l?.tipo ?? "negocio", porcentaje: m.porcentaje, monto: m.monto, pagado: pagos[k].monto };
+    });
+  }
+  const l = r.alcance === "lugar" ? lugares.find((x) => x.id === r.lugarId) : undefined;
+  if (l) return [{ lugarId: l.id, lugar: l.nombre, tipo: l.tipo, porcentaje: 100, monto, pagado }];
+  return [{ lugarId: null, lugar: "General", tipo: r.tipo ?? "personal", porcentaje: 100, monto, pagado }];
+}
+
 function aItem(r: PagoMes, lugares: Lugar[], hoy: string) {
   const d = abrirMes(r.datosCifrados);
-  const lugar = lugares.find((l) => l.id === r.lugarId);
   const monto = d.boleta ?? d.esperado;
   const pagado = totalPagado(d.pagos);
+  const partes = partesDe(r, lugares, monto, pagado);
+  const repartido = partes.length > 1;
   return {
     id: r.id,
     periodo: r.periodo,
     vence: r.vence,
     nombre: d.nombre,
     lugarId: r.lugarId,
-    lugar: lugar?.nombre ?? (r.suscripcionId ? "Suscripciones" : r.tarjetaId ? "Tarjetas" : "Sin lugar"),
-    tipo: (lugar?.tipo ?? "personal") as TipoLugar,
+    alcance: repartido ? "repartido" : partes[0].lugarId ? "lugar" : "general",
+    lugar: repartido ? `Repartido · ${partes.length} ${partes.every((p) => p.tipo === "negocio") ? "locales" : "lugares"}` : partes[0].lugar,
+    tipo: (partes.some((p) => p.tipo === "negocio") ? "negocio" : "personal") as TipoLugar,
+    partes,
     categoria: r.categoria,
     moneda: r.moneda,
     estado: r.estado,
@@ -487,7 +561,8 @@ export async function actualizarPagoDelMes(id: number, c: { monto?: number; venc
   return itemDe(id);
 }
 
-export type EntradaSuelto = { nombre: string; lugarId: number | null; categoria: string; monto: number; moneda: Moneda; fecha: string; medio: string; nota: string; pagado: boolean };
+/** Sin lugar, es general (de negocio o personal). */
+export type EntradaSuelto = { nombre: string; lugarId: number | null; tipo?: TipoLugar; categoria: string; monto: number; moneda: Moneda; fecha: string; medio: string; nota: string; pagado: boolean };
 
 /** Un pago que no está entre los fijos: ya pagado, o para pagar en esa fecha. */
 export async function crearSuelto(e: EntradaSuelto) {
@@ -499,7 +574,7 @@ export async function crearSuelto(e: EntradaSuelto) {
     .values({
       periodo: periodoDe(e.fecha),
       vence: e.fecha,
-      lugarId: e.lugarId,
+      ...alcanceValido({ alcance: e.lugarId ? "lugar" : "general", lugarId: e.lugarId, tipo: e.tipo ?? null, reparto: null }),
       categoria: e.categoria.trim() || "Otros",
       moneda: e.moneda,
       estado: e.pagado ? "pagado" : "pendiente",
@@ -565,16 +640,20 @@ export async function borrarComprobante(id: number) {
 // ───────────── Resumen y exportación ─────────────
 
 type Totales = { ARS: number; USD: number };
-const agrupar = (items: ItemPago[], clave: (i: ItemPago) => string) => {
+type Porcion = { nombre: string; moneda: Moneda; monto: number; pagado: number };
+const agrupar = (porciones: Porcion[]) => {
   const grupos = new Map<string, { nombre: string; total: Totales; pagado: Totales }>();
-  for (const i of items) {
-    const g = grupos.get(clave(i)) ?? { nombre: clave(i), total: { ARS: 0, USD: 0 }, pagado: { ARS: 0, USD: 0 } };
-    g.total[i.moneda as Moneda] += i.monto;
-    g.pagado[i.moneda as Moneda] += i.pagado;
-    grupos.set(clave(i), g);
+  for (const p of porciones) {
+    const g = grupos.get(p.nombre) ?? { nombre: p.nombre, total: { ARS: 0, USD: 0 }, pagado: { ARS: 0, USD: 0 } };
+    g.total[p.moneda] += p.monto;
+    g.pagado[p.moneda] += p.pagado;
+    grupos.set(p.nombre, g);
   }
   return [...grupos.values()].sort((a, b) => b.total.ARS - a.total.ARS || b.total.USD - a.total.USD);
 };
+/** Cada pago partido en lo que le toca a cada lugar (un repartido suma su parte en cada local). */
+const porPartes = (lista: ItemPago[], nombre: (p: Parte) => string): Porcion[] =>
+  lista.flatMap((i) => i.partes.map((p) => ({ nombre: nombre(p), moneda: i.moneda, monto: p.monto, pagado: p.pagado })));
 
 /** Los últimos 12 meses (hasta "periodo"), y el mes y el año por lugar, por categoría y negocio / personal. */
 export async function resumenPagos(periodo: string) {
@@ -595,9 +674,9 @@ export async function resumenPagos(periodo: string) {
   const corte = (lista: ItemPago[]) => ({
     total: sumaPorMoneda(lista.map((i) => ({ moneda: i.moneda, valor: i.monto }))),
     pagado: sumaPorMoneda(lista.map((i) => ({ moneda: i.moneda, valor: i.pagado }))),
-    porLugar: agrupar(lista, (i) => i.lugar),
-    porCategoria: agrupar(lista, (i) => i.categoria),
-    porTipo: agrupar(lista, (i) => (i.tipo === "negocio" ? "Negocio" : "Personal")),
+    porLugar: agrupar(porPartes(lista, (p) => p.lugar)),
+    porCategoria: agrupar(lista.map((i) => ({ nombre: i.categoria, moneda: i.moneda, monto: i.monto, pagado: i.pagado }))),
+    porTipo: agrupar(porPartes(lista, (p) => (p.tipo === "negocio" ? "Negocio" : "Personal"))),
   });
   return {
     periodo,
@@ -611,10 +690,20 @@ export async function resumenPagos(periodo: string) {
 export async function exportarCsv(desde: string, hasta: string) {
   const [filas, lugares] = await Promise.all([filasDe(desde, hasta), db.select().from(pagoLugar)]);
   const hoy = hoyIso();
+  // Un renglón por lugar: el repartido sale en cada local con su parte, así cada uno cierra sus números.
   return aCsv(
-    filas.map((r): FilaCsv => {
+    filas.flatMap((r) => {
       const i = aItem(r, lugares, hoy);
-      return { ...i, tipo: i.tipo === "negocio" ? "Negocio" : "Personal", esperado: i.monto };
+      return i.partes.map(
+        (p): FilaCsv => ({
+          ...i,
+          lugar: p.lugar,
+          tipo: p.tipo === "negocio" ? "Negocio" : "Personal",
+          esperado: p.monto,
+          pagado: p.pagado,
+          reparto: i.partes.length > 1 ? `${Math.round(p.porcentaje * 100) / 100} % de ${plata(i.monto, i.moneda)} repartido` : "",
+        }),
+      );
     }),
   );
 }
@@ -641,7 +730,7 @@ export async function buscarPendientes(texto: string) {
     .split(/\s+/)
     .filter((p) => p.length > 1 && !["de", "del", "la", "el", "los", "las", "en", "y", "pague", "pago"].includes(p));
   const puntaje = (i: ItemPago) => {
-    const donde = normalizar(`${i.nombre} ${i.lugar} ${i.categoria} ${i.cuenta}`);
+    const donde = normalizar(`${i.nombre} ${i.lugar} ${i.partes.map((p) => p.lugar).join(" ")} ${i.categoria} ${i.cuenta}`);
     return palabras.filter((p) => donde.includes(p)).length;
   };
   const candidatos = (await pagosPendientes()).map((i) => ({ i, n: puntaje(i) })).filter((c) => c.n > 0);

@@ -17,6 +17,8 @@ const Datos = z.object({
   observacion: z.string().trim().max(1000).default(""),
   tarjetaId: z.number().int().positive().nullable().default(null),
   sinTarjeta: z.boolean().default(false),
+  /** Es del negocio: en Pagos cuenta como "General · negocio". */
+  negocio: z.boolean().default(false),
 });
 
 export const rutasSuscripciones: FastifyPluginAsync = async (app) => {

@@ -1,5 +1,5 @@
 import { DateTime } from "luxon";
-import type { EstadoPago, FrecuenciaPago } from "../db/schema.js";
+import type { EstadoPago, FrecuenciaPago, RepartoPago } from "../db/schema.js";
 
 // Reglas de Pagos sin base de datos (se prueban solas): en qué meses toca cada pago, cuánto se espera, el estado, las
 // alertas del mes y el CSV para el contador.
@@ -59,6 +59,34 @@ export function esperadoDe(f: { monto: number; variable: boolean }, anteriores: 
   return Math.round(ultimos.reduce((s, m) => s + m, 0) / ultimos.length);
 }
 
+/**
+ * Cuánto le toca a cada lugar de un pago repartido: en partes iguales o por porcentaje. En centavos, y el último lugar
+ * se lleva lo que sobra del redondeo, así la suma da justo el total.
+ */
+export function repartir(monto: number, reparto: RepartoPago): { lugarId: number; porcentaje: number; monto: number }[] {
+  if (!reparto.length) return [];
+  const pesos = reparto.every((r) => r.porcentaje !== null) ? reparto.map((r) => r.porcentaje!) : reparto.map(() => 1);
+  const total = pesos.reduce((a, b) => a + b, 0) || 1;
+  const centavos = Math.round(monto * 100);
+  let asignado = 0;
+  return reparto.map((r, i) => {
+    const c = i === reparto.length - 1 ? centavos - asignado : Math.round((centavos * pesos[i]) / total);
+    asignado += c;
+    return { lugarId: r.lugarId, porcentaje: (pesos[i] / total) * 100, monto: c / 100 };
+  });
+}
+
+/** Qué está mal en un reparto (o null): al menos 2 lugares distintos; porcentajes en todos o en ninguno, que sumen 100. */
+export function errorDeReparto(reparto: RepartoPago): string | null {
+  if (reparto.length < 2) return "Para repartirlo elegí al menos 2 lugares.";
+  if (new Set(reparto.map((r) => r.lugarId)).size !== reparto.length) return "Hay un lugar repetido en el reparto.";
+  const con = reparto.filter((r) => r.porcentaje !== null);
+  if (con.length && con.length !== reparto.length) return "Poné el porcentaje de todos los lugares, o de ninguno (en partes iguales).";
+  if (con.length && Math.abs(con.reduce((s, r) => s + r.porcentaje!, 0) - 100) > 0.01) return "Los porcentajes tienen que sumar 100.";
+  if (con.some((r) => r.porcentaje! <= 0)) return "Cada porcentaje tiene que ser mayor que cero.";
+  return null;
+}
+
 export const totalPagado = (pagos: ParteDePago[]) => pagos.reduce((s, p) => s + p.monto, 0);
 
 /** Pagado si cubre lo esperado (o si no había monto y se pagó algo), en parte si no llega. */
@@ -100,7 +128,23 @@ export function alertasDelMes(items: ItemAlerta[], hoy: string, totalAnterior: {
 
 // ───────────── CSV para el contador ─────────────
 
-export type FilaCsv = { periodo: string; vence: string; lugar: string; tipo: string; categoria: string; nombre: string; moneda: Moneda; esperado: number; pagado: number; estado: EstadoPago; pagadoEn: string | null; medio: string; nota: string };
+/** Un renglón por lugar: un pago repartido sale en cada lugar con su parte (y "reparto" dice de cuánto). */
+export type FilaCsv = {
+  periodo: string;
+  vence: string;
+  lugar: string;
+  tipo: string;
+  categoria: string;
+  nombre: string;
+  moneda: Moneda;
+  esperado: number;
+  pagado: number;
+  estado: EstadoPago;
+  pagadoEn: string | null;
+  medio: string;
+  reparto: string;
+  nota: string;
+};
 
 const ESTADOS: Record<EstadoPago, string> = { pendiente: "Pendiente", parcial: "Pagado en parte", pagado: "Pagado", omitido: "No se pagó este mes" };
 
@@ -111,9 +155,11 @@ export function aCsv(filas: FilaCsv[]): string {
     return /[";\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
   };
   const fecha = (iso: string | null) => (iso ? iso.split("-").reverse().join("/") : "");
-  const encabezado = ["Mes", "Vence", "Lugar", "Tipo", "Categoría", "Pago", "Moneda", "Esperado", "Pagado", "Estado", "Pagado el", "Medio", "Nota"];
+  const encabezado = ["Mes", "Vence", "Lugar", "Tipo", "Categoría", "Pago", "Moneda", "Esperado", "Pagado", "Estado", "Pagado el", "Medio", "Reparto", "Nota"];
   const lineas = filas.map((f) =>
-    [f.periodo, fecha(f.vence), f.lugar, f.tipo, f.categoria, f.nombre, f.moneda, f.esperado, f.pagado, ESTADOS[f.estado], fecha(f.pagadoEn), f.medio, f.nota].map(celda).join(";"),
+    [f.periodo, fecha(f.vence), f.lugar, f.tipo, f.categoria, f.nombre, f.moneda, f.esperado, f.pagado, ESTADOS[f.estado], fecha(f.pagadoEn), f.medio, f.reparto, f.nota]
+      .map(celda)
+      .join(";"),
   );
   return `﻿${[encabezado.join(";"), ...lineas].join("\r\n")}\r\n`;
 }

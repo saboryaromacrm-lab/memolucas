@@ -31,12 +31,15 @@ Le escribís al bot como a una persona (*"recordame mañana a las 10 pagar la lu
 - **Inicio**: estado de WhatsApp en vivo, lo de hoy y mañana, pendientes sin confirmar, contadores y gasto de IA del mes.
 - **Recordatorios**: búsqueda, filtros (activos, pausados, cumplidos, no confirmados, recurrentes, con foto) y acciones (editar, pausar, reanudar, duplicar, marcar hecho, enviar ahora, borrar).
 - **Pagos**: todo lo que pagás mes a mes en tus locales, tu casa y tus cosas.
-  - *Configuración*: los lugares (negocio o personal) y lo que pagás siempre en cada uno (monto fijo o variable, día, cada cuánto,
-    cómo lo pagás, número de cliente, aviso). *Cargá con IA*: lo dictás como te sale y la IA arma la lista para revisar.
+  - *Configuración*: los lugares (negocio o personal) y lo que pagás siempre (monto fijo o variable, día, cada cuánto, cómo lo
+    pagás, número de cliente, aviso). Cada pago corresponde a **un lugar**, va **repartido** entre varios (el contador o el abogado
+    de todos los locales: en partes iguales o con %) o es **general**, sin lugar físico (la tarjeta, la cuota del auto), de negocio
+    o personal. *Cargá con IA*: lo dictás como te sale y la IA arma la lista para revisar.
   - *Este mes*: se arma solo con los fijos que tocan, las **suscripciones** que vencen y el **resumen de cada tarjeta** (sin
     cargarlos dos veces). Vencido / por pagar / pagado; *Pagado* de un toque, en partes, con comprobante (foto o PDF, cifrado),
     el monto de la boleta o *No se paga este mes*. Alertas (lo vencido, subas raras, contra el mes anterior) y el análisis de la IA.
-  - *Resumen*: los últimos 12 meses, por lugar, por categoría y negocio / personal, y el **CSV para el contador**.
+  - *Resumen*: los últimos 12 meses, por lugar (un repartido suma su parte en cada local), por categoría y negocio / personal, y
+    el **CSV para el contador** (un renglón por local con su parte).
   - Por WhatsApp: *"pagué la luz del Express 1"*, *"¿qué me falta pagar?"*, la **foto del comprobante** (pregunta si es ese pago
     y lo marca con la foto) o la **foto de la boleta** (anota el monto y el vencimiento). Avisa 3 días antes y el día que vence
     (configurable), el día 1 manda cómo cerró el mes (con IA) y lo que viene, y a mitad de mes lo que falta.

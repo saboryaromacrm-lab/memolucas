@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { normalizar, plata } from "../lib/textos.js";
 import { obtenerConfig } from "../servicios/configuracion.js";
-import { guardarAnalisis, listarLugares, resumenPagos, verMes } from "../servicios/pagos.js";
+import { guardarAnalisis, listarLugares, resumenPagos, verMes, type Alcance } from "../servicios/pagos.js";
 import type { FrecuenciaPago, TipoLugar } from "../db/schema.js";
 import { CATEGORIAS, MEDIOS, MESES_DE, nombreMes } from "../servicios/pagos-reglas.js";
 import { hoyIso } from "../lib/fechas.js";
@@ -23,9 +23,11 @@ const FRECUENCIAS = Object.keys(MESES_DE) as FrecuenciaPago[];
 const EsquemaArmado = z.object({
   pagos: z.array(
     z.object({
-      lugar: z.string().describe("El lugar tal cual figura en la lista; si es otro, su nombre"),
-      // Texto libre (no enum): la IA a veces lo deja vacío para los lugares que ya existen y eso no tiene que romper la lista.
-      lugar_nuevo_tipo: z.string().describe('"negocio" (un local) o "personal" (casa, auto…)'),
+      // Texto libre (no enums): la IA a veces deja vacíos o escribe a su manera; se normaliza después.
+      alcance: z.string().describe('"lugar" (de un local o la casa), "repartido" (de varios locales a la vez) o "general" (sin lugar físico)'),
+      lugar: z.string().describe('Con "lugar": el lugar tal cual figura en la lista, o el nombre de uno nuevo. Si no, ""'),
+      tipo: z.string().describe('"negocio" o "personal": de qué es (para "general" y para un lugar nuevo)'),
+      repartir_entre: z.array(z.string()).describe('Con "repartido": los lugares de la lista entre los que se reparte; vacío = todos los negocios'),
       nombre: z.string().describe("Qué se paga, corto: Alquiler, Luz, ABL, Sueldos…"),
       categoria: z.string().describe("Una de las categorías de la lista"),
       monto: z.number().describe("En números (650 mil = 650000). 0 si no lo dijo"),
@@ -48,14 +50,30 @@ export async function armarFijosConIa(texto: string) {
 Lugares que ya tiene: ${lugares.map((l) => `${l.nombre} (${l.tipo})`).join(", ") || "ninguno"}.
 Categorías: ${CATEGORIAS.join(", ")}.
 Medios de pago habituales: ${MEDIOS.join(", ")}.
-Un pago por cosa y por lugar ("luz y gas en casa" son dos). Si dice "en todos los locales", uno por cada local. No inventes montos ni datos que no dijo.`;
+Cada pago corresponde a:
+- "lugar": lo de un local o la casa (alquiler, luz, gas, internet, ABL de ese lugar).
+- "repartido": lo que es de varios locales a la vez y se paga una sola vez (contador, abogado, sistema, seguridad, publicidad): repartir_entre vacío = todos los negocios.
+- "general": lo que no tiene lugar físico (tarjeta de crédito, cuota del auto, préstamos, celular, prepaga): tipo "personal" salvo que diga que es del negocio.
+Un pago por cosa ("luz y gas en casa" son dos). Si dice "la luz de todos los locales", es una luz por cada local (no repartido). No inventes montos ni datos que no dijo.`;
   const r = await pedir(cfg, EsquemaArmado, system, [{ role: "user", content: texto }]);
   return {
     fijos: r.pagos.map((p) => {
-      const lugar = lugares.find((l) => normalizar(l.nombre) === normalizar(p.lugar));
+      const tipo: TipoLugar = /personal|casa/i.test(`${p.tipo} ${p.lugar}`) ? "personal" : "negocio";
+      const buscar = (nombre: string) => lugares.find((l) => normalizar(l.nombre) === normalizar(nombre));
+      const alcance = normalizar(p.alcance);
+      let a: Alcance & { lugarNuevo?: { nombre: string; tipo: TipoLugar } };
+      if (alcance.startsWith("repart")) {
+        const elegidos = p.repartir_entre.map(buscar).filter((l) => l !== undefined);
+        const entre = elegidos.length >= 2 ? elegidos : lugares.filter((l) => l.tipo === "negocio");
+        a = entre.length >= 2 ? { alcance: "repartido", lugarId: null, tipo: null, reparto: entre.map((l) => ({ lugarId: l.id, porcentaje: null })) } : { alcance: "general", lugarId: null, tipo: "negocio", reparto: null };
+      } else if (alcance.startsWith("general") || !p.lugar.trim()) {
+        a = { alcance: "general", lugarId: null, tipo, reparto: null };
+      } else {
+        const lugar = buscar(p.lugar);
+        a = { alcance: "lugar", lugarId: lugar?.id ?? null, tipo: null, reparto: null, lugarNuevo: lugar ? undefined : { nombre: p.lugar.trim(), tipo } };
+      }
       return {
-        lugarId: lugar?.id ?? null,
-        lugarNuevo: lugar ? undefined : { nombre: p.lugar.trim(), tipo: (/personal|casa|auto/i.test(`${p.lugar_nuevo_tipo} ${p.lugar}`) ? "personal" : "negocio") as TipoLugar },
+        ...a,
         nombre: p.nombre,
         categoria: CATEGORIAS.includes(p.categoria) ? p.categoria : "Otros",
         monto: Math.max(0, p.monto),

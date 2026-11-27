@@ -527,6 +527,7 @@ function FormTarjeta({ t, onCerrar, onCreada }: { t: Tarjeta | null; onCerrar: (
     vencimiento: t?.vencimiento ?? "",
     ...Object.fromEntries(SALDOS.map(([k]) => [k, t ? aCampo(t[k], true) : ""])),
   } as Record<string, string>);
+  const [negocio, setNegocio] = useState(t?.negocio ?? false);
   const [guardando, setGuardando] = useState(false);
   const accion = useAccion();
   const campo = (k: string) => ({ value: f[k], onChange: (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value }) });
@@ -534,6 +535,7 @@ function FormTarjeta({ t, onCerrar, onCreada }: { t: Tarjeta | null; onCerrar: (
   const guardar = async () => {
     setGuardando(true);
     const datos = {
+      negocio,
       nombre: f.nombre,
       ultimos4: f.ultimos4.trim(),
       cierre: f.cierre || null,
@@ -588,6 +590,10 @@ function FormTarjeta({ t, onCerrar, onCreada }: { t: Tarjeta | null; onCerrar: (
             <input className="campo" inputMode="decimal" placeholder="0,00" {...campo(k)} />
           </Campo>
         ))}
+        <label className="col-span-2 flex items-center gap-2 text-sm text-slate-700">
+          <input type="checkbox" className="size-4 accent-marca-oscuro" checked={negocio} onChange={(e) => setNegocio(e.target.checked)} />
+          Es del negocio (en Pagos su resumen cuenta como negocio; si no, personal)
+        </label>
       </div>
       <p className="mt-3 text-xs text-slate-500">Nunca cargues el número completo ni el código de seguridad: solo hacen falta los últimos 4. Los importes se guardan cifrados.</p>
     </Modal>

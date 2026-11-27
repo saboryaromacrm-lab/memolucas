@@ -190,6 +190,13 @@
       "when": 1795722829098,
       "tag": "0026_pagos",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1795743540272,
+      "tag": "0027_pagos_alcance",
+      "breakpoints": true
     }
   ]
 }

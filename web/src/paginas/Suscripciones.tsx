@@ -123,6 +123,7 @@ function FormSuscripcion({ s, onCerrar }: { s: Suscripcion | null; onCerrar: () 
     frecuencia: s?.frecuencia ?? ("mensual" as FrecuenciaSuscripcion),
     observacion: s?.observacion ?? "",
   });
+  const [negocio, setNegocio] = useState(s?.negocio ?? false);
   const [guardando, setGuardando] = useState(false);
   const accion = useAccion();
   const campo = (k: keyof typeof f) => ({ value: f[k], onChange: (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value }) });
@@ -137,6 +138,7 @@ function FormSuscripcion({ s, onCerrar }: { s: Suscripcion | null; onCerrar: () 
       monto: aNumero(f.monto) ?? 0,
       tarjetaId: pago && pago !== "otro" ? Number(pago) : null,
       sinTarjeta: pago === "otro",
+      negocio,
     };
     const ok = await accion(() => (s ? put(`/api/suscripciones/${s.id}`, datos) : post("/api/suscripciones", datos)), s ? "Suscripción guardada" : "Suscripción creada");
     setGuardando(false);
@@ -207,6 +209,10 @@ function FormSuscripcion({ s, onCerrar }: { s: Suscripcion | null; onCerrar: () 
             ))}
             <option value="otro">Otro medio (débito, transferencia…)</option>
           </select>
+        </label>
+        <label className="col-span-2 flex items-center gap-2 text-sm text-slate-700">
+          <input type="checkbox" className="size-4 accent-marca-oscuro" checked={negocio} onChange={(e) => setNegocio(e.target.checked)} />
+          Es del negocio (en Pagos cuenta como negocio; si no, personal)
         </label>
         <label className="col-span-2 block">
           <span className="etiqueta">Observación (opcional)</span>

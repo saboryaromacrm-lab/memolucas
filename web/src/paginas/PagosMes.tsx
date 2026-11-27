@@ -5,7 +5,7 @@ import { api, del, post, put } from "../lib/api";
 import { ahora } from "../lib/fechas";
 import { aCampo, aNumero, plata } from "../lib/numeros";
 import { diaMes, plataTotales } from "../lib/pagos";
-import type { ConfigPagos, ItemPago, MesPagos } from "../lib/tipos";
+import type { ConfigPagos, ItemPago, MesPagos, PartePago } from "../lib/tipos";
 import { useDatos } from "../lib/vivo";
 
 type Filtro = { tipo: "todos" } | { tipo: "negocio" | "personal" } | { tipo: "lugar"; lugar: string };
@@ -30,9 +30,11 @@ export function PagosMes({ periodo, nuevo, onCerrarNuevo, onConfigurar }: { peri
   const accion = useAccion();
 
   if (!datos) return <Cargando />;
-  const pasa = (i: ItemPago) => filtro.tipo === "todos" || (filtro.tipo === "lugar" ? i.lugar === filtro.lugar : i.tipo === filtro.tipo);
+  // Un repartido aparece en cada uno de sus lugares (con su parte) y en Negocio o Personal según sus partes.
+  const pasa = (i: ItemPago) => filtro.tipo === "todos" || i.partes.some((p) => (filtro.tipo === "lugar" ? p.lugar === filtro.lugar : p.tipo === filtro.tipo));
   const items = datos.items.filter(pasa);
-  const lugares = [...new Set(datos.items.map((i) => i.lugar))];
+  const lugares = [...new Set(datos.items.flatMap((i) => i.partes.map((p) => p.lugar)))];
+  const parteDe = (i: ItemPago) => (filtro.tipo === "lugar" && i.partes.length > 1 ? i.partes.find((p) => p.lugar === filtro.lugar) : undefined);
   const pagar = (i: ItemPago) => accion(() => post(`/api/pagos/${i.id}/pagar`, {}), `${i.nombre} · ${i.lugar}: pagado`);
   const analizar = async () => {
     setAnalizando(true);
@@ -137,6 +139,7 @@ export function PagosMes({ periodo, nuevo, onCerrarNuevo, onConfigurar }: { peri
                     <Fila
                       key={i.id}
                       i={i}
+                      parte={parteDe(i)}
                       onPagar={() => void pagar(i)}
                       acciones={[
                         i.estado !== "pagado" && i.estado !== "omitido" && { texto: "Pagar otro monto o en partes", icono: <Wallet />, onClick: () => setPagando(i) },
@@ -179,7 +182,8 @@ function Cifra({ titulo, valor, detalle, color, children }: { titulo: string; va
   );
 }
 
-function Fila({ i, onPagar, acciones }: { i: ItemPago; onPagar: () => void; acciones: Parameters<typeof MenuAcciones>[0]["acciones"] }) {
+/** parte: con el filtro de un lugar, lo que le toca a ese lugar de un pago repartido. */
+function Fila({ i, parte, onPagar, acciones }: { i: ItemPago; parte?: PartePago; onPagar: () => void; acciones: Parameters<typeof MenuAcciones>[0]["acciones"] }) {
   const etiqueta = i.boleta !== null ? "Boleta" : ETIQUETA_ORIGEN[i.origen];
   const pendiente = i.estado === "pendiente" || i.estado === "parcial";
   return (
@@ -195,12 +199,19 @@ function Fila({ i, onPagar, acciones }: { i: ItemPago; onPagar: () => void; acci
         <div className="truncate text-xs text-slate-500">{[i.categoria, i.cuenta, i.nota].filter(Boolean).join(" · ")}</div>
       </div>
       <div className="text-right sm:col-start-4 sm:row-start-1">
-        <div className="font-semibold tabular-nums text-slate-900">{plata(i.monto, i.moneda)}</div>
-        <div className="text-[11px] text-slate-400">{i.estado === "parcial" ? `falta ${plata(i.falta, i.moneda)}` : i.boleta !== null ? "de la boleta" : ""}</div>
+        <div className="font-semibold tabular-nums text-slate-900">{plata(parte?.monto ?? i.monto, i.moneda)}</div>
+        <div className="text-[11px] text-slate-400">
+          {parte ? `de ${plata(i.monto, i.moneda)}` : i.estado === "parcial" ? `falta ${plata(i.falta, i.moneda)}` : i.boleta !== null ? "de la boleta" : ""}
+        </div>
       </div>
       <div className="flex min-w-0 items-center gap-2 text-xs text-slate-500 sm:col-start-3 sm:row-start-1">
         <span className={`sm:hidden ${i.vencido ? "font-medium text-red-600" : ""}`}>{diaMes(i.vence)} ·</span>
-        <span className={`truncate rounded-md px-2 py-0.5 ${i.tipo === "negocio" ? "bg-indigo-50 text-indigo-700" : "bg-slate-100 text-slate-600"}`}>{i.lugar}</span>
+        <span
+          title={i.partes.length > 1 ? i.partes.map((p) => `${p.lugar}: ${plata(p.monto, i.moneda)}`).join(" · ") : undefined}
+          className={`truncate rounded-md px-2 py-0.5 ${i.alcance === "repartido" ? "bg-amber-50 text-amber-800" : i.tipo === "negocio" ? "bg-indigo-50 text-indigo-700" : "bg-slate-100 text-slate-600"}`}
+        >
+          {i.alcance === "general" ? `General · ${i.tipo}` : i.lugar}
+        </span>
       </div>
       <div className="col-start-2 row-start-2 flex items-center justify-end gap-1 sm:col-start-5 sm:row-start-1">
         {pendiente ? (
@@ -318,13 +329,18 @@ function ModalDelMes({ i, onCerrar }: { i: ItemPago; onCerrar: () => void }) {
 
 function ModalSuelto({ config, periodo, onCerrar }: { config: ConfigPagos; periodo: string; onCerrar: () => void }) {
   const hoy = ahora().toISODate()!;
-  const [f, setF] = useState({ nombre: "", lugarId: "", categoria: "Otros", monto: "", moneda: "ARS", fecha: hoy.startsWith(periodo) ? hoy : `${periodo}-01`, medio: "", nota: "", pagado: true });
+  const [f, setF] = useState({ nombre: "", lugarId: "general-personal", categoria: "Otros", monto: "", moneda: "ARS", fecha: hoy.startsWith(periodo) ? hoy : `${periodo}-01`, medio: "", nota: "", pagado: true });
   const accion = useAccion();
   const campo = (k: keyof typeof f) => ({ value: String(f[k]), onChange: (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value }) });
   const n = aNumero(f.monto);
   const guardar = async () => {
     if (n === null) return;
-    const ok = await accion(() => post("/api/pagos", { ...f, monto: n, lugarId: f.lugarId ? Number(f.lugarId) : null }), "Pago anotado");
+    // "general-personal" / "general-negocio": sin lugar físico.
+    const general = f.lugarId.startsWith("general-");
+    const ok = await accion(
+      () => post("/api/pagos", { ...f, monto: n, lugarId: general ? null : Number(f.lugarId), tipo: general ? f.lugarId.slice(8) : undefined }),
+      "Pago anotado",
+    );
     if (ok) onCerrar();
   };
   return (
@@ -349,14 +365,15 @@ function ModalSuelto({ config, periodo, onCerrar }: { config: ConfigPagos; perio
           <input className="campo" autoFocus placeholder="Arreglo de la heladera" {...campo("nombre")} />
         </label>
         <label className="block">
-          <span className="etiqueta">Lugar</span>
+          <span className="etiqueta">A qué corresponde</span>
           <select className="campo" {...campo("lugarId")}>
-            <option value="">Sin lugar</option>
             {config.lugares.map((l) => (
               <option key={l.id} value={l.id}>
                 {l.nombre}
               </option>
             ))}
+            <option value="general-personal">General · personal</option>
+            <option value="general-negocio">General · negocio</option>
           </select>
         </label>
         <label className="block">

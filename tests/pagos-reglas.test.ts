@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aCsv, alertasDelMes, esperadoDe, estadoDe, sumarMeses, tocaEnMes, venceEn } from "../src/servicios/pagos-reglas.js";
+import { aCsv, alertasDelMes, errorDeReparto, esperadoDe, estadoDe, repartir, sumarMeses, tocaEnMes, venceEn } from "../src/servicios/pagos-reglas.js";
 
 describe("reglas de Pagos", () => {
   it("en qué meses toca cada pago según su frecuencia", () => {
@@ -47,11 +47,25 @@ describe("reglas de Pagos", () => {
     ]);
   });
 
+  it("repartir en partes iguales o por porcentaje, con los centavos que cierran justo", () => {
+    expect(repartir(85000, [1, 2, 3, 4, 5].map((lugarId) => ({ lugarId, porcentaje: null }))).map((p) => p.monto)).toEqual([17000, 17000, 17000, 17000, 17000]);
+    expect(repartir(100, [1, 2, 3].map((lugarId) => ({ lugarId, porcentaje: null }))).map((p) => p.monto)).toEqual([33.33, 33.33, 33.34]);
+    expect(repartir(85000, [{ lugarId: 1, porcentaje: 40 }, { lugarId: 2, porcentaje: 30 }, { lugarId: 3, porcentaje: 30 }]).map((p) => [p.monto, p.porcentaje])).toEqual([
+      [34000, 40],
+      [25500, 30],
+      [25500, 30],
+    ]);
+    expect(errorDeReparto([{ lugarId: 1, porcentaje: null }])).toContain("al menos 2");
+    expect(errorDeReparto([{ lugarId: 1, porcentaje: 50 }, { lugarId: 2, porcentaje: null }])).toContain("de todos los lugares, o de ninguno");
+    expect(errorDeReparto([{ lugarId: 1, porcentaje: 50 }, { lugarId: 2, porcentaje: 40 }])).toContain("sumar 100");
+    expect(errorDeReparto([{ lugarId: 1, porcentaje: null }, { lugarId: 2, porcentaje: null }])).toBeNull();
+  });
+
   it("el CSV abre bien en Excel: punto y coma, coma decimal y tildes", () => {
     const csv = aCsv([
-      { periodo: "2026-11", vence: "2026-11-10", lugar: "Fontana", tipo: "Negocio", categoria: "Alquiler", nombre: "Alquiler; local", moneda: "ARS", esperado: 800000, pagado: 800000.5, estado: "pagado", pagadoEn: "2026-11-09", medio: "Transferencia", nota: "" },
+      { periodo: "2026-11", vence: "2026-11-10", lugar: "Fontana", tipo: "Negocio", categoria: "Alquiler", nombre: "Alquiler; local", moneda: "ARS", esperado: 800000, pagado: 800000.5, estado: "pagado", pagadoEn: "2026-11-09", medio: "Transferencia", reparto: "", nota: "" },
     ]);
     expect(csv.startsWith("﻿Mes;Vence;Lugar;Tipo;Categoría;Pago")).toBe(true);
-    expect(csv).toContain('2026-11;10/11/2026;Fontana;Negocio;Alquiler;"Alquiler; local";ARS;800000,00;800000,50;Pagado;09/11/2026;Transferencia;');
+    expect(csv).toContain('2026-11;10/11/2026;Fontana;Negocio;Alquiler;"Alquiler; local";ARS;800000,00;800000,50;Pagado;09/11/2026;Transferencia;;');
   });
 });

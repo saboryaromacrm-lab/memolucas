@@ -276,7 +276,8 @@ function herramientas(origen: Canal) {
       description: "Anota un pago que no está entre los que paga siempre (un arreglo, una compra, una multa). ya_pagado=false si es para pagar en esa fecha.",
       inputSchema: z.object({
         nombre: z.string(),
-        lugar: z.string().optional().describe("Local, Casa, Auto, Personal…"),
+        lugar: z.string().optional().describe('El local o la casa; sin lugar físico (o "general"), va como general'),
+        de_negocio: z.boolean().optional().describe("Si es general: true si es del negocio (si no, personal)"),
         categoria: z.string().optional(),
         monto: z.number(),
         moneda: z.enum(["ARS", "USD"]).optional(),
@@ -286,11 +287,13 @@ function herramientas(origen: Canal) {
       }),
       run: (p) =>
         seguro(async () => {
-          const lugar = p.lugar ? (await listarLugares()).find((l) => normalizar(l.nombre) === normalizar(p.lugar!)) : undefined;
-          if (p.lugar && !lugar) return `Error: no tengo el lugar «${p.lugar}». Sus lugares: ${(await listarLugares()).map((l) => l.nombre).join(", ")}.`;
+          const conLugar = p.lugar && !/general/i.test(p.lugar) ? p.lugar : null;
+          const lugar = conLugar ? (await listarLugares()).find((l) => normalizar(l.nombre) === normalizar(conLugar)) : undefined;
+          if (conLugar && !lugar) return `Error: no tengo el lugar «${conLugar}». Sus lugares: ${(await listarLugares()).map((l) => l.nombre).join(", ")} (o "general").`;
           const r = await crearSuelto({
             nombre: p.nombre,
             lugarId: lugar?.id ?? null,
+            tipo: p.de_negocio ? "negocio" : "personal",
             categoria: p.categoria ?? "Otros",
             monto: p.monto,
             moneda: p.moneda ?? "ARS",
