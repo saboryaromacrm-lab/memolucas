@@ -1,0 +1,1 @@
+ALTER TABLE "bloc_pestana" ADD COLUMN "resaltados" jsonb DEFAULT '[]'::jsonb NOT NULL;

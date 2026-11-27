@@ -173,6 +173,8 @@ export const blocPestana = pgTable("bloc_pestana", {
   version: integer("version").notNull().default(1),
   /** Fijada en pantalla: en la compu, en la ventanita que queda encima de todo; en el celular, arriba del Bloc. */
   fijada: boolean("fijada").notNull().default(false),
+  /** Lo resaltado: tramos del texto (desde, hasta), aparte para que el texto quede limpio al copiarlo. */
+  resaltados: jsonb("resaltados").$type<{ desde: number; hasta: number }[]>().notNull().default([]),
   cerradaEn: ts("cerrada_en"),
   creadoEn: creadoEn(),
   actualizadoEn: ts("actualizado_en").notNull().defaultNow(),

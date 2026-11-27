@@ -219,9 +219,12 @@ export function MenuAcciones({
   acciones,
   etiqueta = "Acciones",
   abreHacia = "izquierda",
+  boton,
 }: {
   acciones: (AccionMenu | false | null | undefined)[];
   etiqueta?: string;
+  /** Lo que se ve en el botón (de entrada, los tres puntitos). */
+  boton?: ReactNode;
   /** Para qué lado se despliega la lista (a la derecha cuando el botón está pegado al borde izquierdo). */
   abreHacia?: "izquierda" | "derecha";
 }) {
@@ -245,8 +248,9 @@ export function MenuAcciones({
         className="flex size-10 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700"
         aria-label={etiqueta}
         aria-expanded={abierto}
+        title={boton ? etiqueta : undefined}
       >
-        <MoreVertical className="size-5" />
+        {boton ?? <MoreVertical className="size-5" />}
       </button>
       {abierto && (
         <div className={`absolute top-10 z-20 w-52 overflow-hidden rounded-xl border border-slate-200 bg-white py-1 text-sm shadow-lg ${abreHacia === "derecha" ? "left-0" : "right-0"}`}>

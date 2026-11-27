@@ -16,7 +16,8 @@ const MINUTOS_ENTRE_VERSIONES = 5;
 export const DIAS_PAPELERA = 30;
 const SIN_TITULO = "Sin título";
 
-export type Pestana = { id: number; titulo: string; texto: string; orden: number; version: number; fijada: boolean; actualizadoEn: Date };
+export type Resaltado = { desde: number; hasta: number };
+export type Pestana = { id: number; titulo: string; texto: string; orden: number; version: number; fijada: boolean; resaltados: Resaltado[]; actualizadoEn: Date };
 export type ImagenBloc = { id: number; ancho: number; alto: number };
 
 const leer = (cifrado: string) => descifrar(cifrado) ?? "(no se pudo descifrar)";
@@ -27,6 +28,7 @@ const aPestana = (f: typeof blocPestana.$inferSelect): Pestana => ({
   orden: f.orden,
   version: f.version,
   fijada: f.fijada,
+  resaltados: f.resaltados,
   actualizadoEn: f.actualizadoEn,
 });
 
@@ -79,7 +81,7 @@ async function recortarVersiones(pestanaId: number) {
  * Guarda lo que se escribió. version: la que tenía la pantalla al empezar a escribir. Si en el medio otro dispositivo
  * guardó (la versión ya no coincide), lo que había va al historial y gana lo nuevo: conflicto = true para avisar.
  */
-export async function guardarPestana(id: number, d: { texto?: string; titulo?: string; version: number }): Promise<{ version: number; conflicto: boolean }> {
+export async function guardarPestana(id: number, d: { texto?: string; titulo?: string; resaltados?: Resaltado[]; version: number }): Promise<{ version: number; conflicto: boolean }> {
   const r = await db.transaction(async (tx) => {
     const [f] = await tx.select().from(blocPestana).where(eq(blocPestana.id, id)).for("update");
     if (!f) throw new ErrorUsuario("Esa pestaña ya no existe.");
@@ -97,6 +99,7 @@ export async function guardarPestana(id: number, d: { texto?: string; titulo?: s
       .set({
         ...(d.texto !== undefined ? { textoCifrado: cifrar(d.texto) } : {}),
         ...(d.titulo !== undefined ? { tituloCifrado: cifrar(d.titulo.trim() || SIN_TITULO) } : {}),
+        ...(d.resaltados !== undefined ? { resaltados: d.resaltados } : {}),
         version: f.version + 1,
         actualizadoEn: new Date(),
       })
@@ -169,7 +172,8 @@ export async function restaurarVersion(id: number, versionId: number): Promise<P
   await db.insert(blocVersion).values({ pestanaId: id, textoCifrado: f.textoCifrado, motivo: "antes_de_restaurar", creadoEn: new Date() });
   const [n] = await db
     .update(blocPestana)
-    .set({ textoCifrado: v.textoCifrado, version: f.version + 1, actualizadoEn: new Date() })
+    // Con otro texto, lo resaltado ya no coincide: se saca.
+    .set({ textoCifrado: v.textoCifrado, resaltados: [], version: f.version + 1, actualizadoEn: new Date() })
     .where(eq(blocPestana.id, id))
     .returning();
   await recortarVersiones(id);

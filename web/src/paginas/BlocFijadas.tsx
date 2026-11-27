@@ -49,7 +49,8 @@ export function useVentanaFlotante() {
   const abrir = async () => {
     const pip = api();
     if (!pip) return;
-    if (pip.window) return setVentana(pip.window);
+    // Ya abierta: se trae al frente.
+    if (pip.window) return (pip.window.focus(), setVentana(pip.window));
     const v = await pip.requestWindow({ width: tamano.ancho, height: tamano.alto });
     copiarEstilos(v.document);
     v.document.title = "Bloc · fijadas";
