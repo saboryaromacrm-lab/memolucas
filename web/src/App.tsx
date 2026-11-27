@@ -4,6 +4,7 @@ import { ProveedorEditor } from "./componentes/Editor";
 import { Layout } from "./componentes/Layout";
 import { Cargando, ProveedorAvisos } from "./componentes/ui";
 import { get } from "./lib/api";
+import { esAppBloc } from "./lib/instalar";
 import { fijarZona } from "./lib/fechas";
 import { cerrarVivo } from "./lib/vivo";
 import { Calculadoras } from "./paginas/Calculadoras";
@@ -45,14 +46,13 @@ export function App() {
   return (
     <ProveedorAvisos>
       {!sesion ? (
-        <Login onIngreso={() => setSesion(true)} />
+        <Login bloc={esAppBloc()} onIngreso={() => setSesion(true)} />
       ) : (
         <BrowserRouter>
           <ProveedorEditor>
+            {/* En su propia dirección, el Bloc es una app aparte: solo las pestañas y el texto, sin el panel. */}
             <Routes>
-              {/* El Bloc como app aparte: solo las pestañas y el texto, sin el menú del panel. */}
-              <Route path="/app/bloc" element={<Bloc comoApp />} />
-              <Route path="*" element={<Panel />} />
+              <Route path="*" element={esAppBloc() ? <Bloc comoApp /> : <Panel />} />
             </Routes>
           </ProveedorEditor>
         </BrowserRouter>

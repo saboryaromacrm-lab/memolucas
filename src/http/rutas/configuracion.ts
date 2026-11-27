@@ -68,6 +68,8 @@ export async function configPublica() {
     groqKeyEntorno: !!entorno.groqApiKey,
     modelos: MODELOS,
     esfuerzos: ESFUERZOS,
+    /** Donde se abre e instala el Bloc como app aparte. */
+    urlBloc: `https://${entorno.dominioBloc}/`,
     plantillasDefecto: PLANTILLAS_DEFECTO,
   };
 }

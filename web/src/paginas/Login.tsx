@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { Delete, Lock } from "lucide-react";
 import { post } from "../lib/api";
 
-export function Login({ onIngreso }: { onIngreso: () => void }) {
+/** bloc: el ingreso del Bloc en su propia dirección (con su ícono y su nombre). */
+export function Login({ bloc = false, onIngreso }: { bloc?: boolean; onIngreso: () => void }) {
   const [pin, setPin] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
@@ -35,8 +36,8 @@ export function Login({ onIngreso }: { onIngreso: () => void }) {
     <div className="flex min-h-full items-center justify-center bg-gradient-to-b from-white to-slate-100 px-4 py-10">
       <div className="w-full max-w-xs">
         <div className="mb-8 flex flex-col items-center text-center">
-          <img src="/icono.svg" alt="" className="mb-3 size-14 rounded-2xl shadow-sm" />
-          <h1 className="text-xl font-semibold text-slate-900">Memolucas</h1>
+          <img src={bloc ? "/bloc.svg" : "/icono.svg"} alt="" className="mb-3 size-14 rounded-2xl shadow-sm" />
+          <h1 className="text-xl font-semibold text-slate-900">{bloc ? "Bloc" : "Memolucas"}</h1>
           <p className="mt-1 flex items-center gap-1 text-sm text-slate-500">
             <Lock className="size-3.5" /> Ingresá tu PIN
           </p>

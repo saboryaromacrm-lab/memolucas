@@ -11,12 +11,15 @@ if (typeof window !== "undefined")
     oyentes.forEach((o) => o());
   });
 
+/** La página es la del Bloc en su propia dirección (el servidor la marca): se abre solo el Bloc, sin el panel. */
+export const esAppBloc = () => typeof document !== "undefined" && !!document.querySelector('meta[name="app"][content="bloc"]');
+
 /** Abierta como app instalada (ventana propia, sin la barra del navegador). */
 export const comoAppInstalada = () => typeof window !== "undefined" && window.matchMedia("(display-mode: standalone)").matches;
 
 /**
  * Instalar como app de la compu o del celular (ícono propio, ventana propia): la del manifiesto de la página (el panel,
- * o el Bloc en /app/bloc). null si el navegador no lo ofrece o ya está instalada.
+ * o el Bloc en su propia dirección). null si el navegador no lo ofrece o ya está instalada.
  */
 export function useInstalar(): (() => Promise<void>) | null {
   const [, refrescar] = useState(0);

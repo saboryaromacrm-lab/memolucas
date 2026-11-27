@@ -8,7 +8,6 @@ import {
   ChevronDown,
   ChevronUp,
   ClipboardCopy,
-  ExternalLink,
   History,
   ImagePlus,
   MonitorDown,
@@ -26,6 +25,7 @@ import { api, del, get, post, put } from "../lib/api";
 import { fechaHora, haceCuanto } from "../lib/fechas";
 import { comoAppInstalada, useInstalar } from "../lib/instalar";
 import { useRecordado } from "../lib/recordado";
+import type { Configuracion } from "../lib/tipos";
 import { useDatos } from "../lib/vivo";
 import { IMAGEN_MAX_MB, TiraImagenes, VisorImagen, type ImagenBloc } from "./BlocImagenes";
 
@@ -40,7 +40,7 @@ const TAMANOS = [12, 14, 16, 18, 20, 24];
  * El Bloc: pestañas de texto que se guardan solas, como el Bloc de notas de la compu. Lo que escribís en un
  * dispositivo aparece solo en el otro; si escribís en los dos a la vez, nada se pierde (va al historial).
  */
-/** comoApp: el Bloc instalado como app aparte (/app/bloc), a pantalla completa y sin el menú del panel. */
+/** comoApp: el Bloc como app aparte (en su propia dirección), a pantalla completa y sin el menú del panel. */
 export function Bloc({ comoApp = false }: { comoApp?: boolean }) {
   const { datos } = useDatos<Pestana[]>("/api/bloc", ["bloc"]);
   const [activa, setActiva] = useRecordado("bloc-activa", { id: 0 });
@@ -57,6 +57,8 @@ export function Bloc({ comoApp = false }: { comoApp?: boolean }) {
   const accion = useAccion();
   const avisar = useAviso();
   const instalar = useInstalar();
+  // Donde se instala como app aparte (solo lo usa el botón del panel).
+  const urlBloc = useDatos<Pick<Configuracion, "urlBloc">>(comoApp ? null : "/api/configuracion", []).datos?.urlBloc;
   const archivo = useRef<HTMLInputElement>(null);
   const imagen = useRef<HTMLInputElement>(null);
 
@@ -225,9 +227,6 @@ export function Bloc({ comoApp = false }: { comoApp?: boolean }) {
               </Boton>
             )}
             {acciones}
-            <Boton chico icono={<ExternalLink className="size-4" />} onClick={() => window.open("/", "_blank", "noopener")}>
-              Abrir el panel
-            </Boton>
           </div>
           {!instalar && !comoAppInstalada() && (
             <p className="w-full text-xs text-slate-500">
@@ -242,7 +241,7 @@ export function Bloc({ comoApp = false }: { comoApp?: boolean }) {
           subtitulo="Se guarda solo. Lo ves igual en la compu y en el celular."
           acciones={
             <>
-              <Boton icono={<MonitorDown className="size-4" />} onClick={() => window.open("/app/bloc", "_blank", "noopener")}>
+              <Boton icono={<MonitorDown className="size-4" />} disabled={!urlBloc} onClick={() => window.open(urlBloc, "_blank", "noopener")}>
                 Instalar como app
               </Boton>
               {acciones}

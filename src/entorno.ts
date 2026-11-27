@@ -10,6 +10,8 @@ export const entorno = {
   groqApiKey: process.env.GROQ_API_KEY ?? "",
   appSecret: process.env.APP_SECRET ?? "",
   dataDir: path.resolve(process.env.DATA_DIR ?? "./data"),
+  /** Dirección propia del Bloc: ahí se abre y se instala como una app aparte del panel. */
+  dominioBloc: (process.env.DOMINIO_BLOC ?? "blocdenotas.saboryaroma.com").toLowerCase(),
 };
 
 export const rutas = {

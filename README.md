@@ -109,6 +109,8 @@ El VPS usa **Dokploy**: Memolucas corre como una app más, junto a las otras, co
 
 En hPanel, zona DNS de `saboryaroma.com`: creá un registro **A** con nombre `memolucas` que apunte a la IP del VPS.
 
+Para el **Bloc como app aparte**, creá también un registro **A** con nombre `blocdenotas` que apunte a la misma IP.
+
 ### 2. Base de datos
 
 En Dokploy:
@@ -127,6 +129,7 @@ En Dokploy:
 | Environment | ver abajo |
 | Advanced → Volumes | Volume Mount `memolucas-data` en `/app/data` (sesión de WhatsApp y fotos) |
 | Domains | Host `memolucas.saboryaroma.com`, path `/`, Container Port `3000`, HTTPS con Let's Encrypt |
+| Domains (2.º) | Host `blocdenotas.saboryaroma.com`, path `/`, Container Port `3000`, HTTPS con Let's Encrypt: el Bloc solo, para instalarlo aparte |
 
 Variables de entorno:
 

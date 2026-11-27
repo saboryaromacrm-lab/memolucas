@@ -40,12 +40,20 @@ declare module "@fastify/jwt" {
   }
 }
 
-/** /app/bloc: el Bloc como app aparte (se instala con su nombre y su ícono, sin el resto del panel). */
-const esAppBloc = (url: string) => /^\/app\/bloc(?:[/?#]|$)/.test(url);
+/**
+ * Qué página va. El Bloc tiene su propia dirección (otro dominio): así el navegador lo instala como una app aparte,
+ * sin mezclarse con el panel. La dirección vieja (/app/bloc) lleva a la nueva.
+ */
+export function paginaPara(host: string, url: string): "bloc" | "panel" | { redirigir: string } {
+  if (host.toLowerCase() === entorno.dominioBloc) return "bloc";
+  if (/^\/app\/bloc(?:[/?#]|$)/.test(url)) return { redirigir: `https://${entorno.dominioBloc}/` };
+  return "panel";
+}
 
-/** La misma página del panel, con el manifiesto, el título y los íconos del Bloc. */
+/** La misma página del panel, con el manifiesto, el título y los íconos del Bloc (y la marca para abrir solo el Bloc). */
 export function htmlDelBloc(indice: string): string {
   return indice
+    .replace('<meta charset="UTF-8" />', '<meta charset="UTF-8" />\n    <meta name="app" content="bloc" />')
     .replace('href="/manifest.webmanifest"', 'href="/bloc.webmanifest"')
     .replace('name="apple-mobile-web-app-title" content="Memolucas"', 'name="apple-mobile-web-app-title" content="Bloc"')
     .replace('rel="apple-touch-icon" href="/icono-192.png"', 'rel="apple-touch-icon" href="/bloc-192.png"')
@@ -150,7 +158,9 @@ export async function crearServidor() {
     app.get("/*", async (req, reply) => {
       if (req.url.startsWith("/api/")) return reply.code(404).send({ error: "No existe" });
       reply.header("Cache-Control", "no-cache");
-      if (esAppBloc(req.url)) return reply.type("text/html; charset=utf-8").send(indiceBloc);
+      const pagina = paginaPara(req.hostname, req.url);
+      if (pagina === "bloc") return reply.type("text/html; charset=utf-8").send(indiceBloc);
+      if (pagina !== "panel") return reply.redirect(pagina.redirigir);
       return reply.sendFile("index.html");
     });
   }
