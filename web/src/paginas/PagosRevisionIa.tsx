@@ -10,19 +10,24 @@ import { ModalFijo } from "./PagosFijo";
 
 // La revisión de lo que propone la IA de Pagos (en Configuración y en «Cargar con IA» del mes): el mes, cada renglón
 // con todos sus datos y cómo figuraba, editarlo con el formulario completo, avisos de duplicados, agregar a mano, el
-// resumen por lugar contra el total de la imagen y, al aplicar, recordar las correcciones para la próxima.
+// resumen por lugar contra el total de la imagen y, al aplicar, recordar las correcciones para la próxima. También
+// corrige una carga ya aplicada (desde «Cargas con IA»).
 
 /** A qué pago va un monto: al de un concepto de todos los meses o a un pago puntual del mes leído. */
 export type Destino = { fijoId: number } | { itemId: number; nombre: string; lugar: string };
 
-export type FilaIa =
+/**
+ * elegido: si arranca tildado (de entrada, todo menos lo que se borra). pagadoCon: ya está pagado con esa forma
+ * («Lo pagó: Contadora»): al aplicar queda pagado.
+ */
+export type FilaIa = (
   /** ia: lo que propuso la IA (null si lo agregaste a mano): para saber qué corregiste. */
   | { tipo: "nuevo"; fijo: FijoPropuesto; ia: FijoPropuesto | null }
   | { tipo: "cambio"; antes: FijoPago; fijo: FijoPropuesto; ia: FijoPropuesto }
   | { tipo: "borrar"; antes: FijoPago }
-  | { tipo: "monto"; destino: Destino; monto: number; antes: number | null; pagado: boolean; original: string; ia: Destino | null };
-/** pagadoCon: ya está pagado con esa forma («Lo pagó: Contadora»): al aplicar queda pagado. */
-type Fila = FilaIa & { clave: number; elegido: boolean; pagadoCon?: number };
+  | { tipo: "monto"; destino: Destino; monto: number; antes: number | null; pagado: boolean; original: string; ia: Destino | null }
+) & { elegido?: boolean; pagadoCon?: number };
+type Fila = FilaIa & { clave: number; elegido: boolean };
 
 type Alcanzable = { alcance: AlcancePago; lugarId: number | null; tipo: TipoLugar | null; reparto: RepartoPago | null; lugarNuevo?: { nombre: string } };
 
@@ -67,6 +72,8 @@ export function RevisionIa({
   periodoLeido,
   totalImagen,
   mensaje,
+  cargaId,
+  propios,
   onCerrar,
   onListo,
 }: {
@@ -79,11 +86,15 @@ export function RevisionIa({
   periodoLeido?: string;
   totalImagen: number | null;
   mensaje: string;
+  /** La lectura de la IA (así lo aplicado queda en «Cargas con IA»). */
+  cargaId?: number;
+  /** Corregir una carga: los conceptos que creó (no cuentan como parecidos ni como destino). Al guardar, se deshace lo que hizo y se aplica esto. */
+  propios?: number[];
   onCerrar: () => void;
   onListo: () => void;
 }) {
   const [periodo, setPeriodo] = useState(periodoInicial);
-  const [filas, setFilas] = useState<Fila[]>(() => iniciales.map((f, k) => ({ ...f, clave: k, elegido: f.tipo !== "borrar" })));
+  const [filas, setFilas] = useState<Fila[]>(() => iniciales.map((f, k) => ({ ...f, clave: k, elegido: f.elegido ?? f.tipo !== "borrar" })));
   const [editando, setEditando] = useState<{ clave: number | null; inicial?: FijoPropuesto } | null>(null);
   const [recordar, setRecordar] = useState<string | null>(null);
   const [plegados, setPlegados] = useState<Set<string>>(new Set());
@@ -92,6 +103,9 @@ export function RevisionIa({
   // Quienes pagan cosas por vos (Cuentas): en el mes se puede marcar que ya lo pagaron.
   const terceros = modo === "mes" ? config.formas.filter((f) => f.tipo === "tercero" && !f.archivada) : [];
 
+  const corrigiendo = !!propios;
+  /** Los conceptos que ya tenés (al corregir, sin los que creó esa carga: se van a volver a crear). */
+  const tuyos = config.fijos.filter((f) => !propios?.includes(f.id));
   const alcTexto = (a: Alcanzable) => (a.lugarNuevo ? a.lugarNuevo.nombre : describirAlcance(a, config.lugares));
   const fijoDe = (id: number) => config.fijos.find((f) => f.id === id);
   const nombreDestino = (d: Destino) => {
@@ -103,7 +117,7 @@ export function RevisionIa({
   const fueraDeMes = (f: Fila) => f.tipo === "monto" && "itemId" in f.destino && periodo !== periodoLeido;
   const valeAplicar = (f: Fila) => f.elegido && !fueraDeMes(f) && !(f.tipo === "monto" && "fijoId" in f.destino && !fijoDe(f.destino.fijoId));
   const aplicables = filas.filter(valeAplicar);
-  const parecido = (f: FijoPropuesto) => config.fijos.find((x) => sinTildes(x.nombre) === sinTildes(f.nombre) && claveAlcance(x) === claveAlcance(f));
+  const parecido = (f: FijoPropuesto) => tuyos.find((x) => sinTildes(x.nombre) === sinTildes(f.nombre) && claveAlcance(x) === claveAlcance(f));
   const detalle = (f: FijoPropuesto) =>
     [
       f.categoria,
@@ -212,30 +226,29 @@ export function RevisionIa({
 
   const aplicar = async () => {
     const elegidas = aplicables;
-    const ok =
+    const cambios =
       modo === "config"
-        ? await accion(
-            () =>
-              post("/api/pagos/fijos/aplicar", {
-                nuevos: elegidas.flatMap((f) => (f.tipo === "nuevo" ? [{ ...f.fijo, desde: periodo }] : [])),
-                cambios: elegidas.flatMap((f) => (f.tipo === "cambio" ? [{ id: f.antes.id, ...f.fijo }] : [])),
-                borrar: elegidas.flatMap((f) => (f.tipo === "borrar" ? [f.antes.id] : [])),
-              }),
-            `Listo: ${elegidas.length} ${elegidas.length === 1 ? "cambio aplicado" : "cambios aplicados"}`,
-          )
-        : await accion(
-            () =>
-              post("/api/pagos/mes/aplicar", {
-                periodo,
-                montos: elegidas.flatMap((f) =>
-                  f.tipo === "monto" && (f.monto !== f.antes || f.pagadoCon)
-                    ? [{ ...("fijoId" in f.destino ? { fijoId: f.destino.fijoId } : { itemId: f.destino.itemId }), monto: f.monto, ...(f.pagadoCon ? { pagadoCon: f.pagadoCon } : {}) }]
-                    : [],
-                ),
-                nuevos: elegidas.flatMap((f) => (f.tipo === "nuevo" ? [{ ...f.fijo, ...(f.pagadoCon ? { pagadoCon: f.pagadoCon } : {}) }] : [])),
-              }),
-            `Listo: cargado en ${nombreMes(periodo).toLowerCase()}`,
-          );
+        ? {
+            nuevos: elegidas.flatMap((f) => (f.tipo === "nuevo" ? [{ ...f.fijo, desde: periodo }] : [])),
+            cambios: elegidas.flatMap((f) => (f.tipo === "cambio" ? [{ id: f.antes.id, ...f.fijo }] : [])),
+            borrar: elegidas.flatMap((f) => (f.tipo === "borrar" ? [f.antes.id] : [])),
+          }
+        : {
+            periodo,
+            montos: elegidas.flatMap((f) =>
+              f.tipo === "monto" && (f.monto !== f.antes || f.pagadoCon)
+                ? [{ ...("fijoId" in f.destino ? { fijoId: f.destino.fijoId } : { itemId: f.destino.itemId }), monto: f.monto, ...(f.pagadoCon ? { pagadoCon: f.pagadoCon } : {}) }]
+                : [],
+            ),
+            nuevos: elegidas.flatMap((f) => (f.tipo === "nuevo" ? [{ ...f.fijo, ...(f.pagadoCon ? { pagadoCon: f.pagadoCon } : {}) }] : [])),
+          };
+    const ok = await accion(
+      () =>
+        corrigiendo
+          ? post(`/api/pagos/cargas/${cargaId}/corregir`, cambios)
+          : post(modo === "config" ? "/api/pagos/fijos/aplicar" : "/api/pagos/mes/aplicar", { ...cambios, ...(cargaId ? { cargaId } : {}) }),
+      corrigiendo ? "Listo: carga corregida" : modo === "config" ? `Listo: ${elegidas.length} ${elegidas.length === 1 ? "cambio aplicado" : "cambios aplicados"}` : `Listo: cargado en ${nombreMes(periodo).toLowerCase()}`,
+    );
     if (!ok) return;
     const lineas = correcciones();
     if (lineas.length) setRecordar(lineas.join("\n"));
@@ -285,7 +298,7 @@ export function RevisionIa({
                 aria-label="A qué pago va"
               >
                 {"itemId" in f.destino && <option value={`i:${f.destino.itemId}`}>{nombreDestino(f.destino)}</option>}
-                {[...config.fijos]
+                {[...tuyos]
                   .sort((a, b) => a.nombre.localeCompare(b.nombre))
                   .map((x) => (
                     <option key={x.id} value={`f:${x.id}`}>
@@ -400,13 +413,13 @@ export function RevisionIa({
     <Modal
       abierto
       onCerrar={onCerrar}
-      titulo={`Revisá lo que propone la IA (${filas.length})`}
+      titulo={corrigiendo ? `Corregí la carga (${filas.length})` : `Revisá lo que propone la IA (${filas.length})`}
       ancho="max-w-4xl"
       pie={
         <>
           <Boton onClick={onCerrar}>Cancelar</Boton>
           <Boton variante="primario" disabled={!aplicables.length} onClick={() => void aplicar()}>
-            Aplicar {aplicables.length}
+            {corrigiendo ? "Guardar la corrección" : `Aplicar ${aplicables.length}`}
           </Boton>
         </>
       }
@@ -419,7 +432,11 @@ export function RevisionIa({
         </label>
         {mensaje && <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">{mensaje}</p>}
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-sm text-slate-500">Destildá lo que no va y tocá el lápiz para corregir cualquier dato. Lo que se borra viene destildado.</p>
+          <p className="text-sm text-slate-500">
+            {corrigiendo
+              ? "Es lo que hizo la carga. Destildá lo que no va y tocá el lápiz para corregir: al guardar se deshace lo anterior y queda esto."
+              : "Destildá lo que no va y tocá el lápiz para corregir cualquier dato. Lo que se borra viene destildado."}
+          </p>
           <div className="flex gap-1">
             <Boton variante="fantasma" chico onClick={() => todos(true)}>
               Elegir todos
@@ -469,11 +486,11 @@ export function RevisionIa({
           <Boton chico icono={<Plus className="size-3.5" />} onClick={() => setEditando({ clave: null })}>
             Agregar otro pago
           </Boton>
-          {modo === "mes" && config.fijos.length > 0 && (
+          {modo === "mes" && tuyos.length > 0 && (
             <Boton
               chico
               icono={<Plus className="size-3.5" />}
-              onClick={() => setFilas((fs) => [...fs, { tipo: "monto", destino: { fijoId: config.fijos[0].id }, monto: 0, antes: null, pagado: false, original: "", ia: null, clave: siguiente, elegido: true }])}
+              onClick={() => setFilas((fs) => [...fs, { tipo: "monto", destino: { fijoId: tuyos[0].id }, monto: 0, antes: null, pagado: false, original: "", ia: null, clave: siguiente, elegido: true }])}
             >
               Monto a un pago que ya tengo
             </Boton>

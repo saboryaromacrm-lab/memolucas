@@ -3,17 +3,19 @@ import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import { Boton, Encabezado } from "../componentes/ui";
 import { nombreMes, periodoActual, sumarMeses } from "../lib/pagos";
 import { useRecordado } from "../lib/recordado";
+import { PagosCargas } from "./PagosCargas";
 import { PagosConfig } from "./PagosConfig";
 import { PagosCuentas } from "./PagosCuentas";
 import { PagosMes } from "./PagosMes";
 import { PagosResumen } from "./PagosResumen";
 
-type Vista = "mes" | "resumen" | "cuentas" | "config";
+type Vista = "mes" | "resumen" | "cuentas" | "config" | "cargas";
 const VISTAS: [Vista, string][] = [
   ["mes", "Este mes"],
   ["resumen", "Resumen"],
   ["cuentas", "Cuentas"],
   ["config", "Configuración"],
+  ["cargas", "Cargas con IA"],
 ];
 
 /** Pagos: todo lo que pagás mes a mes en tus locales, tu casa y tus cosas. */
@@ -65,6 +67,7 @@ export function Pagos() {
       {vista.v === "resumen" && <PagosResumen periodo={periodo} />}
       {vista.v === "cuentas" && <PagosCuentas />}
       {vista.v === "config" && <PagosConfig />}
+      {vista.v === "cargas" && <PagosCargas />}
     </div>
   );
 }

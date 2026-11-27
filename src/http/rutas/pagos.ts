@@ -4,10 +4,8 @@ import { analizarMesPagos, ARCHIVO_IA_MAX_BYTES, armarFijosConIa, cargarMesConIa
 import { actualizarConfig, obtenerConfig } from "../../servicios/configuracion.js";
 import {
   actualizarFijo,
-  aplicarFijos,
   actualizarLugar,
   actualizarPagoDelMes,
-  aplicarMes,
   borrarComprobante,
   borrarFijo,
   borrarLugar,
@@ -28,6 +26,7 @@ import {
   resumenPagos,
   verMes,
 } from "../../servicios/pagos.js";
+import { aplicarFijos, aplicarMes, corregirCarga, crearBorrador, deshacerCarga, leerArchivoCarga, listarCargas, paraCorregir, verDeshacer } from "../../servicios/pagos-cargas.js";
 import { actualizarPersona, borrarPagoAPersona, borrarPersona, crearPersona, listarCuentas, pagarAPersona } from "../../servicios/pagos-cuentas.js";
 import { actualizarForma, borrarForma, crearForma, listarFormas, ordenarFormas, TIPOS_FORMA } from "../../servicios/pagos-formas.js";
 import { borrarCategoria, crearCategoria, listarCategorias, ordenarCategorias, renombrarCategoria } from "../../servicios/pagos-categorias.js";
@@ -65,6 +64,26 @@ const Fijo = Alcance.extend({
   cuenta: z.string().max(120),
   avisoDias: z.number().int().min(-1).max(30).nullable(),
   nota: z.string().max(500),
+});
+
+const Propuesto = Fijo.extend({ lugarNuevo: Lugar.optional() });
+const IdFijo = z.number().int().positive();
+/** La lectura de la IA con la que va lo que aplicás (así queda en «Cargas con IA»). */
+const IdCarga = z.number().int().positive().optional();
+/** Lo que propuso la IA para los conceptos y revisaste: agrega, cambia y borra. */
+const CambiosFijos = z.object({ nuevos: z.array(Propuesto).max(200), cambios: z.array(Propuesto.extend({ id: IdFijo })).max(500), borrar: z.array(IdFijo).max(500) });
+/** Los montos de un mes: al pago de un concepto o a un pago puntual del mes, y lo que se crea. */
+const CambiosMes = z.object({
+  periodo: Periodo,
+  montos: z
+    .array(
+      z.union([
+        z.object({ fijoId: z.number().int().positive(), monto: Monto, pagadoCon: IdForma.optional() }),
+        z.object({ itemId: z.number().int().positive(), monto: Monto, pagadoCon: IdForma.optional() }),
+      ]),
+    )
+    .max(500),
+  nuevos: z.array(Propuesto.extend({ pagadoCon: IdForma.optional() })).max(200),
 });
 
 /** Lo que se le pasa a la IA: texto y, opcional, una foto o un PDF (en base64). */
@@ -159,11 +178,8 @@ export const rutasPagos: FastifyPluginAsync = async (app) => {
   app.post("/pagos/fijos", async (req) => crearFijo(Fijo.parse(req.body)));
   /** Lo que propuso la IA y revisaste: agrega (los lugares nuevos se crean), cambia y borra. */
   app.post("/pagos/fijos/aplicar", async (req) => {
-    const Propuesto = Fijo.extend({ lugarNuevo: Lugar.optional() });
-    const IdFijo = z.number().int().positive();
-    return aplicarFijos(
-      z.object({ nuevos: z.array(Propuesto).max(200), cambios: z.array(Propuesto.extend({ id: IdFijo })).max(500), borrar: z.array(IdFijo).max(500) }).parse(req.body),
-    );
+    const { cargaId, ...cambios } = CambiosFijos.extend({ cargaId: IdCarga }).parse(req.body);
+    return aplicarFijos(cambios, cargaId);
   });
   app.put("/pagos/fijos/:id", async (req) => {
     await actualizarFijo(Id.parse(req.params).id, Fijo.parse(req.body));
@@ -177,35 +193,41 @@ export const rutasPagos: FastifyPluginAsync = async (app) => {
   // ── IA ──
   app.post("/pagos/ia/armar", { bodyLimit: LIMITE_IA }, async (req) => {
     const p = PedidoIa.parse(req.body);
-    return armarFijosConIa(p.texto, archivoDe(p.archivo));
+    const archivo = archivoDe(p.archivo);
+    const propuesta = await armarFijosConIa(p.texto, archivo);
+    return { ...propuesta, cargaId: await crearBorrador("config", null, p.texto, archivo) };
   });
   /** Los montos de un mes leídos de una foto, un PDF o un texto (el resumen de la contadora): para revisar. */
   app.post("/pagos/ia/mes", { bodyLimit: LIMITE_IA }, async (req) => {
     const p = PedidoIa.and(z.object({ periodo: Periodo })).parse(req.body);
-    return cargarMesConIa(p.periodo, p.texto, archivoDe(p.archivo));
+    const archivo = archivoDe(p.archivo);
+    const propuesta = await cargarMesConIa(p.periodo, p.texto, archivo);
+    return { ...propuesta, cargaId: await crearBorrador("mes", p.periodo, p.texto, archivo) };
   });
   app.post("/pagos/ia/analizar", async (req) => ({ texto: await analizarMesPagos(z.object({ periodo: Periodo }).parse(req.body).periodo) }));
 
   // ── Los pagos del mes ──
   /** Lo que leyó la IA y revisaste: los montos van a los pagos del mes y lo que faltaba se crea. */
   app.post("/pagos/mes/aplicar", async (req) => {
-    const Propuesto = Fijo.extend({ lugarNuevo: Lugar.optional() });
-    const { periodo, montos, nuevos } = z
-      .object({
-        periodo: Periodo,
-        montos: z
-          .array(
-            z.union([
-              z.object({ fijoId: z.number().int().positive(), monto: Monto, pagadoCon: IdForma.optional() }),
-              z.object({ itemId: z.number().int().positive(), monto: Monto, pagadoCon: IdForma.optional() }),
-            ]),
-          )
-          .max(500),
-        nuevos: z.array(Propuesto.extend({ pagadoCon: IdForma.optional() })).max(200),
-      })
-      .parse(req.body);
-    return aplicarMes(periodo, { montos, nuevos });
+    const { periodo, cargaId, ...cambios } = CambiosMes.extend({ cargaId: IdCarga }).parse(req.body);
+    return aplicarMes(periodo, cambios, cargaId);
   });
+
+  // ── Cargas con IA: lo que aplicaste, para verlo, deshacerlo o corregirlo ──
+  app.get("/pagos/cargas", async () => listarCargas());
+  app.get("/pagos/cargas/:id/archivo", async (req, reply) => {
+    const a = await leerArchivoCarga(Id.parse(req.params).id);
+    return reply.header("Cache-Control", "private, no-cache").type(a.mime).send(a.datos);
+  });
+  /** Lo que va a pasar si la deshacés (para confirmarlo). */
+  app.get("/pagos/cargas/:id/deshacer", async (req) => verDeshacer(Id.parse(req.params).id));
+  app.delete("/pagos/cargas/:id", async (req) => {
+    await deshacerCarga(Id.parse(req.params).id);
+    return { ok: true };
+  });
+  /** Lo que hizo, para abrirlo en la revisión y corregirlo. */
+  app.get("/pagos/cargas/:id/corregir", async (req) => paraCorregir(Id.parse(req.params).id));
+  app.post("/pagos/cargas/:id/corregir", async (req) => corregirCarga(Id.parse(req.params).id, z.union([CambiosMes, CambiosFijos]).parse(req.body)));
   app.post("/pagos", async (req) =>
     crearSuelto(
       z

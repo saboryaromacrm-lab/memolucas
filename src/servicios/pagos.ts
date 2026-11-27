@@ -53,8 +53,8 @@ type DatosFijo = { nombre: string; monto: number; cuenta: string; nota: string }
 type DatosMes = { nombre: string; esperado: number; boleta: number | null; pagos: ParteDePago[]; cuenta: string; nota: string };
 
 const ILEGIBLE = "(no se pudo descifrar)";
-const abrirFijo = (c: string) => abrir<DatosFijo>(c, { nombre: ILEGIBLE, monto: 0, cuenta: "", nota: "" });
-const abrirMes = (c: string) => ({ boleta: null, pagos: [], cuenta: "", nota: "", ...abrir<Partial<DatosMes>>(c, { nombre: ILEGIBLE, esperado: 0 }) }) as DatosMes;
+export const abrirFijo = (c: string) => abrir<DatosFijo>(c, { nombre: ILEGIBLE, monto: 0, cuenta: "", nota: "" });
+export const abrirMes = (c: string) => ({ boleta: null, pagos: [], cuenta: "", nota: "", ...abrir<Partial<DatosMes>>(c, { nombre: ILEGIBLE, esperado: 0 }) }) as DatosMes;
 
 const comprobantes = almacenCifrado("pagos");
 export const COMPROBANTE_MAX_BYTES = 15 * 1024 * 1024;
@@ -182,83 +182,6 @@ export async function crearFijo(e: EntradaFijo) {
   return f;
 }
 
-/** Un pago fijo propuesto por la IA: si es de un lugar que todavía no existe, trae el lugar a crear. */
-export type FijoPropuesto = EntradaFijo & {
-  lugarNuevo?: { nombre: string; tipo: TipoLugar };
-  /** Cómo figuraba en la imagen o el texto que leyó la IA (solo para mostrarlo en la revisión). */
-  original?: string;
-};
-
-/** Antes de tocar nada se revisa todo lo propuesto (así no queda a medias). */
-function validarPropuestos(lista: FijoPropuesto[]) {
-  for (const e of lista) {
-    if (!e.nombre.trim()) throw new ErrorUsuario("Falta el nombre de un pago.");
-    if (e.alcance === "lugar" && !e.lugarId && !e.lugarNuevo?.nombre.trim()) throw new ErrorUsuario(`Falta el lugar de «${e.nombre}».`);
-    if (e.alcance !== "lugar") alcanceValido(e);
-  }
-}
-
-/** Crea los lugares nuevos que nombran los pagos propuestos, una sola vez aunque los nombren varios. */
-function creadorDeLugares() {
-  const creados = new Map<string, number>();
-  return async (e: FijoPropuesto): Promise<EntradaFijo> => {
-    if (e.alcance !== "lugar" || e.lugarId || !e.lugarNuevo) return e;
-    const clave = normalizar(e.lugarNuevo.nombre);
-    const lugarId = creados.get(clave) ?? (await crearLugar(e.lugarNuevo)).id;
-    creados.set(clave, lugarId);
-    return { ...e, lugarId };
-  };
-}
-
-/** Lo que propuso la IA y revisaste: agrega, cambia y borra. */
-export async function aplicarFijos(c: { nuevos: FijoPropuesto[]; cambios: (FijoPropuesto & { id: number })[]; borrar: number[] }) {
-  validarPropuestos([...c.nuevos, ...c.cambios]);
-  const ids = [...c.cambios.map((e) => e.id), ...c.borrar];
-  if (ids.length) {
-    const hay = new Set((await db.select({ id: pagoFijo.id }).from(pagoFijo).where(inArray(pagoFijo.id, ids))).map((f) => f.id));
-    if (ids.some((id) => !hay.has(id))) throw new ErrorUsuario("Algún pago ya no existe: volvé a armar los cambios.");
-  }
-  const conLugar = creadorDeLugares();
-  for (const e of c.nuevos) await crearFijo(await conLugar(e));
-  for (const { id, ...e } of c.cambios) await actualizarFijo(id, await conLugar(e));
-  for (const id of c.borrar) await borrarFijo(id);
-  return { creados: c.nuevos.length, cambiados: c.cambios.length, borrados: c.borrar.length };
-}
-
-/**
- * Los montos de un mes que leyó la IA (el resumen de la contadora, por ejemplo) y revisaste: cada monto va al pago de
- * ese mes, y lo que no estaba se crea como pago fijo desde ese mes, con ese monto.
- */
-/**
- * Un monto del mes: al pago de un concepto de todos los meses (fijoId) o a un pago puntual del mes (itemId).
- * pagadoCon: ya está pagado con esa forma (por ejemplo «Lo pagó: Contadora»).
- */
-export type MontoDelMes = ({ fijoId: number } | { itemId: number }) & { monto: number; pagadoCon?: number };
-
-export async function aplicarMes(periodo: string, c: { montos: MontoDelMes[]; nuevos: (FijoPropuesto & { pagadoCon?: number })[] }) {
-  validarPropuestos(c.nuevos);
-  const conLugar = creadorDeLugares();
-  const creados: MontoDelMes[] = [];
-  for (const e of c.nuevos) {
-    const { id } = await crearFijo({ ...(await conLugar(e)), desde: periodo });
-    if (e.pagadoCon) creados.push({ fijoId: id, monto: e.monto, pagadoCon: e.pagadoCon });
-  }
-  await prepararMes(periodo);
-  // Cada monto va al pago de ese mes: el del concepto (lo de todos los meses) o, si no sale de uno, ese pago.
-  const filas = await db.select().from(pagoMes).where(eq(pagoMes.periodo, periodo));
-  const filaDe = (m: MontoDelMes) => {
-    const fila = "fijoId" in m ? filas.find((r) => r.fijoId === m.fijoId) : filas.find((r) => r.id === m.itemId);
-    if (!fila) throw new ErrorUsuario(`Un pago elegido no está en ${nombreMes(periodo).toLowerCase()} (no se paga ese mes o ya no existe): revisalo.`);
-    return fila;
-  };
-  const destinos = c.montos.map((m) => ({ fila: filaDe(m), monto: m.monto, pagadoCon: m.pagadoCon }));
-  for (const d of destinos) await actualizarPagoDelMes(d.fila.id, { monto: d.monto });
-  // Lo que ya está pagado (por la contadora, por ejemplo) queda pagado con esa forma.
-  for (const d of [...destinos, ...creados.map((m) => ({ fila: filaDe(m), pagadoCon: m.pagadoCon }))])
-    if (d.pagadoCon && d.fila.estado !== "pagado") await registrarPago(d.fila.id, { formaId: d.pagadoCon });
-  return { cambiados: destinos.length, creados: c.nuevos.length };
-}
-
 /**
  * Los cambios llegan a los pagos de este mes en adelante que todavía no se pagaron (con la boleta cargada, el monto
  * del mes queda); los meses que ya no tocan se sacan.
@@ -305,7 +228,8 @@ export async function borrarFijo(id: number) {
   avisar();
 }
 
-const pendientesDesdeHoy = (fijoId: number) =>
+/** Los pagos de un fijo de este mes en adelante sin pagar (los que se van si se borra). */
+export const pendientesDesdeHoy = (fijoId: number) =>
   db
     .select()
     .from(pagoMes)
@@ -715,7 +639,7 @@ export async function crearSuelto(e: EntradaSuelto) {
   return itemDe(r.id);
 }
 
-async function borrarFila(r: PagoMes) {
+export async function borrarFila(r: PagoMes) {
   await db.delete(pagoMes).where(eq(pagoMes.id, r.id));
   if (r.comprobante) await comprobantes.borrar([r.comprobante]);
 }

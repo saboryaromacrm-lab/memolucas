@@ -503,7 +503,7 @@ function ModalCargarMes({ periodo: periodoInicial, config, onCerrar }: { periodo
       }),
       ...leido.nuevos.map((fijo) => ({ tipo: "nuevo" as const, fijo, ia: fijo })),
     ];
-    return <RevisionIa modo="mes" config={config} filas={filas} periodo={leido.periodo} periodoLeido={leido.periodo} totalImagen={leido.totalImagen} mensaje={leido.mensaje} onCerrar={() => setLeido(null)} onListo={onCerrar} />;
+    return <RevisionIa modo="mes" config={config} filas={filas} periodo={leido.periodo} periodoLeido={leido.periodo} totalImagen={leido.totalImagen} mensaje={leido.mensaje} cargaId={leido.cargaId} onCerrar={() => setLeido(null)} onListo={onCerrar} />;
   }
   return (
     <Modal

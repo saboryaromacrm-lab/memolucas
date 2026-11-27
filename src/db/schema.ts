@@ -510,6 +510,48 @@ export const pagoMes = pgTable(
   ],
 );
 
+/** Una fila de pago_fijo o pago_mes guardada tal cual (las fechas como texto), para volverla a como estaba. */
+export type FilaGuardada<T> = { [K in keyof T]: T[K] extends Date ? string : T[K] extends Date | null ? string | null : T[K] };
+
+/**
+ * Qué hizo una carga con IA y cómo estaba antes, para deshacerla. creados: los conceptos que creó (pagadoCon: lo
+ * dejó pagado con esa forma); cambiados: los que cambió, como estaban; borrados: los que borró, con sus pagos sin
+ * pagar que se fueron y los ya pagados que siguieron (historial); meses: los pagos del mes que tocó, como estaban. Las
+ * reconstruidas (de antes del registro) no tienen huellas: lo tocado después se sabe por la fecha.
+ */
+export type RegistroCarga = {
+  lugares: number[];
+  categorias: string[];
+  creados: { id: number; pagadoCon?: number }[];
+  cambiados: FilaGuardada<typeof pagoFijo.$inferSelect>[];
+  borrados: { fijo: FilaGuardada<typeof pagoFijo.$inferSelect>; filas: FilaGuardada<typeof pagoMes.$inferSelect>[]; historial: number[] }[];
+  meses: { antes: FilaGuardada<typeof pagoMes.$inferSelect>; pagadoCon?: number }[];
+  /** Cómo quedó cada cosa que tocó ("f:id" un concepto, "m:id" un pago del mes): si cambió, la tocaste después. */
+  huellas?: Record<string, string>;
+};
+
+/**
+ * Cada vez que aplicás lo que propuso la IA (los conceptos de Configuración o los montos de un mes): lo que le pasaste
+ * (texto y archivo, cifrados) y lo que hizo, para verlo, deshacerlo o corregirlo. borrador: la IA ya leyó, todavía no
+ * aplicaste. reconstruida: de antes de este registro (solo se sabe lo que creó).
+ */
+export const pagoCarga = pgTable("pago_carga", {
+  id: serial("id").primaryKey(),
+  tipo: text("tipo").$type<"config" | "mes">().notNull(),
+  /** El mes de los montos (mes) o desde cuándo van los conceptos nuevos (config). */
+  periodo: text("periodo"),
+  estado: text("estado").$type<"borrador" | "aplicada">().notNull().default("borrador"),
+  reconstruida: boolean("reconstruida").notNull().default(false),
+  /** Lo que escribiste y el detalle de lo que hizo. */
+  datosCifrados: text("datos_cifrados").notNull().default(""),
+  registro: jsonb("registro").$type<RegistroCarga>(),
+  /** La foto o el PDF (cifrado en MEDIA/pagos-cargas); se borra a los 12 meses. */
+  archivo: text("archivo"),
+  archivoMime: text("archivo_mime"),
+  aplicadaEn: ts("aplicada_en"),
+  creadoEn: creadoEn(),
+});
+
 /** El análisis de la IA de cada mes (al cerrarlo, o cuando se pide). */
 export const pagoAnalisis = pgTable("pago_analisis", {
   periodo: text("periodo").primaryKey(),
