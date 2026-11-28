@@ -411,11 +411,25 @@ export type PropuestaMes = {
 };
 
 /** Un renglón de lo que hizo una carga con IA. fijoId: el concepto (para abrirlo, si sigue estando). */
-export type LineaCarga = { tipo: "nuevo" | "cambio" | "borrar" | "monto" | "lugar" | "categoria"; nombre: string; detalle: string; fijoId?: number };
-/** Lo que aplicaste con la IA: lo que le pasaste y lo que hizo. reconstruida: de antes de que se guardaran (solo lo que creó). */
-export type CargaIa = { id: number; tipo: "config" | "mes"; periodo: string | null; reconstruida: boolean; aplicadaEn: string; texto: string; archivo: string | null; lineas: LineaCarga[] };
+export type LineaCarga = { tipo: "nuevo" | "cambio" | "borrar" | "monto" | "lugar" | "categoria" | "queda"; nombre: string; detalle: string; fijoId?: number };
+/**
+ * Lo que aplicaste con la IA: lo que le pasaste y lo que hizo. reconstruida: se armó con lo que se creó junto (solo lo
+ * que creó). parcial: se deshizo, pero quedó algo que cambiaste después (las líneas son lo que quedó).
+ */
+export type CargaIa = { id: number; tipo: "config" | "mes"; periodo: string | null; estado: "aplicada" | "parcial"; reconstruida: boolean; aplicadaEn: string; texto: string; archivo: string | null; lineas: LineaCarga[] };
 /** Lo que va a pasar al deshacerla. */
-export type PlanDeshacer = { borra: string[]; vuelve: string[]; recrea: string[]; montos: string[]; quedan: { nombre: string; motivo: string }[]; lugares: string[]; categorias: string[]; reconstruida: boolean };
+export type PlanDeshacer = {
+  borra: string[];
+  /** Pagos que registraste después en lo que creó: quedan en el historial salvo que elijas borrarlos. */
+  pagosDespues: { id: number; nombre: string }[];
+  vuelve: string[];
+  recrea: string[];
+  montos: string[];
+  quedan: { nombre: string; motivo: string; sigue: boolean }[];
+  lugares: string[];
+  categorias: string[];
+  reconstruida: boolean;
+};
 /** Lo que hizo una carga, para abrirlo en la revisión y corregirlo. propios: los conceptos que creó. */
 export type CargaParaCorregir = {
   id: number;

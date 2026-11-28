@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { db } from "../src/db/index.js";
 import { pagoCarga, pagoFijo, pagoLugar } from "../src/db/schema.js";
 import { actualizarConfig } from "../src/servicios/configuracion.js";
-import { crearFijo, crearLugar, listarFijos, listarLugares, registrarPago, verMes, type EntradaFijo } from "../src/servicios/pagos.js";
+import { abrirFijo, crearFijo, crearLugar, listarFijos, listarLugares, registrarPago, verMes, type EntradaFijo } from "../src/servicios/pagos.js";
 import { listarCargas, purgarCargas, verDeshacer } from "../src/servicios/pagos-cargas.js";
 import { crearCategoria, listarCategorias } from "../src/servicios/pagos-categorias.js";
 import { crearPersona, listarCuentas } from "../src/servicios/pagos-cuentas.js";
@@ -104,6 +104,7 @@ describe("Cargas con IA", () => {
     // Antes de deshacer, lo que va a pasar.
     expect((await app.inject({ method: "GET", url: `/api/pagos/cargas/${carga.id}/deshacer`, headers })).json()).toEqual({
       borra: ["Gas", "Luz"],
+      pagosDespues: [],
       vuelve: ["Alquiler"],
       recrea: ["Gimnasio"],
       montos: [],
@@ -112,7 +113,7 @@ describe("Cargas con IA", () => {
       categorias: ["Otros"],
       reconstruida: false,
     });
-    expect((await app.inject({ method: "DELETE", url: `/api/pagos/cargas/${carga.id}`, headers })).statusCode).toBe(200);
+    expect((await app.inject({ method: "POST", url: `/api/pagos/cargas/${carga.id}/deshacer`, headers, payload: {} })).statusCode).toBe(200);
 
     // Todo como antes: el alquiler con su monto, el gimnasio con el mismo id, su boleta y su historial.
     expect(await nombres()).toEqual(["Alquiler", "Gimnasio"]);
@@ -158,19 +159,22 @@ describe("Cargas con IA", () => {
     // Después: pagaste el IPS de noviembre y el UTHGRA de diciembre.
     await registrarPago((await item("2026-11", "IPS"))!.id, { formaId: transferencia });
     await registrarPago((await item("2026-12", "UTHGRA"))!.id, { formaId: transferencia });
-    expect(await verDeshacer(carga.id)).toMatchObject({
-      borra: ["UTHGRA"],
+    // Y le cambiaste el nombre al UTHGRA: igual se borra (lo creó la carga).
+    const uthgra = (await listarFijos()).find((f) => f.nombre === "UTHGRA")!;
+    await app.inject({ method: "PUT", url: `/api/pagos/fijos/${uthgra.id}`, headers, payload: { ...uthgra, nombre: "UTHGRA Coffit" } });
+    const plan = await verDeshacer(carga.id);
+    expect(plan).toMatchObject({
+      borra: ["UTHGRA Coffit"],
+      pagosDespues: [{ nombre: "UTHGRA Coffit · Diciembre 2026 · $ 35.412,00 pagado el 26/11/2026" }],
       montos: ["F-931 · Noviembre 2026"],
-      quedan: [
-        { nombre: "IPS · Noviembre 2026", motivo: "lo cambiaste o pagaste después" },
-        { nombre: "UTHGRA · Diciembre 2026", motivo: "lo pagaste después: queda en el historial" },
-      ],
+      quedan: [{ nombre: "IPS · Noviembre 2026", motivo: "lo cambiaste o pagaste después", sigue: true }],
     });
     // Corregir pisaría lo tuyo: no deja.
     const corregir = await app.inject({ method: "GET", url: `/api/pagos/cargas/${carga.id}/corregir`, headers });
-    expect(corregir.json().error).toContain("Después de esta carga tocaste cosas que hizo (IPS · Noviembre 2026, UTHGRA · Diciembre 2026)");
+    expect(corregir.json().error).toContain("Después de esta carga tocaste cosas que hizo (IPS · Noviembre 2026, UTHGRA Coffit · Diciembre 2026");
 
-    await app.inject({ method: "DELETE", url: `/api/pagos/cargas/${carga.id}`, headers });
+    // Sin tildar el pago de diciembre: queda en el historial.
+    await app.inject({ method: "POST", url: `/api/pagos/cargas/${carga.id}/deshacer`, headers, payload: { borrarPagos: [] } });
     expect(await item("2026-11", "F-931")).toMatchObject({ monto: 450000, estado: "pendiente", boleta: null });
     expect(await item("2026-11", "IPS")).toMatchObject({ monto: 26930, estado: "pagado" });
     expect(await item("2026-11", "UTHGRA")).toBeUndefined();
@@ -178,6 +182,16 @@ describe("Cargas con IA", () => {
     expect(await nombres()).toEqual(["F-931", "IPS"]);
     // Lo que «pagó» la contadora en esa carga ya no se le debe.
     expect((await listarCuentas()).find((c) => c.id === contadora.id)?.saldo).toBe(0);
+    // Quedó algo (el IPS que pagaste): la carga sigue en la lista, «deshecha en parte», con lo que quedó.
+    const [parcial] = await listarCargas();
+    expect(parcial).toMatchObject({ id: carga.id, estado: "parcial", lineas: [{ tipo: "queda", nombre: "IPS · Noviembre 2026", detalle: "lo cambiaste o pagaste después" }] });
+    expect((await app.inject({ method: "GET", url: `/api/pagos/cargas/${carga.id}/corregir`, headers })).json().error).toContain("ya se deshizo en parte");
+    // Si lo volvés a como lo dejó la carga (desmarcándolo), se puede terminar de deshacer.
+    await app.inject({ method: "POST", url: `/api/pagos/${(await item("2026-11", "IPS"))!.id}/desmarcar`, headers });
+    expect((await verDeshacer(carga.id)).quedan).toEqual([]);
+    await app.inject({ method: "POST", url: `/api/pagos/cargas/${carga.id}/deshacer`, headers, payload: {} });
+    expect(await item("2026-11", "IPS")).toMatchObject({ monto: 26000, estado: "pendiente" });
+    expect(await listarCargas()).toEqual([]);
     await app.close();
   });
 
@@ -258,12 +272,62 @@ describe("Cargas con IA", () => {
     ]);
     const { app, headers } = await panelConSesion();
     expect((await app.inject({ method: "GET", url: `/api/pagos/cargas/${cargas[0].id}/corregir`, headers })).json().error).toContain("solo se puede deshacer");
-    expect(await verDeshacer(cargas[0].id)).toMatchObject({ borra: ["Agua", "Luz"], quedan: [{ nombre: "Luz · Noviembre 2026", motivo: "lo pagaste después: queda en el historial" }], lugares: ["Fontana"], reconstruida: true });
-    await app.inject({ method: "DELETE", url: `/api/pagos/cargas/${cargas[0].id}`, headers });
+    const plan = await verDeshacer(cargas[0].id);
+    expect(plan).toMatchObject({ borra: ["Agua", "Luz"], pagosDespues: [{ nombre: expect.stringMatching(/^Luz · Noviembre 2026 · \$ 0,00 pagado el /) }], quedan: [], lugares: ["Fontana"], reconstruida: true });
+    await app.inject({ method: "POST", url: `/api/pagos/cargas/${cargas[0].id}/deshacer`, headers, payload: {} });
     expect(await nombres()).toEqual(["Internet"]);
     // Fontana queda: lo usa la luz pagada del historial.
     expect((await listarLugares()).map((l) => l.nombre)).toEqual(["Express 1", "Fontana"]);
     expect(await item("2026-11", "Luz")).toMatchObject({ estado: "pagado", fijoId: null });
+    await app.close();
+  });
+
+  it("una carga hecha antes de una actualización (huellas viejas) se deshace entera", async () => {
+    const { app, headers } = await panelConSesion();
+    await app.inject({ method: "POST", url: "/api/pagos/fijos/aplicar", headers, payload: { nuevos: [fijo(express, { nombre: "Monotributo", desde: "2026-10" }), fijo(express, { nombre: "IIBB", desde: "2026-10" })], cambios: [], borrar: [] } });
+    await verMes("2026-11");
+    const [carga] = await db.select().from(pagoCarga);
+    const fijos = await db.select().from(pagoFijo);
+    // Como se guardaban antes del mes de pago (sin desfase) y el 28/11 (con el desfase en el medio).
+    const formatos = {
+      antes: (f: (typeof fijos)[number]) => JSON.stringify([f.lugarId, f.alcance, f.tipo, f.reparto, f.frecuencia, f.dia, f.desde, f.moneda, f.variable, f.formaId, f.avisoDias, abrirFijo(f.datosCifrados)]),
+      del28: (f: (typeof fijos)[number]) => JSON.stringify([f.lugarId, f.alcance, f.tipo, f.reparto, f.frecuencia, f.dia, f.desde, f.desfase, f.moneda, f.variable, f.formaId, f.avisoDias, abrirFijo(f.datosCifrados)]),
+    };
+    for (const formato of Object.values(formatos)) {
+      const huellas = Object.fromEntries(fijos.map((f) => [`f:${f.id}`, formato(f)]));
+      await db.update(pagoCarga).set({ registro: { ...carga.registro!, huellas } }).where(eq(pagoCarga.id, carga.id));
+      expect(await verDeshacer(carga.id)).toMatchObject({ borra: ["Monotributo", "IIBB"], quedan: [] });
+    }
+    await app.inject({ method: "POST", url: `/api/pagos/cargas/${carga.id}/deshacer`, headers, payload: {} });
+    expect([await nombres(), (await verMes("2026-10")).items, await listarCargas()]).toEqual([[], [], []]);
+    await app.close();
+  });
+
+  it("recupera una carga que se borró sin borrar lo suyo, y no toca lo de las cargas que siguen", async () => {
+    const { app, headers } = await panelConSesion();
+    // Una carga que sigue en la lista.
+    await app.inject({ method: "POST", url: "/api/pagos/fijos/aplicar", headers, payload: { nuevos: [fijo(express, { nombre: "Luz" }), fijo(express, { nombre: "Agua" })], cambios: [], borrar: [] } });
+    // Lo de una carga que se borró (sin registro): creados juntos en octubre, con un lugar.
+    const hace = (iso: string) => DateTime.fromISO(iso, { zone: Z }).toJSDate();
+    const coffit = (await crearLugar({ nombre: "Coffit", tipo: "negocio" })).id;
+    const huerfanos = [(await crearFijo(fijo(coffit, { nombre: "F-931" }))).id, (await crearFijo(fijo(coffit, { nombre: "IPS" }))).id];
+    for (const [k, id] of huerfanos.entries()) await db.update(pagoFijo).set({ creadoEn: hace(`2026-10-02T10:00:0${k}`), actualizadoEn: hace(`2026-10-02T10:00:0${k}`) }).where(eq(pagoFijo.id, id));
+    await db.update(pagoLugar).set({ creadoEn: hace("2026-10-02T10:00:00") }).where(eq(pagoLugar.id, coffit));
+    await db.update(pagoLugar).set({ creadoEn: hace("2026-01-01") }).where(eq(pagoLugar.id, express));
+
+    const migracion = await fs.readFile(new URL("../drizzle/0038_recuperar_cargas.sql", import.meta.url), "utf8");
+    await db.execute(sql.raw(migracion));
+    const cargas = await listarCargas();
+    expect(cargas.map((c) => [c.reconstruida, c.lineas.map((l) => l.nombre)])).toEqual([
+      [false, ["Luz", "Agua"]],
+      [true, ["Coffit", "F-931", "IPS"]],
+    ]);
+    await app.inject({ method: "POST", url: `/api/pagos/cargas/${cargas[1].id}/deshacer`, headers, payload: {} });
+    expect(await nombres()).toEqual(["Agua", "Luz"]);
+    expect((await listarLugares()).map((l) => l.nombre)).toEqual(["Express 1"]);
+    // Correrla de nuevo no repite nada.
+    await db.execute(sql.raw(migracion));
+    expect((await listarCargas()).length).toBe(1);
     await app.close();
   });
 

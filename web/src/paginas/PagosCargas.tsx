@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { ChevronDown, FileText, Pencil, Search, Sparkles, Undo2 } from "lucide-react";
 import { Boton, Cargando, Modal, Vacio, useAccion } from "../componentes/ui";
-import { del, get } from "../lib/api";
+import { get, post } from "../lib/api";
 import { fechaHora } from "../lib/fechas";
 import { nombreMes, periodoActual } from "../lib/pagos";
 import { sinTildes } from "../lib/textos";
@@ -20,6 +20,7 @@ const INSIGNIA: Record<LineaCarga["tipo"], [string, string]> = {
   monto: ["Monto", "bg-sky-100 text-sky-800"],
   lugar: ["Lugar", "bg-amber-100 text-amber-800"],
   categoria: ["Categoría", "bg-amber-100 text-amber-800"],
+  queda: ["Quedó", "bg-amber-100 text-amber-800"],
 };
 const CUANTOS: [LineaCarga["tipo"], string, string][] = [
   ["nuevo", "nuevo", "nuevos"],
@@ -106,7 +107,8 @@ export function PagosCargas() {
                   <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                     <span className="font-semibold text-slate-900">{tituloDe(c)}</span>
                     <span className="text-xs text-slate-500">{fechaHora(c.aplicadaEn)}</span>
-                    {c.reconstruida && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-slate-600">De antes del registro</span>}
+                    {c.reconstruida && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-slate-600">Recuperada</span>}
+                    {c.estado === "parcial" && <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-amber-800">Deshecha en parte</span>}
                   </div>
                   {c.texto && <p className={`mt-0.5 text-sm text-slate-600 ${abierta ? "whitespace-pre-wrap" : "line-clamp-2"}`}>«{c.texto}»</p>}
                   <p className="mt-0.5 text-xs text-slate-500">{resumen(c) || "Ya no queda nada de lo que hizo"}</p>
@@ -136,10 +138,16 @@ export function PagosCargas() {
                       );
                     })}
                   </ul>
-                  {c.reconstruida && (
-                    <p className="mx-4 mb-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">
-                      Es de antes de que se guardaran las cargas: se armó con lo que se creó junto. Si además cambió montos de un mes, eso no quedó registrado.
+                  {c.estado === "parcial" ? (
+                    <p className="mx-4 mb-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                      Ya se deshizo. Esto quedó como lo dejaste porque lo cambiaste después de la carga: revisalo o volvé a intentar deshacerla.
                     </p>
+                  ) : (
+                    c.reconstruida && (
+                      <p className="mx-4 mb-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">
+                        Se armó con lo que se creó junto (de antes de que se guardaran las cargas, o de una que se borró sin borrar lo suyo). Si además cambió montos de un mes, eso no quedó registrado.
+                      </p>
+                    )
                   )}
                   <div className="flex flex-wrap gap-2 border-t border-slate-100 px-4 py-3">
                     {c.archivo && (
@@ -147,7 +155,7 @@ export function PagosCargas() {
                         Ver {c.archivo === "application/pdf" ? "el PDF" : "la imagen"}
                       </Boton>
                     )}
-                    {!c.reconstruida && (
+                    {!c.reconstruida && c.estado === "aplicada" && (
                       <Boton chico icono={<Pencil className="size-3.5" />} onClick={() => void abrirCorregir(c)}>
                         Corregir
                       </Boton>
@@ -163,7 +171,13 @@ export function PagosCargas() {
         })}
       </ul>
 
-      {deshacer && <ModalDeshacer {...deshacer} onCerrar={() => setDeshacer(null)} onConfirmar={() => accion(() => del(`/api/pagos/cargas/${deshacer.carga.id}`), "Carga deshecha").then((ok) => ok && setDeshacer(null))} />}
+      {deshacer && (
+        <ModalDeshacer
+          {...deshacer}
+          onCerrar={() => setDeshacer(null)}
+          onConfirmar={(borrarPagos) => accion(() => post(`/api/pagos/cargas/${deshacer.carga.id}/deshacer`, { borrarPagos }), "Carga deshecha").then((ok) => ok && setDeshacer(null))}
+        />
+      )}
       {corrigiendo && (
         <RevisionIa
           modo={corrigiendo.tipo}
@@ -185,9 +199,13 @@ export function PagosCargas() {
   );
 }
 
-/** Antes de deshacer: qué se borra, qué vuelve a como estaba y qué queda como lo dejaste. */
-function ModalDeshacer({ carga, plan, onCerrar, onConfirmar }: { carga: CargaIa; plan: PlanDeshacer; onCerrar: () => void; onConfirmar: () => Promise<unknown> }) {
+/**
+ * Antes de deshacer: qué se borra, qué vuelve a como estaba, los pagos que registraste después (cada uno se puede borrar
+ * también) y qué queda como lo dejaste.
+ */
+function ModalDeshacer({ carga, plan, onCerrar, onConfirmar }: { carga: CargaIa; plan: PlanDeshacer; onCerrar: () => void; onConfirmar: (borrarPagos: number[]) => Promise<unknown> }) {
   const [deshaciendo, setDeshaciendo] = useState(false);
+  const [borrarPagos, setBorrarPagos] = useState<number[]>([]);
   const grupo = (titulo: string, lista: string[], color = "text-slate-700") =>
     lista.length > 0 && (
       <section>
@@ -195,7 +213,7 @@ function ModalDeshacer({ carga, plan, onCerrar, onConfirmar }: { carga: CargaIa;
         <p className={`mt-0.5 text-sm ${color}`}>{lista.join(" · ")}</p>
       </section>
     );
-  const nada = !plan.borra.length && !plan.vuelve.length && !plan.recrea.length && !plan.montos.length && !plan.lugares.length && !plan.categorias.length;
+  const nada = !plan.borra.length && !plan.vuelve.length && !plan.recrea.length && !plan.montos.length && !plan.lugares.length && !plan.categorias.length && !plan.pagosDespues.length;
   return (
     <Modal
       abierto
@@ -205,7 +223,7 @@ function ModalDeshacer({ carga, plan, onCerrar, onConfirmar }: { carga: CargaIa;
       pie={
         <>
           <Boton onClick={onCerrar}>Cancelar</Boton>
-          <Boton variante="peligro" icono={<Undo2 className="size-4" />} cargando={deshaciendo} onClick={() => (setDeshaciendo(true), void onConfirmar().finally(() => setDeshaciendo(false)))}>
+          <Boton variante="peligro" icono={<Undo2 className="size-4" />} cargando={deshaciendo} onClick={() => (setDeshaciendo(true), void onConfirmar(borrarPagos).finally(() => setDeshaciendo(false)))}>
             {nada ? "Sacarla de la lista" : "Deshacer todo"}
           </Boton>
         </>
@@ -218,6 +236,29 @@ function ModalDeshacer({ carga, plan, onCerrar, onConfirmar }: { carga: CargaIa;
         {grupo("Vuelven (los había borrado)", plan.recrea)}
         {grupo("Montos del mes que vuelven a como estaban", plan.montos)}
         {grupo("Lugares y categorías nuevos (se borran si no los usás en otra cosa)", [...plan.lugares, ...plan.categorias])}
+        {plan.pagosDespues.length > 0 && (
+          <section className="rounded-lg border border-slate-200 px-3 py-2 text-sm">
+            <h3 className="font-semibold text-slate-800">Pagos que registraste después</h3>
+            <p className="text-xs text-slate-500">Si no los tildás, quedan en el historial (sin el concepto), para no perder plata registrada.</p>
+            <ul className="mt-1.5 space-y-1">
+              {plan.pagosDespues.map((x) => (
+                <li key={x.id}>
+                  <label className="flex items-start gap-2">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5 size-4 accent-red-600"
+                      checked={borrarPagos.includes(x.id)}
+                      onChange={(e) => setBorrarPagos((b) => (e.target.checked ? [...b, x.id] : b.filter((y) => y !== x.id)))}
+                    />
+                    <span>
+                      Borrar también <b>{x.nombre}</b>
+                    </span>
+                  </label>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
         {plan.quedan.length > 0 && (
           <section className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">
             <h3 className="font-semibold">Quedan como los dejaste</h3>
@@ -230,7 +271,7 @@ function ModalDeshacer({ carga, plan, onCerrar, onConfirmar }: { carga: CargaIa;
             </ul>
           </section>
         )}
-        {plan.reconstruida && <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">Es de antes de que se guardaran las cargas: solo se borra lo que creó. Si cambió montos de un mes, revisalos a mano.</p>}
+        {plan.reconstruida && <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">Se armó con lo que se creó junto: se borra lo que creó. Si cambió montos de un mes, revisalos a mano.</p>}
       </div>
     </Modal>
   );
