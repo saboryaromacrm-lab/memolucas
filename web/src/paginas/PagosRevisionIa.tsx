@@ -3,7 +3,8 @@ import { AlertTriangle, CheckCircle2, ChevronDown, Pencil, Plus } from "lucide-r
 import { Boton, Modal, useAccion } from "../componentes/ui";
 import { post, put } from "../lib/api";
 import { aCampo, aNumero, plata } from "../lib/numeros";
-import { agrupar, describirAlcance, FRECUENCIAS_PAGO, grupoDeAlcance, nombreMes } from "../lib/pagos";
+import { ahora } from "../lib/fechas";
+import { agrupar, describirAlcance, FRECUENCIAS_PAGO, grupoDeAlcance, nombreMes, soloMes, sumarMeses } from "../lib/pagos";
 import { sinTildes } from "../lib/textos";
 import type { AlcancePago, CampoFijo, ConfigPagos, FijoPago, FijoPropuesto, RepartoPago, TipoLugar } from "../lib/tipos";
 import { ModalFijo } from "./PagosFijo";
@@ -31,7 +32,7 @@ type Fila = FilaIa & { clave: number; elegido: boolean };
 
 type Alcanzable = { alcance: AlcancePago; lugarId: number | null; tipo: TipoLugar | null; reparto: RepartoPago | null; lugarNuevo?: { nombre: string } };
 
-export const CAMPOS_FIJO: CampoFijo[] = ["nombre", "alcance", "categoria", "monto", "variable", "moneda", "vence", "aviso", "frecuencia", "forma", "cuenta", "nota"];
+export const CAMPOS_FIJO: CampoFijo[] = ["nombre", "alcance", "categoria", "monto", "variable", "moneda", "vence", "pago", "aviso", "frecuencia", "forma", "cuenta", "nota"];
 const ETIQUETA_CAMPO: Record<CampoFijo, string> = {
   nombre: "Nombre",
   alcance: "A qué corresponde",
@@ -40,6 +41,7 @@ const ETIQUETA_CAMPO: Record<CampoFijo, string> = {
   variable: "Tipo de monto",
   moneda: "Moneda",
   vence: "Vencimiento",
+  pago: "Cuándo se paga",
   aviso: "Aviso",
   frecuencia: "Frecuencia",
   forma: "Forma de pago",
@@ -53,12 +55,14 @@ const INSIGNIA: Record<Fila["tipo"], [string, string]> = {
   monto: ["Monto", "bg-sky-100 text-sky-800"],
 };
 
+const hoy = () => ahora().toISODate()!;
+
 export const comoPropuesta = ({ id: _, desde: __, estimado: ___, ...f }: FijoPago): FijoPropuesto => f;
 const claveAlcance = (a: Alcanzable) =>
   a.lugarNuevo ? `n:${sinTildes(a.lugarNuevo.nombre)}` : a.alcance === "lugar" ? `l:${a.lugarId}` : a.alcance === "general" ? `g:${a.tipo}` : `r:${(a.reparto ?? []).map((r) => r.lugarId).sort().join(",")}`;
 const mismoCampo = (a: FijoPropuesto, b: FijoPropuesto, c: CampoFijo) => {
   if (c === "alcance") return claveAlcance(a) === claveAlcance(b) && JSON.stringify(a.reparto) === JSON.stringify(b.reparto);
-  const k = c === "vence" ? "dia" : c === "aviso" ? "avisoDias" : c === "forma" ? "formaId" : c;
+  const k = c === "vence" ? "dia" : c === "pago" ? "desfase" : c === "aviso" ? "avisoDias" : c === "forma" ? "formaId" : c;
   return a[k] === b[k];
 };
 /** Qué cambia entre dos versiones de un pago. */
@@ -74,6 +78,7 @@ export function RevisionIa({
   mensaje,
   cargaId,
   propios,
+  fechaPago: fechaPagoInicial,
   onCerrar,
   onListo,
 }: {
@@ -90,10 +95,13 @@ export function RevisionIa({
   cargaId?: number;
   /** Corregir una carga: los conceptos que creó (no cuentan como parecidos ni como destino). Al guardar, se deshace lo que hizo y se aplica esto. */
   propios?: number[];
+  /** La fecha en que se pagó lo que ya está pagado (al corregir); de entrada, hoy. */
+  fechaPago?: string | null;
   onCerrar: () => void;
   onListo: () => void;
 }) {
   const [periodo, setPeriodo] = useState(periodoInicial);
+  const [fechaPago, setFechaPago] = useState(fechaPagoInicial ?? hoy());
   const [filas, setFilas] = useState<Fila[]>(() => iniciales.map((f, k) => ({ ...f, clave: k, elegido: f.elegido ?? f.tipo !== "borrar" })));
   const [editando, setEditando] = useState<{ clave: number | null; inicial?: FijoPropuesto } | null>(null);
   const [recordar, setRecordar] = useState<string | null>(null);
@@ -117,6 +125,8 @@ export function RevisionIa({
   const fueraDeMes = (f: Fila) => f.tipo === "monto" && "itemId" in f.destino && periodo !== periodoLeido;
   const valeAplicar = (f: Fila) => f.elegido && !fueraDeMes(f) && !(f.tipo === "monto" && "fijoId" in f.destino && !fijoDe(f.destino.fijoId));
   const aplicables = filas.filter(valeAplicar);
+  /** Lo que ya está pagado («Ya lo pagó: …») queda pagado en la fecha que elijas. */
+  const conPagados = modo === "mes" && aplicables.some((f) => !!f.pagadoCon);
   const parecido = (f: FijoPropuesto) => tuyos.find((x) => sinTildes(x.nombre) === sinTildes(f.nombre) && claveAlcance(x) === claveAlcance(f));
   const detalle = (f: FijoPropuesto) =>
     [
@@ -124,6 +134,7 @@ export function RevisionIa({
       f.monto ? `${f.variable ? "~ " : ""}${plata(f.monto, f.moneda)}` : "sin monto",
       f.variable ? "variable" : "fijo",
       f.dia ? `vence el ${f.dia}` : "sin vencimiento",
+      f.desfase ? "se paga el mes siguiente" : "se paga el mismo mes",
       FRECUENCIAS_PAGO[f.frecuencia].toLowerCase(),
       config.formas.find((x) => x.id === f.formaId)?.nombre,
       f.cuenta,
@@ -140,6 +151,7 @@ export function RevisionIa({
       variable: f.variable ? "cambia mes a mes" : "fijo",
       moneda: f.moneda === "USD" ? "dólares" : "pesos",
       vence: f.dia ? `día ${f.dia}` : "sin vencimiento",
+      pago: f.desfase ? "el mes siguiente (mes vencido)" : "el mismo mes",
       aviso: f.avisoDias === null ? `${config.diasAviso} días antes` : f.avisoDias < 0 ? "no avisar" : f.avisoDias === 0 ? "el día que vence" : `${f.avisoDias} días antes`,
       frecuencia: FRECUENCIAS_PAGO[f.frecuencia].toLowerCase(),
       forma: config.formas.find((x) => x.id === f.formaId)?.nombre ?? "sin forma fija",
@@ -178,6 +190,7 @@ export function RevisionIa({
         variable: true,
         moneda: "ARS",
         dia: null,
+        desfase: 0,
         frecuencia: "mensual",
         formaId: null,
         cuenta: "",
@@ -217,6 +230,7 @@ export function RevisionIa({
         if (c === "categoria") return [`es de la categoría ${n.categoria}`];
         if (c === "vence") return [n.dia ? `vence el día ${n.dia}` : "no tiene vencimiento"];
         if (c === "variable") return [n.variable ? "su monto cambia cada mes" : "su monto es fijo"];
+        if (c === "pago") return [n.desfase ? "se paga el mes siguiente al que corresponde" : "se paga el mismo mes al que corresponde"];
         if (c === "frecuencia") return [`se paga ${FRECUENCIAS_PAGO[n.frecuencia].toLowerCase()}`];
         if (c === "forma") return [n.formaId ? `se paga con ${valorCampo("forma", n)}` : "no tiene forma de pago fija"];
         return [];
@@ -241,6 +255,7 @@ export function RevisionIa({
                 : [],
             ),
             nuevos: elegidas.flatMap((f) => (f.tipo === "nuevo" ? [{ ...f.fijo, ...(f.pagadoCon ? { pagadoCon: f.pagadoCon } : {}) }] : [])),
+            ...(conPagados ? { fechaPago } : {}),
           };
     const ok = await accion(
       () =>
@@ -426,10 +441,21 @@ export function RevisionIa({
     >
       <div className="space-y-3">
         <label className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
-          <span className="font-medium text-slate-800">{modo === "mes" ? "Mes de los montos:" : "Los pagos nuevos arrancan en:"}</span>
-          <input className="campo h-9 w-auto py-0" type="month" value={periodo} onChange={(e) => e.target.value && setPeriodo(e.target.value)} aria-label="Mes" />
-          <span className="text-xs text-slate-500">{modo === "mes" ? "Cada monto va al pago de ese mes, y lo nuevo se paga desde ese mes." : `${nombreMes(periodo)} y los meses que siguen.`}</span>
+          <span className="font-medium text-slate-800">{modo === "mes" ? "Corresponden a:" : "Primer mes al que corresponden:"}</span>
+          <input className="campo h-9 w-auto py-0" type="month" value={periodo} onChange={(e) => e.target.value && setPeriodo(e.target.value)} aria-label={modo === "mes" ? "Mes al que corresponden" : "Primer mes al que corresponden"} />
+          <span className="text-xs text-slate-500">
+            {modo === "mes"
+              ? `El mes del gasto: lo de ${soloMes(periodo)}, aunque se pague en ${soloMes(sumarMeses(periodo, 1))}. Cada concepto dice cuándo se paga.`
+              : `${nombreMes(periodo)} y los que siguen. Cada concepto dice cuándo se paga (el mismo mes o el siguiente).`}
+          </span>
         </label>
+        {conPagados && (
+          <label className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm">
+            <span className="font-medium text-slate-800">Lo que ya está pagado, se pagó el:</span>
+            <input className="campo h-9 w-auto py-0" type="date" value={fechaPago} max={hoy()} onChange={(e) => e.target.value && setFechaPago(e.target.value)} aria-label="Fecha en que se pagó" />
+            <span className="text-xs text-slate-500">La fecha real del pago (puede ser de otro mes que el del gasto).</span>
+          </label>
+        )}
         {mensaje && <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">{mensaje}</p>}
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-sm text-slate-500">

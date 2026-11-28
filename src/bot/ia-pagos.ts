@@ -3,7 +3,7 @@ import { z } from "zod";
 import { normalizar, plata } from "../lib/textos.js";
 import { obtenerConfig } from "../servicios/configuracion.js";
 import { comoWebp } from "../servicios/archivos-cifrados.js";
-import { guardarAnalisis, listarFijos, listarLugares, resumenPagos, verMes, type Alcance } from "../servicios/pagos.js";
+import { guardarAnalisis, listarFijos, listarLugares, pagosQueCorresponden, resumenPagos, verMes, type Alcance } from "../servicios/pagos.js";
 import type { FijoPropuesto } from "../servicios/pagos-cargas.js";
 import type { FrecuenciaPago, TipoLugar } from "../db/schema.js";
 import { elegirForma, formasActivas, type FormaPago } from "../servicios/pagos-formas.js";
@@ -49,6 +49,9 @@ async function contenido(texto: string, archivo?: ArchivoIa): Promise<Anthropic.
   return bloques;
 }
 
+/** Cuándo se paga lo de cada mes: la IA lo propone y se confirma en la revisión. */
+const MES_VENCIDO = `Mes vencido: lo que corresponde a un mes se paga el mes siguiente (las cargas sociales y aportes como F-931, IPS u obra social, los sindicatos, IIBB, IVA, Ganancias, y los sueldos). Se pagan el mismo mes: el monotributo, el alquiler, las cuotas, las suscripciones. Si lo dijo o lo dice lo que te dijo de sus negocios, respetalo.`;
+
 const ALCANCES = `Cada pago corresponde a:
 - "lugar": lo de un local o la casa (alquiler, luz, gas, internet, ABL de ese lugar).
 - "repartido": lo que es de varios locales a la vez y se paga una sola vez (contador, abogado, sistema, seguridad, publicidad): repartir_entre vacío = todos los negocios.
@@ -58,7 +61,7 @@ const ALCANCES = `Cada pago corresponde a:
 const notasDe = (notas: string) => (notas.trim() ? `\nLo que te dijo de sus negocios (respetalo siempre):\n${notas.trim()}\n` : "");
 
 /** Lo que la IA puede cambiar de un pago que ya está cargado (también es lo que la pantalla muestra como «antes → después»). */
-export const CAMPOS_FIJO = ["nombre", "alcance", "categoria", "monto", "variable", "moneda", "vence", "aviso", "frecuencia", "forma", "cuenta", "nota"] as const;
+export const CAMPOS_FIJO = ["nombre", "alcance", "categoria", "monto", "variable", "moneda", "vence", "pago", "aviso", "frecuencia", "forma", "cuenta", "nota"] as const;
 export type CampoFijo = (typeof CAMPOS_FIJO)[number];
 
 // Texto libre (no enums): la IA a veces deja vacíos o escribe a su manera; se normaliza después.
@@ -73,6 +76,7 @@ const Concepto = z.object({
   variable: z.boolean().describe("true si cambia mes a mes (luz, gas, agua) o dijo 'más o menos'"),
   moneda: z.string().describe('"ARS" (pesos) o "USD" (dólares)'),
   dia: z.number().int().describe("Día del mes en que vence (1 a 31), solo si lo dijo ('a mitad de mes' = 15). Si no dijo un día: 0 (no tiene vencimiento)"),
+  mes_vencido: z.boolean().describe("true si lo de un mes se paga el mes siguiente (mes vencido); false si se paga el mismo mes"),
   frecuencia: z.string().describe(`Una de: ${FRECUENCIAS.join(", ")}`),
   forma: z.string().describe('Con qué lo paga: una de sus formas de pago, tal cual figura. "" si no lo dijo'),
   cuenta: z.string().describe('Número de cliente, partida o cuenta si lo dijo; si no, ""'),
@@ -141,6 +145,7 @@ const nuevoDesde = (p: z.infer<typeof Concepto>, lugares: Lugar[], formas: Forma
   variable: p.variable,
   moneda: monedaDe(p.moneda),
   dia: diaDe(p.dia),
+  desfase: p.mes_vencido ? 1 : 0,
   frecuencia: frecuenciaDe(p.frecuencia) ?? "mensual",
   formaId: elegirForma(formas, p.forma)?.id ?? null,
   cuenta: p.cuenta,
@@ -167,6 +172,7 @@ const textoFijo = (f: Fijo, lugares: Lugar[], formas: FormaPago[]) =>
     `variable: ${f.variable ? "si" : "no"}`,
     `moneda: ${f.moneda}`,
     `vence: ${f.dia ?? 0}`,
+    `pago: ${f.desfase ? "mes siguiente" : "mismo mes"}`,
     `aviso: ${f.avisoDias === null ? "general" : f.avisoDias < 0 ? "no" : f.avisoDias}`,
     `frecuencia: ${f.frecuencia}`,
     f.formaId && `forma: ${formas.find((x) => x.id === f.formaId)?.nombre ?? "?"}`,
@@ -182,6 +188,7 @@ const FORMATOS = `Formatos del valor de cada campo en "cambios":
 - alcance: "lugar: <lugar>", "repartido: <lugar>, <lugar>" (sin lugares = todos los negocios) o "general: negocio" / "general: personal".
 - monto: el número (650 mil = 650000). variable: "si" (cambia mes a mes) o "no". moneda: "ARS" o "USD".
 - vence: el día del mes (1 a 31), o "0" para sacarle el vencimiento.
+- pago: "mes siguiente" (lo de un mes se paga el siguiente: mes vencido) o "mismo mes".
 - aviso: los días antes del vencimiento (0 = el mismo día), "no" para no avisar, o "general" para el aviso de siempre.
 - frecuencia: una de ${FRECUENCIAS.join(", ")}.`;
 
@@ -213,6 +220,8 @@ function conCampo(f: FijoPropuesto, campo: CampoFijo, valor: string, lugares: Lu
       return { ...f, moneda: monedaDe(v) };
     case "vence":
       return Number.isFinite(numero) ? { ...f, dia: diaDe(numero) } : null;
+    case "pago":
+      return /siguiente|vencido|despu/i.test(v) ? { ...f, desfase: 1 } : /mismo/i.test(v) ? { ...f, desfase: 0 } : null;
     case "aviso":
       if (/general|siempre/i.test(v)) return { ...f, avisoDias: null };
       if (/^no/i.test(v)) return { ...f, avisoDias: -1 };
@@ -236,7 +245,7 @@ function conCampo(f: FijoPropuesto, campo: CampoFijo, valor: string, lugares: Lu
 function cambio(a: FijoPropuesto, b: FijoPropuesto, campo: CampoFijo) {
   if (campo === "alcance")
     return a.alcance !== b.alcance || a.lugarId !== b.lugarId || a.tipo !== b.tipo || JSON.stringify(a.reparto) !== JSON.stringify(b.reparto) || a.lugarNuevo?.nombre !== b.lugarNuevo?.nombre;
-  const clave = campo === "vence" ? "dia" : campo === "aviso" ? "avisoDias" : campo === "forma" ? "formaId" : campo;
+  const clave = campo === "vence" ? "dia" : campo === "pago" ? "desfase" : campo === "aviso" ? "avisoDias" : campo === "forma" ? "formaId" : campo;
   return a[clave] !== b[clave];
 }
 
@@ -254,6 +263,7 @@ Lugares que ya tiene: ${lugares.map((l) => `${l.nombre} (${l.tipo})`).join(", ")
 Categorías (usá una de estas): ${categorias.join(", ")}.
 Formas de pago que tiene: ${formas.map((f) => f.nombre).join(", ") || "ninguna"}.${notasDe(cfg.pagosNotasIa)}
 ${ALCANCES}
+${MES_VENCIDO}
 
 Pagos que ya tiene cargados:
 ${fijos.map((f) => textoFijo(f, lugares, formas)).join("\n") || "ninguno"}
@@ -300,28 +310,29 @@ const EsquemaMes = z.object({
 });
 
 /**
- * Los montos de un mes a partir de un archivo o un texto (el resumen de impuestos de la contadora, por ejemplo): a qué
- * pago del mes va cada monto, qué pagos hay que crear y si la suma da el total que figura. No guarda nada: lo revisás
- * y se aplica con `aplicarMes`.
+ * Los montos que corresponden a un mes (el gasto: lo de octubre, aunque se pague en noviembre) a partir de un archivo
+ * o un texto (el resumen de impuestos de la contadora, por ejemplo): a qué pago de ese mes va cada monto, qué pagos hay
+ * que crear y si la suma da el total que figura. No guarda nada: lo revisás y se aplica con `aplicarMes`.
  */
 export async function cargarMesConIa(periodo: string, texto: string, archivo?: ArchivoIa) {
   const cfg = await conTope();
-  const [lugares, formas, mes, categorias] = await Promise.all([listarLugares(), formasActivas(), verMes(periodo), nombresDeCategorias()]);
-  const items = mes.items.filter((i) => i.estado !== "omitido");
-  const system = `Cargás los montos de ${mes.nombre.toLowerCase()} en los pagos de ${cfg.nombreUsuario} (sus locales, su casa, sus cosas), a partir de lo que te pasa: una foto, captura o PDF (por ejemplo el resumen de impuestos que le manda la contadora) o un texto.
+  const [lugares, formas, pagos, categorias] = await Promise.all([listarLugares(), formasActivas(), pagosQueCorresponden(periodo), nombresDeCategorias()]);
+  const items = pagos.filter((i) => i.estado !== "omitido");
+  const system = `Cargás los montos que corresponden a ${nombreMes(periodo)} (el mes del gasto, aunque se paguen el mes siguiente) en los pagos de ${cfg.nombreUsuario} (sus locales, su casa, sus cosas), a partir de lo que te pasa: una foto, captura o PDF (por ejemplo el resumen de impuestos que le manda la contadora) o un texto.
 Lugares que tiene: ${lugares.map((l) => `${l.nombre} (${l.tipo})`).join(", ") || "ninguno"}.
 Categorías (usá una de estas): ${categorias.join(", ")}.
 Formas de pago que tiene: ${formas.map((f) => f.nombre).join(", ") || "ninguna"}.${notasDe(cfg.pagosNotasIa)}
 ${ALCANCES}
+${MES_VENCIDO}
 
-Pagos de este mes (id | pago · a qué corresponde | monto actual | estado):
+Pagos que corresponden a ${nombreMes(periodo)} (id | pago · lugar | monto actual | estado):
 ${items.map((i) => `#${i.id} | ${i.nombre} · ${i.alcance === "repartido" ? i.partes.map((p) => p.lugar).join(", ") : i.lugar} | ${i.monto} ${i.moneda} | ${i.estado}`).join("\n") || "ninguno"}
 
 Qué hacer:
 - Cada renglón con un monto es un pago. Los subtotales y el total no son pagos: el total general va en "total".
 - Un título o bloque con el nombre de un negocio dice a qué corresponden los renglones de abajo.
 - Si el renglón es uno de los pagos del mes (el mismo concepto y del mismo negocio), va en "montos" con su id. Si no, va en "nuevos".
-- Los nuevos: nombre corto y legible, en mayúsculas y minúsculas y sin la sigla del negocio ("F-931 SYA" → "F-931", "CENTRO EMPL COMERCIO" → "Centro de Empleados de Comercio"); mensuales y variables (los impuestos y cargas cambian cada mes); dia 0 salvo que figure el vencimiento.
+- Los nuevos: nombre corto y legible, en mayúsculas y minúsculas y sin la sigla del negocio ("F-931 SYA" → "F-931", "CENTRO EMPL COMERCIO" → "Centro de Empleados de Comercio"); mensuales y variables (los impuestos y cargas cambian cada mes); dia 0 salvo que figure el vencimiento; mes_vencido según la regla de arriba.
 - Montos en números, sin redondear ($ 2.896.003,34 = 2896003.34). No inventes nada que no figure.`;
   const r = await pedir(cfg, EsquemaMes, system, [{ role: "user", content: await contenido(texto, archivo) }]);
 
@@ -350,7 +361,7 @@ const EsquemaAnalisis = z.object({ vinetas: z.array(z.string()).describe("De 3 a
 /** El análisis del mes (lo pide el panel, o sale solo el día 1 por el mes que cerró). Se guarda para verlo en Pagos. */
 export async function analizarMesPagos(periodo: string): Promise<string> {
   const cfg = await conTope();
-  const [mes, resumen] = await Promise.all([verMes(periodo), resumenPagos(periodo)]);
+  const [mes, resumen] = await Promise.all([verMes(periodo), resumenPagos(periodo, "pago")]);
   if (!mes.items.length) throw new ErrorUsuario(`No hay pagos en ${nombreMes(periodo)} para analizar.`);
   const montos = (t: { ARS: number; USD: number }) => [plata(t.ARS), t.USD ? plata(t.USD, "USD") : ""].filter(Boolean).join(" + ");
   const datos = [

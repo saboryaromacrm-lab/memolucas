@@ -291,7 +291,9 @@ export type PartePago = { lugarId: number | null; lugar: string; tipo: TipoLugar
 
 export type ItemPago = {
   id: number;
+  /** El mes al que corresponde (el gasto) y el mes en que se paga (el siguiente, si es a mes vencido). */
   periodo: string;
+  mesPago: string;
   /** null: sin vencimiento. */
   vence: string | null;
   nombre: string;
@@ -335,7 +337,9 @@ export type MesPagos = {
 
 export type GrupoPagos = { nombre: string; total: Totales; pagado: Totales };
 export type CortePagos = { total: Totales; pagado: Totales; porLugar: GrupoPagos[]; porCategoria: GrupoPagos[]; porTipo: GrupoPagos[]; porForma: GrupoPagos[] };
-export type ResumenPagos = { periodo: string; meses: { periodo: string; total: Totales; pagado: Totales }[]; mes: CortePagos; anterior: CortePagos; anio: CortePagos & { desde: string } };
+/** por: cada pago en el mes al que corresponde (el gasto) o en el que se paga. */
+export type PorMes = "corresponde" | "pago";
+export type ResumenPagos = { periodo: string; por: PorMes; meses: { periodo: string; total: Totales; pagado: Totales }[]; mes: CortePagos; anterior: CortePagos; anio: CortePagos & { desde: string } };
 
 export type FijoPago = {
   id: number;
@@ -351,7 +355,10 @@ export type FijoPago = {
   /** null: sin vencimiento. */
   dia: number | null;
   frecuencia: FrecuenciaPago;
+  /** El primer mes al que corresponde. */
   desde: string;
+  /** Cuándo se paga: 0 el mismo mes al que corresponde; 1 el mes siguiente (mes vencido). */
+  desfase: number;
   /** Con qué se paga siempre; null: sin forma fija. */
   formaId: number | null;
   cuenta: string;
@@ -367,7 +374,7 @@ export type FijoPropuesto = Omit<FijoPago, "id" | "desde" | "estimado"> & {
   /** Cómo figuraba en la imagen o el texto que leyó la IA (solo para comparar). */
   original?: string;
 };
-export type CampoFijo = "nombre" | "alcance" | "categoria" | "monto" | "variable" | "moneda" | "vence" | "aviso" | "frecuencia" | "forma" | "cuenta" | "nota";
+export type CampoFijo = "nombre" | "alcance" | "categoria" | "monto" | "variable" | "moneda" | "vence" | "pago" | "aviso" | "frecuencia" | "forma" | "cuenta" | "nota";
 /** Lo que propone la IA contra la lista cargada: pagos nuevos, cambios (solo los campos que cambian) y los que se borran. */
 /** totalImagen: el total general que figura en la imagen o el PDF (null si no hay). */
 /** cargaId: la lectura (va con lo que aplicás, así queda en «Cargas con IA»). */
@@ -419,4 +426,6 @@ export type CargaParaCorregir = {
   cambios: { antes: FijoPago; despues: FijoPropuesto }[];
   borrar: FijoPago[];
   montos: (({ fijoId: number } | { itemId: number }) & { monto: number; antes: number; nombre: string; lugar: string; pagado: boolean; pagadoCon?: number })[];
+  /** La fecha en que quedó pagado lo que la carga dejó pagado. */
+  fechaPago: string | null;
 };

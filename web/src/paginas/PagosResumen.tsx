@@ -3,12 +3,17 @@ import { Download } from "lucide-react";
 import { Cargando } from "../componentes/ui";
 import { plata } from "../lib/numeros";
 import { mesCorto, nombreMes, plataTotales, sumarMeses } from "../lib/pagos";
-import type { GrupoPagos, ResumenPagos } from "../lib/tipos";
+import { useRecordado } from "../lib/recordado";
+import type { GrupoPagos, PorMes, ResumenPagos } from "../lib/tipos";
 import { useDatos } from "../lib/vivo";
 
-/** Resumen: los últimos 12 meses, el mes y el año por lugar, por categoría y por forma de pago, y el CSV para el contador. */
+/**
+ * Resumen: los últimos 12 meses, el mes y el año por lugar, por categoría y por forma de pago, y el CSV para el
+ * contador. De entrada por el mes al que corresponde cada pago (el gasto); también por el mes en que se paga.
+ */
 export function PagosResumen({ periodo }: { periodo: string }) {
-  const { datos } = useDatos<ResumenPagos>(`/api/pagos/resumen?periodo=${periodo}`, ["pagos"]);
+  const [por, setPor] = useRecordado<{ v: PorMes }>("pagos-resumen-por", { v: "corresponde" });
+  const { datos } = useDatos<ResumenPagos>(`/api/pagos/resumen?periodo=${periodo}&por=${por.v}`, ["pagos"]);
   const [desde, setDesde] = useState(sumarMeses(periodo, -2));
   const [hasta, setHasta] = useState(periodo);
   if (!datos) return <Cargando />;
@@ -17,6 +22,23 @@ export function PagosResumen({ periodo }: { periodo: string }) {
 
   return (
     <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <div className="flex rounded-lg bg-slate-100 p-0.5 text-xs" role="radiogroup" aria-label="Ver por">
+          {(
+            [
+              ["corresponde", "Por mes del gasto"],
+              ["pago", "Por mes de pago"],
+            ] as const
+          ).map(([v, texto]) => (
+            <button key={v} role="radio" aria-checked={por.v === v} onClick={() => setPor({ v })} className={`min-h-8 rounded-md px-2.5 font-medium ${por.v === v ? "bg-white text-slate-900 shadow-sm" : "text-slate-500"}`}>
+              {texto}
+            </button>
+          ))}
+        </div>
+        <span className="text-xs text-slate-500">
+          {por.v === "corresponde" ? "Cada pago en el mes al que corresponde (el F-931 de octubre, en octubre, aunque se pague en noviembre)." : "Cada pago en el mes en que se paga."}
+        </span>
+      </div>
       <div className="grid gap-3 sm:grid-cols-3">
         <div className="tarjeta p-4">
           <div className="text-xs font-medium text-slate-500">{nombreMes(periodo)}</div>
@@ -26,7 +48,7 @@ export function PagosResumen({ periodo }: { periodo: string }) {
           </div>
         </div>
         <div className="tarjeta p-4">
-          <div className="text-xs font-medium text-slate-500">Pagado en el mes</div>
+          <div className="text-xs font-medium text-slate-500">{por.v === "corresponde" ? "Ya pagado de lo del mes" : "Pagado en el mes"}</div>
           <div className="mt-1 text-xl font-semibold text-marca-oscuro">{plataTotales(datos.mes.pagado)}</div>
         </div>
         <div className="tarjeta p-4">
@@ -77,7 +99,7 @@ export function PagosResumen({ periodo }: { periodo: string }) {
               <input className="campo" type="month" value={hasta} onChange={(e) => setHasta(e.target.value)} />
             </label>
             <a
-              href={`/api/pagos/exportar?desde=${desde}&hasta=${hasta}`}
+              href={`/api/pagos/exportar?desde=${desde}&hasta=${hasta}&por=${por.v}`}
               className={`inline-flex min-h-10 items-center gap-1.5 rounded-lg bg-marca-oscuro px-3.5 text-sm font-medium text-white hover:bg-marca-profundo ${!desde || !hasta || desde > hasta ? "pointer-events-none opacity-50" : ""}`}
             >
               <Download className="size-4" /> Descargar CSV

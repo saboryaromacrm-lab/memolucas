@@ -64,6 +64,8 @@ const Fijo = Alcance.extend({
   cuenta: z.string().max(120),
   avisoDias: z.number().int().min(-1).max(30).nullable(),
   nota: z.string().max(500),
+  /** Cuándo se paga: 0 el mismo mes al que corresponde, 1 el mes siguiente (mes vencido). */
+  desfase: z.number().int().min(0).max(1).default(0),
 });
 
 const Propuesto = Fijo.extend({ lugarNuevo: Lugar.optional() });
@@ -84,6 +86,8 @@ const CambiosMes = z.object({
     )
     .max(500),
   nuevos: z.array(Propuesto.extend({ pagadoCon: IdForma.optional() })).max(200),
+  /** La fecha en que se pagó lo que ya está pagado («Ya lo pagó: …»); de entrada, hoy. */
+  fechaPago: Fecha.optional(),
 });
 
 /** Lo que se le pasa a la IA: texto y, opcional, una foto o un PDF (en base64). */
@@ -98,10 +102,12 @@ const archivoDe = (a?: { mime: string; base64: string }): ArchivoIa | undefined 
 const LIMITE_IA = Math.ceil(ARCHIVO_IA_MAX_BYTES * 1.4) + 64 * 1024;
 
 const mesDe = (query: unknown) => z.object({ periodo: Periodo.optional() }).parse(query).periodo ?? periodoDe(hoyIso());
+/** Por el mes al que corresponde cada pago (el gasto, de entrada) o por el mes en que se paga. */
+const porDe = (query: unknown) => z.object({ por: z.enum(["corresponde", "pago"]).default("corresponde") }).parse(query).por;
 
 export const rutasPagos: FastifyPluginAsync = async (app) => {
   app.get("/pagos/mes", async (req) => verMes(mesDe(req.query)));
-  app.get("/pagos/resumen", async (req) => resumenPagos(mesDe(req.query)));
+  app.get("/pagos/resumen", async (req) => resumenPagos(mesDe(req.query), porDe(req.query)));
 
   app.get("/pagos/exportar", async (req, reply) => {
     const { desde, hasta } = z.object({ desde: Periodo, hasta: Periodo }).parse(req.query);
@@ -109,7 +115,7 @@ export const rutasPagos: FastifyPluginAsync = async (app) => {
     return reply
       .header("Content-Disposition", `attachment; filename="pagos-${desde}${desde === hasta ? "" : `-a-${hasta}`}.csv"`)
       .type("text/csv; charset=utf-8")
-      .send(await exportarCsv(desde, hasta));
+      .send(await exportarCsv(desde, hasta, porDe(req.query)));
   });
 
   // ── Configuración: lugares, fijos y ajustes ──

@@ -31,6 +31,7 @@ const fijo = (lugarId: number | null, e: Partial<EntradaFijo>): EntradaFijo => (
   dia: 10,
   frecuencia: "mensual",
   formaId: transferencia,
+  desfase: 0,
   cuenta: "",
   avisoDias: null,
   nota: "",
@@ -213,6 +214,22 @@ describe("Cargas con IA", () => {
     // Corregido sin nada elegido: es como deshacerla.
     await app.inject({ method: "POST", url: `/api/pagos/cargas/${leido.cargaId}/corregir`, headers, payload: { periodo: "2026-11", montos: [], nuevos: [] } });
     expect([await nombres(), (await item("2026-11", "F-931"))?.monto, await listarCargas()]).toEqual([["F-931"], 450000, []]);
+    await app.close();
+  });
+
+  it("corregir lo de un mes anterior: vuelve con el mes al que corresponde y la fecha en que se pagó", async () => {
+    const contadora = await crearPersona({ nombre: "Contadora", saldoInicial: 0 });
+    const pagoElla = (await listarFormas()).find((f) => f.personaId === contadora.id)!.id;
+    const f931 = (await crearFijo(fijo(express, { nombre: "F-931", categoria: "Sueldos y cargas", monto: 450000, variable: true, desde: "2026-10", desfase: 1 }))).id;
+    const { app, headers } = await panelConSesion();
+    await app.inject({ method: "POST", url: "/api/pagos/mes/aplicar", headers, payload: { periodo: "2026-10", montos: [{ fijoId: f931, monto: 493430, pagadoCon: pagoElla }], nuevos: [], fechaPago: "2026-11-12" } });
+    const [carga] = await listarCargas();
+    expect(carga.lineas.map((l) => l.detalle)).toEqual(["Octubre 2026 · Express 1 · $ 450.000,00 → $ 493.430,00 · pagado con Lo pagó: Contadora"]);
+    const abierta = (await app.inject({ method: "GET", url: `/api/pagos/cargas/${carga.id}/corregir`, headers })).json();
+    expect(abierta).toMatchObject({ periodo: "2026-10", fechaPago: "2026-11-12", montos: [{ fijoId: f931, monto: 493430, antes: 450000, pagadoCon: pagoElla }] });
+    await app.inject({ method: "POST", url: `/api/pagos/cargas/${carga.id}/corregir`, headers, payload: { periodo: "2026-10", montos: [{ fijoId: f931, monto: 500000, pagadoCon: pagoElla }], nuevos: [], fechaPago: "2026-11-13" } });
+    expect(await item("2026-11", "F-931")).toMatchObject({ periodo: "2026-10", monto: 500000, estado: "pagado", pagadoEn: "2026-11-13" });
+    expect((await listarCuentas()).find((c) => c.id === contadora.id)?.saldo).toBe(500000);
     await app.close();
   });
 

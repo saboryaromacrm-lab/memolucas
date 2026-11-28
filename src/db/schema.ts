@@ -459,6 +459,8 @@ export const pagoFijo = pgTable("pago_fijo", {
   formaId: integer("forma_id").references(() => pagoForma.id, { onDelete: "set null" }),
   /** Días antes para avisar por WhatsApp: null = los de Configuración; -1 = no avisar. */
   avisoDias: integer("aviso_dias"),
+  /** Cuándo se paga: 0 el mismo mes al que corresponde; 1 el mes siguiente (mes vencido: el F-931 de octubre se paga en noviembre). */
+  desfase: integer("desfase").notNull().default(0),
   /** Nombre, monto, número de cliente o cuenta y nota. */
   datosCifrados: text("datos_cifrados").notNull(),
   creadoEn: creadoEn(),
@@ -470,12 +472,15 @@ export type EstadoPago = "pendiente" | "parcial" | "pagado" | "omitido";
 /**
  * Cada pago de cada mes: los que salen de los fijos, de las suscripciones y de los resúmenes de las tarjetas, y los
  * sueltos. Guarda el nombre, el lugar y la categoría del momento (si después cambia el fijo, el historial no cambia).
+ * periodo: el mes al que corresponde (el gasto); mesPago: el mes en que se paga (el mismo, o el siguiente si es a mes
+ * vencido). «Este mes» muestra lo que se paga en el mes; el resumen, de entrada, lo que corresponde a cada mes.
  */
 export const pagoMes = pgTable(
   "pago_mes",
   {
     id: serial("id").primaryKey(),
     periodo: text("periodo").notNull(),
+    mesPago: text("mes_pago").notNull(),
     /** null: no tiene vencimiento (nunca queda vencido ni se avisa antes). */
     vence: date("vence"),
     lugarId: integer("lugar_id").references(() => pagoLugar.id, { onDelete: "restrict" }),
@@ -504,6 +509,7 @@ export const pagoMes = pgTable(
   },
   (t) => [
     index("pago_mes_periodo_idx").on(t.periodo),
+    index("pago_mes_mes_pago_idx").on(t.mesPago),
     uniqueIndex("pago_mes_fijo_idx").on(t.fijoId, t.periodo),
     uniqueIndex("pago_mes_suscripcion_idx").on(t.suscripcionId, t.vence),
     uniqueIndex("pago_mes_tarjeta_idx").on(t.tarjetaId, t.vence),
