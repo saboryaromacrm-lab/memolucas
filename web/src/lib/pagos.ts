@@ -12,6 +12,9 @@ export const nombreMes = (periodo: string) => {
   const t = DateTime.fromISO(`${periodo}-01`).setLocale("es").toFormat("LLLL yyyy");
   return t.charAt(0).toUpperCase() + t.slice(1);
 };
+export const diasDelMes = (periodo: string) => DateTime.fromISO(`${periodo}-01`).daysInMonth!;
+/** «octubre» (para «corresponde a octubre»). */
+export const soloMes = (periodo: string) => DateTime.fromISO(`${periodo}-01`).setLocale("es").toFormat("LLLL");
 export const mesCorto = (periodo: string) => DateTime.fromISO(`${periodo}-01`).setLocale("es").toFormat("LLL").replace(".", "");
 export const diaMes = (iso: string) => iso.slice(8, 10) + "/" + iso.slice(5, 7);
 

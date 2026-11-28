@@ -6,7 +6,7 @@ import { Boton, Cargando, Deslizable, MenuAcciones, Modal, Vacio, useAccion } fr
 import { api, del, post, put } from "../lib/api";
 import { ahora } from "../lib/fechas";
 import { aCampo, aNumero, plata } from "../lib/numeros";
-import { diaMes, plataTotales } from "../lib/pagos";
+import { diaMes, nombreMes, plataTotales, soloMes, sumarMeses } from "../lib/pagos";
 import type { ConfigPagos, FormaPago, ItemPago, MesPagos, PartePago, PropuestaMes } from "../lib/tipos";
 import { ElegirCategoria } from "./PagosFijo";
 import { RevisionIa, type FilaIa } from "./PagosRevisionIa";
@@ -243,6 +243,11 @@ function Fila({ i, parte, onPagar, acciones }: { i: ItemPago; parte?: PartePago;
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="font-medium text-slate-900">{i.nombre}</span>
           {etiqueta && <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${i.boleta !== null ? "bg-amber-100 text-amber-800" : "bg-sky-100 text-sky-800"}`}>{etiqueta}</span>}
+          {i.periodo !== i.mesPago && (
+            <span className="rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-violet-800" title={`Corresponde a ${nombreMes(i.periodo).toLowerCase()}: se paga en ${nombreMes(i.mesPago).toLowerCase()}`}>
+              De {soloMes(i.periodo)}
+            </span>
+          )}
           {i.comprobante && <Paperclip className="size-3.5 text-slate-400" aria-label="Con comprobante" />}
         </div>
         <div className="truncate text-xs text-slate-500">{[i.categoria, i.cuenta, i.nota].filter(Boolean).join(" · ")}</div>
@@ -482,7 +487,8 @@ function ModalSuelto({ config, periodo, onCerrar }: { config: ConfigPagos; perio
  * va cada monto y qué pagos hay que crear, y se revisa todo en la revisión antes de aplicar.
  */
 function ModalCargarMes({ periodo: periodoInicial, config, onCerrar }: { periodo: string; config: ConfigPagos; onCerrar: () => void }) {
-  const [periodo, setPeriodo] = useState(periodoInicial);
+  // De entrada, el mes anterior al que estás viendo: lo que pagás en noviembre suele ser lo de octubre.
+  const [periodo, setPeriodo] = useState(sumarMeses(periodoInicial, -1));
   const [texto, setTexto] = useState("");
   const [archivo, setArchivo] = useState<File | null>(null);
   const [leyendo, setLeyendo] = useState(false);
@@ -521,9 +527,11 @@ function ModalCargarMes({ periodo: periodoInicial, config, onCerrar }: { periodo
       }
     >
       <label className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
-        <span className="font-medium text-slate-800">¿En qué mes van estos montos?</span>
-        <input className="campo h-9 w-auto py-0" type="month" value={periodo} onChange={(e) => e.target.value && setPeriodo(e.target.value)} aria-label="Mes" />
-        <span className="text-xs text-slate-500">El mes en que se pagan (lo de octubre suele pagarse en noviembre).</span>
+        <span className="font-medium text-slate-800">¿A qué mes corresponden estos montos?</span>
+        <input className="campo h-9 w-auto py-0" type="month" value={periodo} onChange={(e) => e.target.value && setPeriodo(e.target.value)} aria-label="Mes al que corresponden" />
+        <span className="text-xs text-slate-500">
+          El mes del gasto ({nombreMes(periodo).toLowerCase()}), aunque lo pagues en {soloMes(sumarMeses(periodo, 1))}. Cuándo vence cada uno sale de su concepto.
+        </span>
       </label>
       <p className="mb-3 text-sm text-slate-500">
         Pegá o elegí la foto o el PDF (por ejemplo, el resumen de impuestos de la contadora), o escribí los montos. Revisás y corregís todo antes de guardar (cuesta unos centavos).

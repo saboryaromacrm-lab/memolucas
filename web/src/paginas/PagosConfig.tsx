@@ -291,7 +291,7 @@ function FilaFijo({ f, config, detalle, onEditar, onBorrar }: { f: FijoPago; con
         <div className="text-[11px] text-slate-400">{!f.variable ? "fijo" : f.estimado && f.estimado !== f.monto ? "promedio de lo pagado" : "variable"}</div>
       </div>
       <div className="text-xs text-slate-600">
-        {f.dia ? `Día ${f.dia}` : "Sin vto."} · {FRECUENCIAS_PAGO[f.frecuencia].toLowerCase()}
+        {f.dia ? `Día ${f.dia}` : "Sin vto."} · {FRECUENCIAS_PAGO[f.frecuencia].toLowerCase()}{f.desfase ? " · mes vencido" : ""}
         <div className="text-slate-400">{nombreForma(config.formas, f.formaId) ?? "Sin forma fija"}</div>
       </div>
       <div className="hidden text-xs text-slate-500 sm:block">{textoAviso(f.avisoDias, config.diasAviso)}</div>

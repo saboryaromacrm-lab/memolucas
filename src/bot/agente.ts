@@ -18,7 +18,7 @@ import { cargarSaldoIA, fijarSaldoIA } from "../servicios/credito-ia.js";
 import { actualizarPagoDelMes, buscarPendientes, crearSuelto, historialPagos, listarLugares, pagosPendientes, registrarPago, verMes, type ItemPago } from "../servicios/pagos.js";
 import { buscarPersona, listarCuentas, pagarAPersona } from "../servicios/pagos-cuentas.js";
 import { buscarForma, formasActivas } from "../servicios/pagos-formas.js";
-import { periodoDe } from "../servicios/pagos-reglas.js";
+import { nombreMes, periodoDe } from "../servicios/pagos-reglas.js";
 import { diasParaVencer } from "../servicios/vencimientos.js";
 import { buscarMensajesWa, cancelarProgramadoWa, DIAS_GUARDADO, enviarWa, fijarAliasWa, leerChatWa, listarChatsWa, programadosWa, type MensajeLeido } from "../servicios/wa-personal.js";
 import { ErrorVideo, esLinkDeVideo, leerVideo, textoErrorVideo } from "../servicios/videos.js";
@@ -37,9 +37,11 @@ const Fecha = z.string().describe("ISO 8601 con offset, ej. 2026-11-24T09:00:00-
 
 /** Lo que devuelve cada herramienta: JSON, o el error explicado (para que el modelo se lo diga al usuario). */
 /** Un pago, corto, para el asistente. */
-const resumirPago = (i: Pick<ItemPago, "id" | "nombre" | "lugar" | "vence" | "monto" | "pagado" | "moneda" | "estado" | "forma"> & { vencido?: boolean }) => ({
+const resumirPago = (i: Pick<ItemPago, "id" | "nombre" | "lugar" | "vence" | "monto" | "pagado" | "moneda" | "estado" | "forma" | "periodo" | "mesPago"> & { vencido?: boolean }) => ({
   id: i.id,
   pago: `${i.nombre} · ${i.lugar}`,
+  // Lo de mes vencido: a qué mes corresponde (el F-931 de octubre que se paga en noviembre).
+  ...(i.periodo !== i.mesPago ? { corresponde: nombreMes(i.periodo) } : {}),
   vence: i.vence,
   monto: i.monto,
   pagado: i.pagado,
@@ -279,7 +281,7 @@ function herramientas(origen: Canal, despues: Despues) {
             return { falta_forma: true, formas: await textoFormas(), nota: "Preguntale con cuál lo pagó y volvé a llamar con forma." };
           }
           const hecho = await registrarPago(item.id, { monto: p.monto, fecha: p.fecha, formaId });
-          return { pagado: resumirPago(hecho), faltan: (await pagosPendientes()).filter((i) => i.periodo === hecho.periodo).map(resumirPago) };
+          return { pagado: resumirPago(hecho), faltan: (await pagosPendientes()).filter((i) => i.mesPago === hecho.mesPago).map(resumirPago) };
         }),
     }),
     betaZodTool({

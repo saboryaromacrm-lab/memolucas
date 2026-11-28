@@ -30,7 +30,7 @@ const CUANTOS: [LineaCarga["tipo"], string, string][] = [
   ["categoria", "categoría nueva", "categorías nuevas"],
 ];
 
-const tituloDe = (c: CargaIa) => (c.tipo === "mes" && c.periodo ? `Montos de ${nombreMes(c.periodo).toLowerCase()}` : "Conceptos");
+const tituloDe = (c: CargaIa) => (c.tipo === "mes" && c.periodo ? `Montos que corresponden a ${nombreMes(c.periodo).toLowerCase()}` : "Conceptos");
 const resumen = (c: CargaIa) =>
   CUANTOS.flatMap(([tipo, uno, varios]) => {
     const n = c.lineas.filter((l) => l.tipo === tipo).length;
@@ -175,6 +175,7 @@ export function PagosCargas() {
           mensaje=""
           cargaId={corrigiendo.id}
           propios={corrigiendo.propios}
+          fechaPago={corrigiendo.fechaPago}
           onCerrar={() => setCorrigiendo(null)}
           onListo={() => setCorrigiendo(null)}
         />

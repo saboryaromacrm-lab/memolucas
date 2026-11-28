@@ -575,7 +575,7 @@ export class Procesador {
       await borrarAdjunto(adj.id);
     }
     await cerrarBorrador(borradorId);
-    const faltan = (await pagosPendientes()).filter((i) => i.periodo === hecho.periodo);
+    const faltan = (await pagosPendientes()).filter((i) => i.mesPago === hecho.mesPago);
     const parte = hecho.estado === "parcial" ? ` (en parte: faltan ${plata(hecho.falta, hecho.moneda)})` : "";
     const resto = faltan.length
       ? `Te falta: ${faltan

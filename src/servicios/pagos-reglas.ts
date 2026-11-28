@@ -115,7 +115,9 @@ export function alertasDelMes(items: ItemAlerta[], hoy: string, totalAnterior: {
 
 /** Un renglón por lugar: un pago repartido sale en cada lugar con su parte (y "reparto" dice de cuánto). */
 export type FilaCsv = {
+  /** El mes al que corresponde y el mes en que se paga. */
   periodo: string;
+  mesPago: string;
   vence: string | null;
   lugar: string;
   tipo: string;
@@ -141,9 +143,9 @@ export function aCsv(filas: FilaCsv[]): string {
     return /[";\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
   };
   const fecha = (iso: string | null) => (iso ? iso.split("-").reverse().join("/") : "");
-  const encabezado = ["Mes", "Vence", "Lugar", "Tipo", "Categoría", "Pago", "Moneda", "Esperado", "Pagado", "Estado", "Pagado el", "Forma de pago", "Reparto", "Nota"];
+  const encabezado = ["Corresponde a", "Se paga en", "Vence", "Lugar", "Tipo", "Categoría", "Pago", "Moneda", "Esperado", "Pagado", "Estado", "Pagado el", "Forma de pago", "Reparto", "Nota"];
   const lineas = filas.map((f) =>
-    [f.periodo, fecha(f.vence), f.lugar, f.tipo, f.categoria, f.nombre, f.moneda, f.esperado, f.pagado, ESTADOS[f.estado], fecha(f.pagadoEn), f.forma, f.reparto, f.nota]
+    [f.periodo, f.mesPago, fecha(f.vence), f.lugar, f.tipo, f.categoria, f.nombre, f.moneda, f.esperado, f.pagado, ESTADOS[f.estado], fecha(f.pagadoEn), f.forma, f.reparto, f.nota]
       .map(celda)
       .join(";"),
   );

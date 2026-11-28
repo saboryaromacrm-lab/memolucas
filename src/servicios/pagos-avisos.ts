@@ -20,7 +20,9 @@ const DIAS_MITAD = [15, 20];
 
 const montos = (t: { ARS: number; USD: number }) => [t.ARS || !t.USD ? plata(t.ARS) : "", t.USD ? plata(t.USD, "USD") : ""].filter(Boolean).join(" + ");
 const vto = (vence: string | null) => (vence ? cuandoVence(vence) : "sin vencimiento");
-const linea = (i: ItemPago) => `• ${i.nombre} · ${i.lugar} — ${plata(i.falta || i.monto, i.moneda)}`;
+/** Lo de mes vencido dice a qué mes corresponde (el F-931 de octubre, que vence en noviembre). */
+const deMes = (i: ItemPago) => (i.periodo !== i.mesPago ? ` (de ${nombreMes(i.periodo).split(" ")[0]})` : "");
+const linea = (i: ItemPago) => `• ${i.nombre}${deMes(i)} · ${i.lugar} — ${plata(i.falta || i.monto, i.moneda)}`;
 
 async function mandar(texto: string, intencion: string) {
   const id = await enFila(() => enviador().enviarTexto(texto));
@@ -95,7 +97,7 @@ export async function mensajesDelMesPagos(): Promise<void> {
     const texto =
       `${cierre}📅 *Pagos de ${mes.nombre}:* ${vivos.length} por ${montos(mes.totales.total)}.\n` +
       `Los más grandes: ${grandes.map((i) => `${i.nombre} · ${i.lugar} (${plata(i.monto, i.moneda)})`).join(", ")}.\n\n` +
-      `*Para pagar:*\n${primeros.map((i) => `• ${i.vence ? diaDe(i.vence).toFormat("dd/MM") : "Sin vto."} ${i.nombre} · ${i.lugar} — ${plata(i.monto, i.moneda)}`).join("\n")}` +
+      `*Para pagar:*\n${primeros.map((i) => `• ${i.vence ? diaDe(i.vence).toFormat("dd/MM") : "Sin vto."} ${i.nombre}${deMes(i)} · ${i.lugar} — ${plata(i.monto, i.moneda)}`).join("\n")}` +
       (await lineaDeudas());
     return mandar(texto, "pagos_mes").catch((err) => registrar("error", "pagos", "No se pudo mandar el resumen del mes", err));
   }

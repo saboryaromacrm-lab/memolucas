@@ -66,6 +66,7 @@ const fijo = (lugarId: number, e: Partial<EntradaFijo>): EntradaFijo => ({
   dia: 10,
   frecuencia: "mensual",
   formaId: transferencia,
+  desfase: 0,
   cuenta: "",
   avisoDias: null,
   nota: "",
@@ -683,5 +684,90 @@ describe("Pagos", () => {
     expect(respuestas.at(-1)).toBe("🧾 Veo un pago de $ 96.200,00. ¿De cuál de tus pagos es? Decime, por ejemplo, «es la luz del Express 1».");
     await bot.procesar(texto("es la luz del express"));
     expect(respuestas.at(-1)).toBe("✅ Anotado: *Luz · Express 1* $ 96.200,00 (con Transferencia, comprobante guardado).\nYa pagaste todo lo del mes 🙌");
+  });
+
+  it("mes vencido: lo de octubre se paga en noviembre; cada mes muestra lo que se paga y el resumen lo que corresponde", async () => {
+    await verMes("2026-11"); // Pagos se abrió por primera vez en noviembre.
+    const f931 = (await crearFijo(fijo(express, { nombre: "F-931", categoria: "Sueldos y cargas", monto: 450000, variable: true, dia: 10, desde: "2026-10", desfase: 1 }))).id;
+    const mono = (await crearFijo(fijo(express, { nombre: "Monotributo", categoria: "Impuestos y tasas", monto: 99800, dia: 20, desde: "2026-10" }))).id;
+    await crearFijo(fijo(express, { nombre: "Alquiler", categoria: "Alquiler", monto: 650000, dia: 5 }));
+    const vista = async (p: string) => (await verMes(p)).items.map((i) => [i.nombre, i.periodo, i.mesPago, i.vence]);
+
+    // Noviembre: el F-931 de octubre (vence el 10/11), el monotributo y el alquiler de noviembre.
+    expect(await vista("2026-11")).toEqual([
+      ["Alquiler", "2026-11", "2026-11", "2026-11-05"],
+      ["F-931", "2026-10", "2026-11", "2026-11-10"],
+      ["Monotributo", "2026-11", "2026-11", "2026-11-20"],
+    ]);
+    // Octubre se arma aunque Pagos se haya abierto en noviembre: el monotributo de octubre (el F-931 se paga en noviembre).
+    expect(await vista("2026-10")).toEqual([["Monotributo", "2026-10", "2026-10", "2026-10-20"]]);
+    expect(await vista("2026-12")).toEqual([
+      ["Alquiler", "2026-12", "2026-12", "2026-12-05"],
+      ["F-931", "2026-11", "2026-12", "2026-12-10"],
+      ["Monotributo", "2026-12", "2026-12", "2026-12-20"],
+    ]);
+    // Volver a abrir un mes no repite nada.
+    expect((await vista("2026-11")).length).toBe(3);
+    expect((await vista("2026-12")).length).toBe(3);
+
+    // El resumen, de entrada, por el mes al que corresponde (el gasto); también por el mes en que se paga.
+    const total = (r: Awaited<ReturnType<typeof resumenPagos>>) => r.mes.total.ARS;
+    expect(total(await resumenPagos("2026-10"))).toBe(450000 + 99800);
+    expect(total(await resumenPagos("2026-11"))).toBe(450000 + 99800 + 650000);
+    expect(total(await resumenPagos("2026-10", "pago"))).toBe(99800);
+    expect(total(await resumenPagos("2026-11", "pago"))).toBe(450000 + 99800 + 650000);
+
+    // El resumen de la contadora de octubre, cargado en noviembre: va al F-931 de octubre y lo nuevo es de octubre en adelante.
+    const contadora = await crearPersona({ nombre: "Contadora", saldoInicial: 0 });
+    const pagoElla = (await listarFormas()).find((f) => f.personaId === contadora.id)!.id;
+    const f931Oct = (await item("2026-11", "F-931")).id;
+    pedir.mockResolvedValue({
+      montos: [{ id: f931Oct, monto: 493430, como_figura: "F-931" }],
+      nuevos: [
+        { alcance: "lugar", lugar: "Express 1", tipo: "negocio", repartir_entre: [], nombre: "UTHGRA", categoria: "Sueldos y cargas", monto: 35412, variable: true, moneda: "ARS", dia: 0, mes_vencido: true, frecuencia: "mensual", forma: "", cuenta: "", nota: "", como_figura: "UTHGRA" },
+      ],
+      total: 528842,
+      mensaje: "",
+    });
+    const leido = await cargarMesConIa("2026-10", "lo de octubre");
+    const [, , system] = pedir.mock.calls[0];
+    expect(system).toContain("Cargás los montos que corresponden a octubre 2026");
+    expect(system).toContain(`#${f931Oct} | F-931 · Express 1 | 450000 ARS | pendiente`);
+    expect(system).toContain("Mes vencido:");
+    expect(leido.montos).toEqual([expect.objectContaining({ fijoId: f931, monto: 493430, antes: 450000 })]);
+    expect(leido.nuevos[0]).toMatchObject({ nombre: "UTHGRA", desfase: 1 });
+    const { app, headers } = await panelConSesion();
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/pagos/mes/aplicar",
+      headers,
+      payload: { periodo: "2026-10", montos: [{ fijoId: f931, monto: 493430, pagadoCon: pagoElla }], nuevos: leido.nuevos.map((n) => ({ ...n, pagadoCon: pagoElla })), fechaPago: "2026-11-12" },
+    });
+    expect(res.json()).toEqual({ cambiados: 1, creados: 1 });
+    const nov = await verMes("2026-11");
+    expect(nov.items.filter((i) => i.periodo === "2026-10").map((i) => [i.nombre, i.monto, i.estado, i.pagadoEn, i.forma])).toEqual([
+      ["F-931", 493430, "pagado", "2026-11-12", "Lo pagó: Contadora"],
+      ["UTHGRA", 35412, "pagado", "2026-11-12", "Lo pagó: Contadora"],
+    ]);
+    // El UTHGRA de noviembre se paga en diciembre; el de octubre no aparece en octubre.
+    expect((await item("2026-12", "UTHGRA"))).toMatchObject({ periodo: "2026-11", estado: "pendiente" });
+    expect(await item("2026-10", "UTHGRA")).toBeUndefined();
+    expect((await listarCuentas()).find((c) => c.id === contadora.id)?.saldo).toBe(493430 + 35412);
+    // El CSV dice a qué mes corresponde y en cuál se paga.
+    const csv = await app.inject({ method: "GET", url: "/api/pagos/exportar?desde=2026-10&hasta=2026-10", headers });
+    expect(csv.body).toContain("2026-10;2026-11;10/11/2026;Express 1;Negocio;Sueldos y cargas;F-931");
+    await app.close();
+
+    // Pasar el monotributo a mes vencido: el de noviembre se paga en diciembre (vence el 20/12).
+    const m = (await listarFijos()).find((f) => f.id === mono)!;
+    await actualizarFijo(mono, { ...m, desfase: 1 });
+    expect(await item("2026-12", "Monotributo")).toMatchObject({ periodo: "2026-11", vence: "2026-12-20" });
+    expect((await verMes("2026-11")).items.some((i) => i.nombre === "Monotributo")).toBe(false);
+
+    // El aviso por WhatsApp dice de qué mes es.
+    const wa = enviadorFalso();
+    r.ir(local("2026-12-07T10:00"));
+    await avisarPagos();
+    expect(wa.enviados[0].texto).toContain("• F-931 (de noviembre) · Express 1 — $ 450.000,00 · vence en 3 días");
   });
 });

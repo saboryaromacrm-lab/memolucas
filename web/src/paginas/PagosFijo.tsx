@@ -3,7 +3,7 @@ import { ElegirForma } from "../componentes/FormasPago";
 import { Boton, Interruptor, Modal, useAccion } from "../componentes/ui";
 import { post, put } from "../lib/api";
 import { aCampo, aNumero, plata } from "../lib/numeros";
-import { FRECUENCIAS_PAGO, nombreMes, periodoActual } from "../lib/pagos";
+import { diasDelMes, FRECUENCIAS_PAGO, nombreMes, periodoActual, soloMes, sumarMeses } from "../lib/pagos";
 import type { AlcancePago, CategoriaPago, ConfigPagos, FijoPago, FijoPropuesto, FrecuenciaPago, LugarPago, Moneda, TipoLugar } from "../lib/tipos";
 
 /** Elegido en «Un lugar»: un lugar nuevo (se crea al guardar). */
@@ -35,6 +35,14 @@ export function ElegirCategoria({ categorias, valor, onCambio }: { categorias: C
  * onPropuesta es para revisar lo que propuso la IA: devuelve el pago armado y no guarda nada (el mes lo elige la
  * revisión, por eso no muestra «Desde»).
  */
+/** «Lo de octubre se paga en noviembre (vence el 10/11).», con el mes pasado como ejemplo. */
+function ejemploDePago(desfase: number, dia: number | null) {
+  const corresponde = sumarMeses(periodoActual(), -1);
+  const pago = sumarMeses(corresponde, desfase);
+  const vence = dia && dia >= 1 && dia <= 31 ? ` (vence el ${Math.min(dia, diasDelMes(pago))}/${Number(pago.slice(5))})` : "";
+  return `Lo de ${soloMes(corresponde)} se paga en ${soloMes(pago)}${vence}.`;
+}
+
 export function ModalFijo({
   fijo,
   inicial,
@@ -64,6 +72,7 @@ export function ModalFijo({
     conVencimiento: base ? base.dia !== null : false,
     frecuencia: (base?.frecuencia ?? "mensual") as FrecuenciaPago,
     desde: fijo?.desde ?? periodoActual(),
+    desfase: String(base?.desfase ?? 0),
     cuenta: base?.cuenta ?? "",
     aviso: base?.avisoDias === null || base?.avisoDias === undefined ? "" : String(base.avisoDias),
     nota: base?.nota ?? "",
@@ -97,6 +106,7 @@ export function ModalFijo({
       moneda: f.moneda,
       dia: f.conVencimiento ? Number(f.dia) : null,
       frecuencia: f.frecuencia,
+      desfase: Number(f.desfase),
       formaId,
       cuenta: f.cuenta,
       avisoDias: f.aviso === "" ? null : Number(f.aviso),
@@ -286,11 +296,19 @@ export function ModalFijo({
         </label>
         {!onPropuesta && (
           <label className="block">
-            <span className="etiqueta">Desde</span>
+            <span className="etiqueta">Primer mes al que corresponde</span>
             <input className="campo" type="month" {...campo("desde")} />
-            <span className="mt-0.5 block text-[11px] text-slate-400">Primer mes: {nombreMes(f.desde || periodoActual())}</span>
+            <span className="mt-0.5 block text-[11px] text-slate-400">{nombreMes(f.desde || periodoActual())}</span>
           </label>
         )}
+        <label className="col-span-2 block">
+          <span className="etiqueta">¿Cuándo se paga?</span>
+          <select className="campo" {...campo("desfase")}>
+            <option value="0">El mismo mes al que corresponde</option>
+            <option value="1">El mes siguiente (mes vencido)</option>
+          </select>
+          <span className="mt-0.5 block text-[11px] text-slate-400">{ejemploDePago(Number(f.desfase), f.conVencimiento ? Number(f.dia) : null)}</span>
+        </label>
         <label className={onPropuesta ? "col-span-2 block" : "block"}>
           <span className="etiqueta">N.º de cliente o cuenta</span>
           <input className="campo" placeholder="Opcional" {...campo("cuenta")} />
