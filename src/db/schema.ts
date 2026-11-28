@@ -539,14 +539,16 @@ export type RegistroCarga = {
 /**
  * Cada vez que aplicás lo que propuso la IA (los conceptos de Configuración o los montos de un mes): lo que le pasaste
  * (texto y archivo, cifrados) y lo que hizo, para verlo, deshacerlo o corregirlo. borrador: la IA ya leyó, todavía no
- * aplicaste. reconstruida: de antes de este registro (solo se sabe lo que creó).
+ * aplicaste. reconstruida: se armó con lo que se creó junto (de antes de este registro o recuperada); solo se sabe lo
+ * que creó.
  */
 export const pagoCarga = pgTable("pago_carga", {
   id: serial("id").primaryKey(),
   tipo: text("tipo").$type<"config" | "mes">().notNull(),
   /** El mes de los montos (mes) o desde cuándo van los conceptos nuevos (config). */
   periodo: text("periodo"),
-  estado: text("estado").$type<"borrador" | "aplicada">().notNull().default("borrador"),
+  /** parcial: se deshizo, pero quedó algo que cambiaste después (se muestra lo que quedó). */
+  estado: text("estado").$type<"borrador" | "aplicada" | "parcial">().notNull().default("borrador"),
   reconstruida: boolean("reconstruida").notNull().default(false),
   /** Lo que escribiste y el detalle de lo que hizo. */
   datosCifrados: text("datos_cifrados").notNull().default(""),

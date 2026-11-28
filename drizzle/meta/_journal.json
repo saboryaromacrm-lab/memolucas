@@ -267,6 +267,13 @@
       "when": 1795827156271,
       "tag": "0037_mes_de_pago",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1795861662310,
+      "tag": "0038_recuperar_cargas",
+      "breakpoints": true
     }
   ]
 }

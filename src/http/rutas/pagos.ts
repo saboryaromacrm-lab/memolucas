@@ -227,8 +227,10 @@ export const rutasPagos: FastifyPluginAsync = async (app) => {
   });
   /** Lo que va a pasar si la deshacés (para confirmarlo). */
   app.get("/pagos/cargas/:id/deshacer", async (req) => verDeshacer(Id.parse(req.params).id));
-  app.delete("/pagos/cargas/:id", async (req) => {
-    await deshacerCarga(Id.parse(req.params).id);
+  /** borrarPagos: los pagos que registraste después en lo que creó la carga y elegiste borrar también. */
+  app.post("/pagos/cargas/:id/deshacer", async (req) => {
+    const { borrarPagos } = z.object({ borrarPagos: z.array(z.number().int().positive()).max(500).default([]) }).parse(req.body ?? {});
+    await deshacerCarga(Id.parse(req.params).id, borrarPagos);
     return { ok: true };
   });
   /** Lo que hizo, para abrirlo en la revisión y corregirlo. */

@@ -37,8 +37,8 @@ type FilaMes = typeof pagoMes.$inferSelect;
 type Lugar = typeof pagoLugar.$inferSelect;
 type TipoCarga = "config" | "mes";
 
-/** Un renglón de lo que hizo una carga. fijoId: el concepto, para abrirlo (si sigue estando). */
-export type LineaCarga = { tipo: "nuevo" | "cambio" | "borrar" | "monto" | "lugar" | "categoria"; nombre: string; detalle: string; fijoId?: number };
+/** Un renglón de lo que hizo una carga (o, si se deshizo en parte, de lo que quedó). fijoId: el concepto, para abrirlo. */
+export type LineaCarga = { tipo: "nuevo" | "cambio" | "borrar" | "monto" | "lugar" | "categoria" | "queda"; nombre: string; detalle: string; fijoId?: number };
 type DatosCarga = { texto: string; lineas: LineaCarga[] };
 
 const archivos = almacenCifrado("pagos-cargas");
@@ -54,9 +54,19 @@ const montoDe = (c: string) => {
   const d = abrirMes(c);
   return d.boleta ?? d.esperado;
 };
-/** Cómo está un concepto (sin la categoría: renombrarla no es tocarlo). */
-const huellaFijo = (f: FilaFijo) => JSON.stringify([f.lugarId, f.alcance, f.tipo, f.reparto, f.frecuencia, f.dia, f.desde, f.desfase, f.moneda, f.variable, f.formaId, f.avisoDias, abrirFijo(f.datosCifrados)]);
-const huellaMes = (f: FilaMes) => JSON.stringify([f.estado, f.formaId, f.pagadoEn, f.mesPago, f.vence, f.comprobante, abrirMes(f.datosCifrados)]);
+/**
+ * Cómo está un concepto o un pago del mes (sin la categoría: renombrarla no es tocarlo). Los datos que se suman con el
+ * tiempo van al final y solo si no tienen su valor de siempre: así una carga hecha antes de sumarlos se sigue
+ * reconociendo como intacta. huellasViejas: las que se guardaron del 28/11/2026 (con el mes de pago en el medio).
+ */
+const huellaFijo = (f: FilaFijo) =>
+  JSON.stringify([f.lugarId, f.alcance, f.tipo, f.reparto, f.frecuencia, f.dia, f.desde, f.moneda, f.variable, f.formaId, f.avisoDias, abrirFijo(f.datosCifrados), ...(f.desfase ? [f.desfase] : [])]);
+const huellaMes = (f: FilaMes) =>
+  JSON.stringify([f.estado, f.formaId, f.pagadoEn, f.vence, f.comprobante, abrirMes(f.datosCifrados), ...(f.mesPago !== f.periodo ? [f.mesPago] : [])]);
+const huellasViejas = {
+  fijo: (f: FilaFijo) => JSON.stringify([f.lugarId, f.alcance, f.tipo, f.reparto, f.frecuencia, f.dia, f.desde, f.desfase, f.moneda, f.variable, f.formaId, f.avisoDias, abrirFijo(f.datosCifrados)]),
+  mes: (f: FilaMes) => JSON.stringify([f.estado, f.formaId, f.pagadoEn, f.mesPago, f.vence, f.comprobante, abrirMes(f.datosCifrados)]),
+};
 
 /** Si no es un error para mostrarte (algo que quedó en uso, por ejemplo), sigue de largo. */
 const siQueda = (e: unknown) => {
@@ -351,9 +361,12 @@ async function lineasDe(r: RegistroCarga): Promise<LineaCarga[]> {
   ];
 }
 
+/** Las que se ven en la lista: aplicadas y deshechas en parte (con lo que quedó). */
+const VISIBLES: ("aplicada" | "parcial")[] = ["aplicada", "parcial"];
+
 /** Las cargas aplicadas, de la más nueva a la más vieja. */
 export async function listarCargas() {
-  const filas = await db.select().from(pagoCarga).where(eq(pagoCarga.estado, "aplicada")).orderBy(desc(pagoCarga.aplicadaEn), desc(pagoCarga.id));
+  const filas = await db.select().from(pagoCarga).where(inArray(pagoCarga.estado, VISIBLES)).orderBy(desc(pagoCarga.aplicadaEn), desc(pagoCarga.id));
   return Promise.all(
     filas.map(async (c) => {
       const d = abrirCarga(c.datosCifrados);
@@ -361,19 +374,20 @@ export async function listarCargas() {
         id: c.id,
         tipo: c.tipo,
         periodo: c.periodo,
+        estado: c.estado,
         reconstruida: c.reconstruida,
         aplicadaEn: c.aplicadaEn,
         texto: d.texto,
         archivo: c.archivo ? c.archivoMime : null,
-        // Las de antes del registro no guardaron el detalle: se arma con lo que sigue estando.
-        lineas: c.reconstruida ? await lineasDe(c.registro ?? vacio()) : d.lineas,
+        // Las reconstruidas no guardaron el detalle: se arma con lo que sigue estando.
+        lineas: c.reconstruida && c.estado === "aplicada" ? await lineasDe(c.registro ?? vacio()) : d.lineas,
       };
     }),
   );
 }
 
 async function obtenerCarga(id: number) {
-  const [c] = await db.select().from(pagoCarga).where(and(eq(pagoCarga.id, id), eq(pagoCarga.estado, "aplicada")));
+  const [c] = await db.select().from(pagoCarga).where(and(eq(pagoCarga.id, id), inArray(pagoCarga.estado, VISIBLES)));
   if (!c) throw new ErrorUsuario("Esa carga ya no está.");
   return c;
 }
@@ -387,14 +401,19 @@ export async function leerArchivoCarga(id: number) {
 
 // ───────────── Deshacer ─────────────
 
-type Quedan = { nombre: string; motivo: string }[];
+/** Lo que no vuelve atrás. sigue: todavía está (lo cambiaste después); si no, ya no hay nada que hacer con eso. */
+type Quedan = { nombre: string; motivo: string; sigue: boolean }[];
 /** Lo que se va a hacer al deshacer: con ids para hacerlo y con nombres para mostrarlo antes. */
 type Plan = {
   meses: FilaGuardada<FilaMes>[];
   cambiados: FilaGuardada<FilaFijo>[];
   creados: { id: number; nombre: string; filas: number[] }[];
+  /** Pagos que registraste después en los conceptos que creó: quedan en el historial salvo que elijas borrarlos. */
+  pagosDespues: { id: number; nombre: string }[];
   borrados: RegistroCarga["borrados"];
   quedan: Quedan;
+  /** Lo que no vuelve atrás y sigue estando: si queda algo, la carga sigue en la lista («deshecha en parte»). */
+  restan: Pick<RegistroCarga, "cambiados" | "meses" | "borrados">;
   lugares: Lugar[];
   categorias: string[];
   formas: Set<number>;
@@ -405,9 +424,9 @@ async function armarPlan(c: typeof pagoCarga.$inferSelect): Promise<Plan> {
   // Lo tocado después: lo que no quedó como lo dejó la carga (o, en las reconstruidas, lo cambiado después de aplicarla).
   const limite = (c.aplicadaEn?.getTime() ?? 0) + MARGEN_MS;
   const porFecha = (x: { actualizadoEn: Date }) => x.actualizadoEn.getTime() > limite;
-  const fijoTocado = (f: FilaFijo) => (r.huellas ? r.huellas[`f:${f.id}`] !== huellaFijo(f) : porFecha(f));
+  const fijoTocado = (f: FilaFijo) => (r.huellas ? ![huellaFijo(f), huellasViejas.fijo(f)].includes(r.huellas[`f:${f.id}`]) : porFecha(f));
   /** Un pago que no existía al aplicar (un mes que se armó después) es todo tuyo. */
-  const filaTocada = (f: FilaMes) => (r.huellas ? r.huellas[`m:${f.id}`] !== huellaMes(f) : porFecha(f));
+  const filaTocada = (f: FilaMes) => (r.huellas ? ![huellaMes(f), huellasViejas.mes(f)].includes(r.huellas[`m:${f.id}`]) : porFecha(f));
   const idsCreados = r.creados.map((x) => x.id);
   const idsFijos = [...idsCreados, ...r.cambiados.map((f) => f.id), ...r.borrados.map((b) => b.fijo.id)];
   const [fijos, filasCreados, filasMeses, lugares, formas] = await Promise.all([
@@ -418,42 +437,56 @@ async function armarPlan(c: typeof pagoCarga.$inferSelect): Promise<Plan> {
     db.select({ id: pagoForma.id }).from(pagoForma),
   ]);
   const hayLugar = (id: number | null) => !id || lugares.some((l) => l.id === id);
-  const plan: Plan = { meses: [], cambiados: [], creados: [], borrados: [], quedan: [], lugares: lugares.filter((l) => r.lugares.includes(l.id)), categorias: r.categorias, formas: new Set(formas.map((f) => f.id)) };
+  const plan: Plan = {
+    meses: [],
+    cambiados: [],
+    creados: [],
+    pagosDespues: [],
+    borrados: [],
+    quedan: [],
+    restan: { cambiados: [], meses: [], borrados: [] },
+    lugares: lugares.filter((l) => r.lugares.includes(l.id)),
+    categorias: r.categorias,
+    formas: new Set(formas.map((f) => f.id)),
+  };
 
   // Los pagos del mes que tocó (los de los conceptos que creó se van con el concepto).
-  for (const { antes } of r.meses) {
+  for (const m of r.meses) {
+    const { antes } = m;
     if (antes.fijoId && idsCreados.includes(antes.fijoId)) continue;
     const fila = filasMeses.find((x) => x.id === antes.id);
     const nombre = `${abrirMes(antes.datosCifrados).nombre} · ${mesTexto(antes.periodo)}`;
-    if (!fila) plan.quedan.push({ nombre, motivo: "lo borraste después" });
-    else if (filaTocada(fila)) plan.quedan.push({ nombre, motivo: "lo cambiaste o pagaste después" });
+    if (!fila) plan.quedan.push({ nombre, motivo: "lo borraste después", sigue: false });
+    else if (filaTocada(fila)) (plan.quedan.push({ nombre, motivo: "lo cambiaste o pagaste después", sigue: true }), plan.restan.meses.push(m));
     else plan.meses.push(antes);
   }
   for (const antes of r.cambiados) {
     const f = fijos.find((x) => x.id === antes.id);
     const nombre = abrirFijo(antes.datosCifrados).nombre;
-    if (!f) plan.quedan.push({ nombre, motivo: "lo borraste después" });
-    else if (fijoTocado(f)) plan.quedan.push({ nombre, motivo: "lo cambiaste después" });
-    else if (!hayLugar(antes.lugarId)) plan.quedan.push({ nombre, motivo: "el lugar donde estaba ya no existe" });
+    if (!f) plan.quedan.push({ nombre, motivo: "lo borraste después", sigue: false });
+    else if (fijoTocado(f)) (plan.quedan.push({ nombre, motivo: "lo cambiaste después", sigue: true }), plan.restan.cambiados.push(antes));
+    else if (!hayLugar(antes.lugarId)) plan.quedan.push({ nombre, motivo: "el lugar donde estaba ya no existe", sigue: false });
     else plan.cambiados.push(antes);
   }
+  // Lo que creó la carga se borra siempre, aunque lo hayas editado después. Los pagos que registraste vos después, no:
+  // quedan en el historial (sin el concepto) salvo que elijas borrarlos.
   for (const { id } of r.creados) {
     const f = fijos.find((x) => x.id === id);
     if (!f) continue;
     const nombre = abrirFijo(f.datosCifrados).nombre;
-    if (fijoTocado(f)) {
-      plan.quedan.push({ nombre, motivo: "lo cambiaste después" });
-      continue;
-    }
-    // Lo que pagaste vos después queda en el historial (sin el concepto); lo demás se va con él.
     const filas = filasCreados.filter((x) => x.fijoId === id);
     const pagadas = filas.filter((x) => filaTocada(x) && (!!x.comprobante || abrirMes(x.datosCifrados).pagos.length > 0));
-    for (const x of pagadas) plan.quedan.push({ nombre: `${nombre} · ${mesTexto(x.periodo)}`, motivo: "lo pagaste después: queda en el historial" });
+    for (const x of pagadas) {
+      const d = abrirMes(x.datosCifrados);
+      const ultimo = d.pagos.at(-1);
+      const pago = ultimo ? ` · ${plata(totalPagado(d.pagos), x.moneda)} pagado el ${ultimo.fecha.split("-").reverse().join("/")}` : " · con comprobante";
+      plan.pagosDespues.push({ id: x.id, nombre: `${nombre} · ${mesTexto(x.periodo)}${pago}` });
+    }
     plan.creados.push({ id, nombre, filas: filas.filter((x) => !pagadas.includes(x)).map((x) => x.id) });
   }
   for (const b of r.borrados) {
     if (fijos.some((x) => x.id === b.fijo.id)) continue;
-    if (!hayLugar(b.fijo.lugarId)) plan.quedan.push({ nombre: abrirFijo(b.fijo.datosCifrados).nombre, motivo: "no vuelve: su lugar ya no existe" });
+    if (!hayLugar(b.fijo.lugarId)) (plan.quedan.push({ nombre: abrirFijo(b.fijo.datosCifrados).nombre, motivo: "no vuelve: su lugar ya no existe", sigue: true }), plan.restan.borrados.push(b));
     else plan.borrados.push(b);
   }
   return plan;
@@ -465,6 +498,7 @@ export async function verDeshacer(id: number) {
   const p = await armarPlan(c);
   return {
     borra: p.creados.map((x) => x.nombre),
+    pagosDespues: p.pagosDespues,
     vuelve: p.cambiados.map((f) => abrirFijo(f.datosCifrados).nombre),
     recrea: p.borrados.map((b) => abrirFijo(b.fijo.datosCifrados).nombre),
     montos: p.meses.map((f) => `${abrirMes(f.datosCifrados).nombre} · ${mesTexto(f.periodo)}`),
@@ -475,7 +509,8 @@ export async function verDeshacer(id: number) {
   };
 }
 
-async function ejecutar(p: Plan) {
+/** borrarPagos: los pagos que registraste después (de pagosDespues) que elegiste borrar también. */
+async function ejecutar(p: Plan, borrarPagos: number[] = []) {
   const forma = (id: number | null) => (id && p.formas.has(id) ? id : null);
   for (const antes of p.meses) {
     await db
@@ -495,8 +530,10 @@ async function ejecutar(p: Plan) {
     if (antes.tarjetaId) await marcarPago(antes.tarjetaId, totalPagado(abrirMes(antes.datosCifrados).pagos));
   }
   for (const antes of p.cambiados) await actualizarFijo(antes.id, entradaDe(antes, p.formas));
+  const pagosABorrar = p.pagosDespues.filter((x) => borrarPagos.includes(x.id)).map((x) => x.id);
   for (const c of p.creados) {
-    if (c.filas.length) for (const f of await db.select().from(pagoMes).where(inArray(pagoMes.id, c.filas))) await borrarFila(f);
+    const filas = [...c.filas, ...pagosABorrar];
+    if (filas.length) for (const f of await db.select().from(pagoMes).where(and(inArray(pagoMes.id, filas), eq(pagoMes.fijoId, c.id)))) await borrarFila(f);
     // Lo que quedó en el historial pasa a no tener concepto.
     await db.delete(pagoFijo).where(eq(pagoFijo.id, c.id));
   }
@@ -520,21 +557,36 @@ async function ejecutar(p: Plan) {
   bus.avisar("pagos");
 }
 
-/** Deshace todo lo que hizo la carga (menos lo que tocaste después) y la borra. */
-export async function deshacerCarga(id: number) {
+/**
+ * Deshace todo lo que hizo la carga. Si algo no vuelve atrás (lo cambiaste después), la carga queda en la lista como
+ * «deshecha en parte», con lo que quedó; si no, se borra.
+ */
+export async function deshacerCarga(id: number, borrarPagos: number[] = []) {
   const c = await obtenerCarga(id);
-  await ejecutar(await armarPlan(c));
-  await borrarCarga(c);
+  const p = await armarPlan(c);
+  await ejecutar(p, borrarPagos);
+  const quedan = p.quedan.filter((q) => q.sigue);
+  if (!quedan.length) return borrarCarga(c);
+  await db
+    .update(pagoCarga)
+    .set({
+      estado: "parcial",
+      registro: { ...vacio(), ...p.restan, huellas: c.registro?.huellas },
+      datosCifrados: sellar({ texto: abrirCarga(c.datosCifrados).texto, lineas: quedan.map((q) => ({ tipo: "queda" as const, nombre: q.nombre, detalle: q.motivo })) } satisfies DatosCarga),
+    })
+    .where(eq(pagoCarga.id, c.id));
+  bus.avisar("pagos");
 }
 
 // ───────────── Corregir ─────────────
 
 /** Para corregir hace falta que no hayas tocado nada de la carga después (si no, se pisaría). */
 async function planParaCorregir(c: typeof pagoCarga.$inferSelect) {
-  if (c.reconstruida) throw new ErrorUsuario("Esta carga es de antes de que se guardaran: solo se puede deshacer.");
+  if (c.reconstruida) throw new ErrorUsuario("Esta carga se reconstruyó con lo que se creó junto: solo se puede deshacer.");
+  if (c.estado === "parcial") throw new ErrorUsuario("Esta carga ya se deshizo en parte: no se puede corregir.");
   const p = await armarPlan(c);
-  if (p.quedan.length)
-    throw new ErrorUsuario(`Después de esta carga tocaste cosas que hizo (${p.quedan.map((q) => q.nombre).join(", ")}): deshacela o corregí cada concepto desde su ficha.`);
+  const tocadas = [...p.quedan.map((q) => q.nombre), ...p.pagosDespues.map((x) => x.nombre)];
+  if (tocadas.length) throw new ErrorUsuario(`Después de esta carga tocaste cosas que hizo (${tocadas.join(", ")}): deshacela o corregí cada concepto desde su ficha.`);
   return p;
 }
 
