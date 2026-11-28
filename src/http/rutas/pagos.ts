@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { analizarMesPagos, ARCHIVO_IA_MAX_BYTES, armarFijosConIa, cargarMesConIa, type ArchivoIa } from "../../bot/ia-pagos.js";
+import { analizarMesPagos, ARCHIVO_IA_MAX_BYTES, armarConIa, type ArchivoIa } from "../../bot/ia-pagos.js";
 import { actualizarConfig, obtenerConfig } from "../../servicios/configuracion.js";
 import {
   actualizarFijo,
@@ -26,7 +26,7 @@ import {
   resumenPagos,
   verMes,
 } from "../../servicios/pagos.js";
-import { aplicarFijos, aplicarMes, corregirCarga, crearBorrador, deshacerCarga, leerArchivoCarga, listarCargas, paraCorregir, verDeshacer } from "../../servicios/pagos-cargas.js";
+import { aplicarCarga, corregirCarga, crearBorrador, deshacerCarga, leerArchivoCarga, listarCargas, paraCorregir, verDeshacer } from "../../servicios/pagos-cargas.js";
 import { actualizarPersona, borrarPagoAPersona, borrarPersona, crearPersona, listarCuentas, pagarAPersona } from "../../servicios/pagos-cuentas.js";
 import { actualizarForma, borrarForma, crearForma, listarFormas, ordenarFormas, TIPOS_FORMA } from "../../servicios/pagos-formas.js";
 import { borrarCategoria, crearCategoria, listarCategorias, ordenarCategorias, renombrarCategoria } from "../../servicios/pagos-categorias.js";
@@ -72,22 +72,31 @@ const Propuesto = Fijo.extend({ lugarNuevo: Lugar.optional() });
 const IdFijo = z.number().int().positive();
 /** La lectura de la IA con la que va lo que aplicás (así queda en «Cargas con IA»). */
 const IdCarga = z.number().int().positive().optional();
-/** Lo que propuso la IA para los conceptos y revisaste: agrega, cambia y borra. */
-const CambiosFijos = z.object({ nuevos: z.array(Propuesto).max(200), cambios: z.array(Propuesto.extend({ id: IdFijo })).max(500), borrar: z.array(IdFijo).max(500) });
-/** Los montos de un mes: al pago de un concepto o a un pago puntual del mes, y lo que se crea. */
-const CambiosMes = z.object({
-  periodo: Periodo,
-  montos: z
-    .array(
-      z.union([
-        z.object({ fijoId: z.number().int().positive(), monto: Monto, pagadoCon: IdForma.optional() }),
-        z.object({ itemId: z.number().int().positive(), monto: Monto, pagadoCon: IdForma.optional() }),
-      ]),
-    )
-    .max(500),
-  nuevos: z.array(Propuesto.extend({ pagadoCon: IdForma.optional() })).max(200),
-  /** La fecha en que se pagó lo que ya está pagado («Ya lo pagó: …»); de entrada, hoy. */
-  fechaPago: Fecha.optional(),
+/** Un monto de un mes (el mes al que corresponde): a un concepto, a uno nuevo de la misma carga (ref) o a un pago puntual. */
+const MontoCarga = z
+  .union([z.object({ fijoId: IdFijo }), z.object({ ref: z.string().min(1).max(20) }), z.object({ itemId: IdFijo })])
+  .and(z.object({ mes: Periodo, monto: Monto, pagadoCon: IdForma.optional(), fechaPago: Fecha.optional() }));
+/** Un pago de una sola vez, de un lugar (también uno nuevo) o general. */
+const SueltoCarga = z.object({
+  alcance: z.enum(["lugar", "general"]),
+  lugarId: IdFijo.nullable(),
+  tipo: TipoLugar.nullable(),
+  lugarNuevo: Lugar.optional(),
+  nombre: z.string().max(120),
+  categoria: z.string().max(60),
+  monto: Monto,
+  moneda: Moneda,
+  fecha: Fecha,
+  pagadoCon: IdForma.optional(),
+  nota: z.string().max(500),
+});
+/** Lo que propuso la IA y revisaste, todo junto: conceptos nuevos (con su ref), cambios, borrados, montos y sueltos. */
+const Carga = z.object({
+  nuevos: z.array(Propuesto.extend({ ref: z.string().min(1).max(20), desde: Periodo })).max(200),
+  cambios: z.array(Propuesto.extend({ id: IdFijo })).max(500),
+  borrar: z.array(IdFijo).max(500),
+  montos: z.array(MontoCarga).max(1000),
+  sueltos: z.array(SueltoCarga).max(200),
 });
 
 /** Lo que se le pasa a la IA: texto y, opcional, una foto o un PDF (en base64). */
@@ -182,11 +191,6 @@ export const rutasPagos: FastifyPluginAsync = async (app) => {
   });
 
   app.post("/pagos/fijos", async (req) => crearFijo(Fijo.parse(req.body)));
-  /** Lo que propuso la IA y revisaste: agrega (los lugares nuevos se crean), cambia y borra. */
-  app.post("/pagos/fijos/aplicar", async (req) => {
-    const { cargaId, ...cambios } = CambiosFijos.extend({ cargaId: IdCarga }).parse(req.body);
-    return aplicarFijos(cambios, cargaId);
-  });
   app.put("/pagos/fijos/:id", async (req) => {
     await actualizarFijo(Id.parse(req.params).id, Fijo.parse(req.body));
     return { ok: true };
@@ -197,27 +201,19 @@ export const rutasPagos: FastifyPluginAsync = async (app) => {
   });
 
   // ── IA ──
+  /** La IA de Pagos: lo que dictás o pegás (texto, foto o PDF), armado para revisar. */
   app.post("/pagos/ia/armar", { bodyLimit: LIMITE_IA }, async (req) => {
     const p = PedidoIa.parse(req.body);
     const archivo = archivoDe(p.archivo);
-    const propuesta = await armarFijosConIa(p.texto, archivo);
-    return { ...propuesta, cargaId: await crearBorrador("config", null, p.texto, archivo) };
+    const propuesta = await armarConIa(p.texto, archivo);
+    return { ...propuesta, cargaId: await crearBorrador(p.texto, archivo) };
   });
-  /** Los montos de un mes leídos de una foto, un PDF o un texto (el resumen de la contadora): para revisar. */
-  app.post("/pagos/ia/mes", { bodyLimit: LIMITE_IA }, async (req) => {
-    const p = PedidoIa.and(z.object({ periodo: Periodo })).parse(req.body);
-    const archivo = archivoDe(p.archivo);
-    const propuesta = await cargarMesConIa(p.periodo, p.texto, archivo);
-    return { ...propuesta, cargaId: await crearBorrador("mes", p.periodo, p.texto, archivo) };
+  /** Lo que propuso la IA y revisaste: se aplica todo junto, en una carga. cargaId: la lectura de la IA. */
+  app.post("/pagos/ia/aplicar", async (req) => {
+    const { cargaId, ...carga } = Carga.extend({ cargaId: IdCarga }).parse(req.body);
+    return aplicarCarga(carga, cargaId);
   });
   app.post("/pagos/ia/analizar", async (req) => ({ texto: await analizarMesPagos(z.object({ periodo: Periodo }).parse(req.body).periodo) }));
-
-  // ── Los pagos del mes ──
-  /** Lo que leyó la IA y revisaste: los montos van a los pagos del mes y lo que faltaba se crea. */
-  app.post("/pagos/mes/aplicar", async (req) => {
-    const { periodo, cargaId, ...cambios } = CambiosMes.extend({ cargaId: IdCarga }).parse(req.body);
-    return aplicarMes(periodo, cambios, cargaId);
-  });
 
   // ── Cargas con IA: lo que aplicaste, para verlo, deshacerlo o corregirlo ──
   app.get("/pagos/cargas", async () => listarCargas());
@@ -235,7 +231,7 @@ export const rutasPagos: FastifyPluginAsync = async (app) => {
   });
   /** Lo que hizo, para abrirlo en la revisión y corregirlo. */
   app.get("/pagos/cargas/:id/corregir", async (req) => paraCorregir(Id.parse(req.params).id));
-  app.post("/pagos/cargas/:id/corregir", async (req) => corregirCarga(Id.parse(req.params).id, z.union([CambiosMes, CambiosFijos]).parse(req.body)));
+  app.post("/pagos/cargas/:id/corregir", async (req) => corregirCarga(Id.parse(req.params).id, Carga.parse(req.body)));
   app.post("/pagos", async (req) =>
     crearSuelto(
       z

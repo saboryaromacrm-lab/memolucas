@@ -377,8 +377,49 @@ export type FijoPropuesto = Omit<FijoPago, "id" | "desde" | "estimado"> & {
 export type CampoFijo = "nombre" | "alcance" | "categoria" | "monto" | "variable" | "moneda" | "vence" | "pago" | "aviso" | "frecuencia" | "forma" | "cuenta" | "nota";
 /** Lo que propone la IA contra la lista cargada: pagos nuevos, cambios (solo los campos que cambian) y los que se borran. */
 /** totalImagen: el total general que figura en la imagen o el PDF (null si no hay). */
-/** cargaId: la lectura (va con lo que aplicás, así queda en «Cargas con IA»). */
-export type PropuestaPagos = { nuevos: FijoPropuesto[]; cambios: { id: number; despues: FijoPropuesto; campos: CampoFijo[] }[]; borrar: number[]; totalImagen: number | null; mensaje: string; cargaId: number };
+/**
+ * Un monto de un mes (el mes al que corresponde): a un concepto que ya tenés, a uno nuevo de la misma carga (ref) o a un
+ * pago puntual. antes: lo que tenía (null si es nuevo); pagadoCon y fechaPago: si ya está pagado.
+ */
+export type DestinoMonto = { fijoId: number } | { ref: string } | { itemId: number };
+export type MontoPropuesto = DestinoMonto & DatosMonto;
+type DatosMonto = {
+  mes: string;
+  monto: number;
+  nombre: string;
+  lugar: string;
+  antes: number | null;
+  pagado: boolean;
+  pagadoCon: number | null;
+  fechaPago: string | null;
+  original?: string;
+};
+/** Un pago de una sola vez (de un lugar o general). */
+export type SueltoPropuesto = {
+  alcance: "lugar" | "general";
+  lugarId: number | null;
+  tipo: TipoLugar | null;
+  lugarNuevo?: { nombre: string; tipo: TipoLugar };
+  nombre: string;
+  categoria: string;
+  monto: number;
+  moneda: Moneda;
+  fecha: string;
+  pagadoCon: number | null;
+  nota: string;
+  original?: string;
+};
+/** Lo que armó la IA de Pagos para revisar. cargaId: la lectura (va con lo que aplicás, así queda en «Cargas con IA»). */
+export type PropuestaPagos = {
+  nuevos: (FijoPropuesto & { ref: string; desde: string })[];
+  cambios: { id: number; despues: FijoPropuesto; campos: CampoFijo[] }[];
+  borrar: number[];
+  montos: MontoPropuesto[];
+  sueltos: SueltoPropuesto[];
+  totalImagen: number | null;
+  mensaje: string;
+  cargaId: number;
+};
 
 /** tercero: «Lo pagó: …» (otra persona lo pagó por vos; se crea sola con cada cuenta). */
 export type TipoFormaPago = "transferencia" | "efectivo" | "debito_automatico" | "billetera" | "credito" | "debito" | "otro" | "tercero";
@@ -400,23 +441,13 @@ export type CuentaPersona = {
 /** Una categoría de tu lista: fijos, los pagos fijos que la usan; usos, también los de cada mes. */
 export type CategoriaPago = { id: number; nombre: string; orden: number; fijos: number; usos: number };
 export type ConfigPagos = { lugares: LugarPago[]; fijos: FijoPago[]; formas: FormaPago[]; categorias: CategoriaPago[]; diasAviso: number; mensajes: boolean; notasIa: string };
-/** Lo que leyó la IA para un mes: a qué pago va cada monto (también los que ya tenían ese monto), los pagos nuevos y el total que figura. */
-export type PropuestaMes = {
-  periodo: string;
-  montos: (({ fijoId: number } | { itemId: number }) & { monto: number; antes: number; nombre: string; lugar: string; pagado: boolean; original: string })[];
-  nuevos: FijoPropuesto[];
-  totalImagen: number | null;
-  mensaje: string;
-  cargaId: number;
-};
-
 /** Un renglón de lo que hizo una carga con IA. fijoId: el concepto (para abrirlo, si sigue estando). */
-export type LineaCarga = { tipo: "nuevo" | "cambio" | "borrar" | "monto" | "lugar" | "categoria" | "queda"; nombre: string; detalle: string; fijoId?: number };
+export type LineaCarga = { tipo: "nuevo" | "cambio" | "borrar" | "monto" | "suelto" | "lugar" | "categoria" | "queda"; nombre: string; detalle: string; fijoId?: number };
 /**
  * Lo que aplicaste con la IA: lo que le pasaste y lo que hizo. reconstruida: se armó con lo que se creó junto (solo lo
  * que creó). parcial: se deshizo, pero quedó algo que cambiaste después (las líneas son lo que quedó).
  */
-export type CargaIa = { id: number; tipo: "config" | "mes"; periodo: string | null; estado: "aplicada" | "parcial"; reconstruida: boolean; aplicadaEn: string; texto: string; archivo: string | null; lineas: LineaCarga[] };
+export type CargaIa = { id: number; tipo: "config" | "mes" | "general"; periodo: string | null; estado: "aplicada" | "parcial"; reconstruida: boolean; aplicadaEn: string; texto: string; archivo: string | null; lineas: LineaCarga[] };
 /** Lo que va a pasar al deshacerla. */
 export type PlanDeshacer = {
   borra: string[];
@@ -430,16 +461,13 @@ export type PlanDeshacer = {
   categorias: string[];
   reconstruida: boolean;
 };
-/** Lo que hizo una carga, para abrirlo en la revisión y corregirlo. propios: los conceptos que creó. */
+/** Lo que aplicó una carga, para abrirlo en la revisión y corregirlo. propios: los conceptos que creó. */
 export type CargaParaCorregir = {
   id: number;
-  tipo: "config" | "mes";
-  periodo: string | null;
   propios: number[];
-  nuevos: (FijoPropuesto & { pagadoCon?: number })[];
+  nuevos: (FijoPropuesto & { ref: string; desde: string })[];
   cambios: { antes: FijoPago; despues: FijoPropuesto }[];
   borrar: FijoPago[];
-  montos: (({ fijoId: number } | { itemId: number }) & { monto: number; antes: number; nombre: string; lugar: string; pagado: boolean; pagadoCon?: number })[];
-  /** La fecha en que quedó pagado lo que la carga dejó pagado. */
-  fechaPago: string | null;
+  montos: (DestinoMonto & Omit<DatosMonto, "pagadoCon" | "fechaPago"> & { pagadoCon?: number; fechaPago?: string })[];
+  sueltos: (Omit<SueltoPropuesto, "pagadoCon"> & { pagadoCon?: number })[];
 };

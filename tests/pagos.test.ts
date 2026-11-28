@@ -37,7 +37,7 @@ import { borrarCategoria, crearCategoria, listarCategorias, renombrarCategoria }
 import { borrarPersona, crearPersona, listarCuentas, pagarAPersona } from "../src/servicios/pagos-cuentas.js";
 import { crearSuscripcion, pagarSuscripcionCon } from "../src/servicios/suscripciones.js";
 import { actualizarTarjeta, borrarTarjeta, crearTarjeta, SIN_SALDOS } from "../src/servicios/tarjetas.js";
-import { armarFijosConIa, cargarMesConIa } from "../src/bot/ia-pagos.js";
+import { armarConIa } from "../src/bot/ia-pagos.js";
 import { baseLimpia, enviadorFalso, panelConSesion, reloj } from "./ayuda.js";
 
 const pedir = vi.fn();
@@ -73,6 +73,18 @@ const fijo = (lugarId: number, e: Partial<EntradaFijo>): EntradaFijo => ({
   ...e,
 });
 const item = async (periodo: string, nombre: string) => (await verMes(periodo)).items.find((i) => i.nombre === nombre)!;
+/** Un concepto nuevo como lo escribe la IA (lo que no se dice, vacío). */
+const conceptoIa = (c: object) => ({ repartir_entre: [], tipo: "negocio", variable: false, moneda: "ARS", dia: 0, mes_vencido: false, frecuencia: "mensual", forma: "", cuenta: "", nota: "", como_figura: "", ref: "", desde: "", ...c });
+/** Lo que armó la IA, como lo aplica la revisión (todo elegido). */
+const comoCarga = (l: Awaited<ReturnType<typeof armarConIa>>) => ({
+  nuevos: l.nuevos,
+  cambios: l.cambios.map((c) => ({ id: c.id, ...c.despues })),
+  borrar: l.borrar,
+  montos: l.montos.map(({ nombre: _n, lugar: _l, antes: _a, pagado: _p, original: _o, pagadoCon, fechaPago, ...m }) => ({ ...m, ...(pagadoCon ? { pagadoCon, ...(fechaPago ? { fechaPago } : {}) } : {}) })),
+  sueltos: l.sueltos.map(({ original: _o, pagadoCon, ...x }) => ({ ...x, ...(pagadoCon ? { pagadoCon } : {}) })),
+});
+/** Una carga para aplicar: lo que no se pasa, vacío. */
+const cargaIa = (c: Record<string, unknown[]>) => ({ nuevos: [], cambios: [], borrar: [], montos: [], sueltos: [], ...c });
 
 describe("Pagos", () => {
   let express: number;
@@ -311,16 +323,19 @@ describe("Pagos", () => {
     pedir.mockResolvedValue({
       cambios: [],
       borrar: [],
+      montos: [],
+      sueltos: [],
+      total: 0,
       mensaje: "",
       nuevos: [
         // Para un lugar que ya existe la IA deja el tipo vacío, y escribe la moneda y la frecuencia a su manera: no rompe.
-        { alcance: "lugar", lugar: "express 1", tipo: "", repartir_entre: [], nombre: "Alquiler", categoria: "Alquiler", monto: 650000, variable: false, moneda: "pesos", dia: 5, frecuencia: "Bimestral", forma: "transferencia", cuenta: "", nota: "", como_figura: "" },
-        { alcance: "lugar", lugar: "Fontana", tipo: "negocio", repartir_entre: [], nombre: "Luz", categoria: "Electricidad", monto: 0, variable: true, moneda: "USD", dia: 15, frecuencia: "mensual", forma: "", cuenta: "", nota: "", como_figura: "" },
-        { alcance: "repartido", lugar: "", tipo: "", repartir_entre: [], nombre: "Contador", categoria: "Honorarios", monto: 85000, variable: false, moneda: "ARS", dia: 10, frecuencia: "mensual", forma: "", cuenta: "", nota: "", como_figura: "" },
-        { alcance: "general", lugar: "", tipo: "personal", repartir_entre: [], nombre: "Cuota Fiat", categoria: "Préstamos y cuotas", monto: 300000, variable: false, moneda: "ARS", dia: 0, frecuencia: "mensual", forma: "", cuenta: "", nota: "", como_figura: "" },
+        conceptoIa({ alcance: "lugar", lugar: "express 1", tipo: "", repartir_entre: [], nombre: "Alquiler", categoria: "Alquiler", monto: 650000, variable: false, moneda: "pesos", dia: 5, frecuencia: "Bimestral", forma: "transferencia", cuenta: "", nota: "", como_figura: "" }),
+        conceptoIa({ alcance: "lugar", lugar: "Fontana", tipo: "negocio", repartir_entre: [], nombre: "Luz", categoria: "Electricidad", monto: 0, variable: true, moneda: "USD", dia: 15, frecuencia: "mensual", forma: "", cuenta: "", nota: "", como_figura: "" }),
+        conceptoIa({ alcance: "repartido", lugar: "", tipo: "", repartir_entre: [], nombre: "Contador", categoria: "Honorarios", monto: 85000, variable: false, moneda: "ARS", dia: 10, frecuencia: "mensual", forma: "", cuenta: "", nota: "", como_figura: "" }),
+        conceptoIa({ alcance: "general", lugar: "", tipo: "personal", repartir_entre: [], nombre: "Cuota Fiat", categoria: "Préstamos y cuotas", monto: 300000, variable: false, moneda: "ARS", dia: 0, frecuencia: "mensual", forma: "", cuenta: "", nota: "", como_figura: "" }),
       ],
     });
-    const { nuevos: fijos } = await armarFijosConIa("en el express 1 pago alquiler 650 mil el 5, y en Fontana la luz a mitad de mes");
+    const { nuevos: fijos } = await armarConIa("en el express 1 pago alquiler 650 mil el 5, y en Fontana la luz a mitad de mes");
     expect(fijos.map((f) => [f.alcance, f.lugarId, f.lugarNuevo, f.categoria, f.moneda, f.frecuencia])).toEqual([
       ["lugar", express, undefined, "Alquiler", "ARS", "bimestral"],
       ["lugar", null, { nombre: "Fontana", tipo: "negocio" }, "Otros", "USD", "mensual"],
@@ -349,9 +364,12 @@ describe("Pagos", () => {
         { id: abl, campo: "frecuencia", valor: "cada tanto" }, // No se entiende: se ignora.
       ],
       borrar: [gym, 999],
+      montos: [],
+      sueltos: [],
+      total: 0,
       mensaje: "",
     });
-    const r1 = await armarFijosConIa("sacale el vencimiento a todo, el alquiler subió a 850 mil, el ABL pasalo a Fontana sin aviso");
+    const r1 = await armarConIa("sacale el vencimiento a todo, el alquiler subió a 850 mil, el ABL pasalo a Fontana sin aviso");
     expect(r1.cambios.map((c) => [c.id, c.campos])).toEqual([
       [alquiler, ["monto", "vence"]],
       [abl, ["alcance", "vence", "aviso"]],
@@ -362,14 +380,14 @@ describe("Pagos", () => {
     expect([cambioAbl.dia, cambioAbl.avisoDias, cambioAbl.lugarNuevo, cambioAbl.frecuencia]).toEqual([null, -1, { nombre: "Fontana", tipo: "negocio" }, "mensual"]);
 
     // Sin cambios que tengan sentido: en lugar de una lista vacía, dice por qué.
-    pedir.mockResolvedValue({ nuevos: [], cambios: [], borrar: [], mensaje: "" });
-    expect((await armarFijosConIa("hola")).mensaje).toContain("No encontré nada para agregar, cambiar ni borrar");
+    pedir.mockResolvedValue({ nuevos: [], cambios: [], borrar: [], montos: [], sueltos: [], total: 0, mensaje: "" });
+    expect((await armarConIa("hola")).mensaje).toContain("No encontré nada para cargar, cambiar ni borrar");
 
     // Se aplica por el panel: el cambio llega al pago de este mes y el borrado se lleva sus pendientes.
     const { app, headers } = await panelConSesion();
-    const aplicar = (payload: object) => app.inject({ method: "POST", url: "/api/pagos/fijos/aplicar", headers, payload });
-    const res = await aplicar({ nuevos: [], cambios: r1.cambios.slice(0, 2).map((c) => ({ id: c.id, ...c.despues })), borrar: [gym] });
-    expect(res.json()).toEqual({ creados: 0, cambiados: 2, borrados: 1 });
+    const aplicar = (payload: object) => app.inject({ method: "POST", url: "/api/pagos/ia/aplicar", headers, payload });
+    const res = await aplicar(cargaIa({ cambios: r1.cambios.slice(0, 2).map((c) => ({ id: c.id, ...c.despues })), borrar: [gym] }));
+    expect(res.json()).toEqual({ creados: 0, cambiados: 2, borrados: 1, montos: 0, sueltos: 0, avisos: [] });
     const mes = await verMes("2026-11");
     expect(mes.items.map((i) => [i.nombre, i.lugar, i.vence, i.monto])).toEqual(
       expect.arrayContaining([
@@ -379,64 +397,64 @@ describe("Pagos", () => {
     );
     expect(mes.items.some((i) => i.nombre === "Gimnasio")).toBe(false);
     // Algo que ya no existe frena todo antes de tocar nada.
-    const mal = await aplicar({ nuevos: [fijo(casa, { nombre: "Gas" })], cambios: [], borrar: [gym] });
+    const mal = await aplicar(cargaIa({ nuevos: [{ ...fijo(casa, { nombre: "Gas" }), ref: "n1", desde: "2026-11" }], borrar: [gym] }));
     expect(mal.statusCode).toBe(400);
     expect((await verMes("2026-11")).items.some((i) => i.nombre === "Gas")).toBe(false);
     await app.close();
   });
 
-  it("la IA lee el resumen de la contadora (foto o PDF): montos del mes, pagos nuevos y control del total", async () => {
+  it("la IA lee el resumen de la contadora (foto o PDF): montos de cada mes, pagos nuevos, sueltos y control del total", async () => {
     await actualizarConfig({ pagosNotasIa: "Coffit es otro negocio." });
     const coffit = (await crearLugar({ nombre: "Coffit", tipo: "negocio" })).id;
-    await crearFijo(fijo(coffit, { nombre: "F-931", categoria: "Sueldos y cargas", monto: 450000, variable: true }));
-    await crearFijo(fijo(coffit, { nombre: "IPS", categoria: "Sueldos y cargas", monto: 26930, variable: true }));
-    const f931 = await item("2026-11", "F-931");
-    const ips = await item("2026-11", "IPS");
+    const f931 = (await crearFijo(fijo(coffit, { nombre: "F-931", categoria: "Sueldos y cargas", monto: 450000, variable: true }))).id;
+    const ips = (await crearFijo(fijo(coffit, { nombre: "IPS", categoria: "Sueldos y cargas", monto: 26930, variable: true }))).id;
+    const seguro = (await crearFijo(fijo(coffit, { nombre: "Seguro", categoria: "Otros", monto: 90000, frecuencia: "anual" }))).id;
     pedir.mockResolvedValue({
+      nuevos: [conceptoIa({ ref: "n1", alcance: "lugar", lugar: "Coffit", nombre: "UTHGRA", categoria: "Sueldos y cargas", monto: 35412, variable: true, como_figura: "UTHGRA" })],
+      cambios: [],
+      borrar: [],
       montos: [
-        { id: f931.id, monto: 493430, como_figura: "F-931" },
-        { id: ips.id, monto: 26930, como_figura: "IPS" }, // Mismo monto: igual se muestra (cuenta para el total).
-        { id: f931.id, monto: 1, como_figura: "F-931" }, // Repetido: se toma el primero.
-        { id: 999, monto: 5, como_figura: "?" }, // No existe: se ignora.
+        { concepto: `#${f931}`, mes: "2026-11", monto: 493430, pagado_por: "", fecha_pago: "", como_figura: "F-931" },
+        { concepto: `#${ips}`, mes: "2026-11", monto: 26930, pagado_por: "", fecha_pago: "", como_figura: "IPS" }, // Mismo monto: igual se muestra (cuenta para el total).
+        { concepto: `#${f931}`, mes: "2026-11", monto: 1, pagado_por: "", fecha_pago: "", como_figura: "F-931" }, // Repetido: se toma el primero.
+        { concepto: "#999", mes: "2026-11", monto: 5, pagado_por: "", fecha_pago: "", como_figura: "?" }, // No existe: se avisa.
+        { concepto: "n1", mes: "2026-11", monto: 35412, pagado_por: "", fecha_pago: "", como_figura: "UTHGRA" },
       ],
-      nuevos: [
-        { alcance: "lugar", lugar: "Coffit", tipo: "negocio", repartir_entre: [], nombre: "UTHGRA", categoria: "Sueldos y cargas", monto: 35412, variable: true, moneda: "ARS", dia: 0, frecuencia: "mensual", forma: "", cuenta: "", nota: "", como_figura: "UTHGRA" },
-      ],
-      total: 556000,
+      sueltos: [{ nombre: "Plomero", lugar: "Coffit", tipo: "negocio", categoria: "Otros", monto: 50000, moneda: "ARS", fecha: "2026-11-20", pagado_por: "efectivo", nota: "", como_figura: "PLOMERO" }],
+      total: 605772,
       mensaje: "",
     });
     const png = await sharp({ create: { width: 2400, height: 1200, channels: 3, background: "#fff" } }).png().toBuffer();
-    const r = await cargarMesConIa("2026-11", "", { mime: "image/png", datos: png });
-    // A la IA le llega la imagen achicada, los pagos del mes con su id y lo que te dijo de tus negocios.
+    const r = await armarConIa("", { mime: "image/png", datos: png });
+    // A la IA le llega la imagen achicada, lo que pagás siempre con su id y lo que te dijo de tus negocios.
     const [, , system, mensajes] = pedir.mock.calls[0];
     expect(mensajes[0].content[0]).toMatchObject({ type: "image", source: { media_type: "image/webp" } });
-    expect(system).toContain(`#${f931.id} | F-931 · Coffit | 450000 ARS | pendiente`);
+    expect(system).toContain(`#${f931} | nombre: F-931 | alcance: lugar: Coffit`);
     expect(system).toContain("Coffit es otro negocio.");
-    const fijoF931 = (await listarFijos()).find((f) => f.nombre === "F-931")!.id;
     expect(r.montos).toEqual([
-      { fijoId: fijoF931, monto: 493430, antes: 450000, nombre: "F-931", lugar: "Coffit", pagado: false, original: "F-931" },
-      expect.objectContaining({ monto: 26930, antes: 26930, original: "IPS" }),
+      { fijoId: f931, mes: "2026-11", monto: 493430, nombre: "F-931", lugar: "Coffit", antes: 450000, pagado: false, pagadoCon: null, fechaPago: null, original: "F-931" },
+      expect.objectContaining({ fijoId: ips, monto: 26930, antes: 26930, original: "IPS" }),
+      expect.objectContaining({ ref: "n1", monto: 35412, antes: null, nombre: "UTHGRA", lugar: "Coffit" }),
     ]);
-    expect(r.nuevos.map((n) => [n.nombre, n.lugarId, n.monto, n.variable, n.dia, n.original])).toEqual([["UTHGRA", coffit, 35412, true, null, "UTHGRA"]]);
-    expect(r.totalImagen).toBe(556000);
+    expect(r.mensaje).toBe("No supe a qué pago van: ?.");
+    expect(r.nuevos.map((n) => [n.nombre, n.lugarId, n.monto, n.variable, n.dia, n.desde, n.original])).toEqual([["UTHGRA", coffit, 35412, true, null, "2026-11", "UTHGRA"]]);
+    expect(r.sueltos).toEqual([expect.objectContaining({ nombre: "Plomero", alcance: "lugar", lugarId: coffit, monto: 50000, fecha: "2026-11-20", pagadoCon: efectivo })]);
+    expect(r.totalImagen).toBe(605772);
 
-    // Se aplica: el monto va al pago del mes y lo nuevo queda como fijo desde ese mes.
+    // Se aplica: los montos van a los pagos de ese mes, lo nuevo queda como fijo desde ese mes y el suelto, pagado.
     const { app, headers } = await panelConSesion();
-    const res = await app.inject({ method: "POST", url: "/api/pagos/mes/aplicar", headers, payload: { periodo: "2026-11", montos: [{ fijoId: fijoF931, monto: 493430 }], nuevos: r.nuevos } });
-    expect(res.json()).toEqual({ cambiados: 1, creados: 1 });
+    const res = await app.inject({ method: "POST", url: "/api/pagos/ia/aplicar", headers, payload: comoCarga(r) });
+    expect(res.json()).toEqual({ creados: 1, cambiados: 0, borrados: 0, montos: 3, sueltos: 1, avisos: [] });
     expect(await item("2026-11", "F-931")).toMatchObject({ monto: 493430, boleta: 493430 });
     expect(await item("2026-11", "UTHGRA")).toMatchObject({ monto: 35412, lugar: "Coffit", vence: null });
     expect((await item("2026-12", "UTHGRA")).monto).toBe(35412);
-    // Con el mes cambiado en la revisión, el monto va al pago de ese concepto en ese mes.
-    await app.inject({ method: "POST", url: "/api/pagos/mes/aplicar", headers, payload: { periodo: "2026-12", montos: [{ fijoId: fijoF931, monto: 510000 }], nuevos: [] } });
-    expect((await item("2026-12", "F-931")).monto).toBe(510000);
-    expect((await item("2026-11", "F-931")).monto).toBe(493430);
-    // Un pago puntual de otro mes no se puede: avisa en vez de cargarlo mal.
-    const otro = await app.inject({ method: "POST", url: "/api/pagos/mes/aplicar", headers, payload: { periodo: "2026-12", montos: [{ itemId: f931.id, monto: 1 }], nuevos: [] } });
-    expect(otro.json().error).toContain("no está en diciembre 2026");
+    expect(await item("2026-11", "Plomero")).toMatchObject({ monto: 50000, estado: "pagado", pagadoEn: "2026-11-20", forma: "Efectivo", lugar: "Coffit" });
+    // Un monto en un mes en que ese pago no toca (el seguro es anual, desde noviembre): avisa y no carga nada.
+    const fuera = await app.inject({ method: "POST", url: "/api/pagos/ia/aplicar", headers, payload: cargaIa({ montos: [{ fijoId: seguro, mes: "2026-12", monto: 95000 }] }) });
+    expect(fuera.json().error).toContain("no se paga en diciembre 2026");
     // Sin texto ni archivo no se puede; un PDF falso tampoco.
-    expect((await app.inject({ method: "POST", url: "/api/pagos/ia/mes", headers, payload: { periodo: "2026-11", texto: "" } })).statusCode).toBe(400);
-    const pdf = await app.inject({ method: "POST", url: "/api/pagos/ia/mes", headers, payload: { periodo: "2026-11", archivo: { mime: "application/pdf", base64: Buffer.from("hola").toString("base64") } } });
+    expect((await app.inject({ method: "POST", url: "/api/pagos/ia/armar", headers, payload: { texto: "" } })).statusCode).toBe(400);
+    const pdf = await app.inject({ method: "POST", url: "/api/pagos/ia/armar", headers, payload: { archivo: { mime: "application/pdf", base64: Buffer.from("hola").toString("base64") } } });
     expect(pdf.json().error).toBe("Ese archivo no es un PDF.");
     await app.close();
   });
@@ -587,20 +605,26 @@ describe("Pagos", () => {
     expect(wa.enviados[0].texto).toContain("🤝 Le debés a Contadora $ 223.430,00.");
   });
 
-  it("cargar el mes con la IA: lo que ya pagó la contadora queda pagado por ella", async () => {
+  it("cargar con la IA: lo que ya pagó la contadora queda pagado por ella, en la fecha que se dice", async () => {
     const contadora = await crearPersona({ nombre: "Contadora", saldoInicial: 0 });
     const pagoElla = (await listarFormas()).find((f) => f.personaId === contadora.id)!.id;
     const f931 = (await crearFijo(fijo(express, { nombre: "F-931", monto: 450000, variable: true }))).id;
     const { app, headers } = await panelConSesion();
     const res = await app.inject({
       method: "POST",
-      url: "/api/pagos/mes/aplicar",
+      url: "/api/pagos/ia/aplicar",
       headers,
-      payload: { periodo: "2026-11", montos: [{ fijoId: f931, monto: 493430, pagadoCon: pagoElla }], nuevos: [{ ...fijo(express, { nombre: "UTHGRA", monto: 35412, variable: true }), pagadoCon: pagoElla }] },
+      payload: cargaIa({
+        nuevos: [{ ...fijo(express, { nombre: "UTHGRA", monto: 35412, variable: true }), ref: "n1", desde: "2026-11" }],
+        montos: [
+          { fijoId: f931, mes: "2026-11", monto: 493430, pagadoCon: pagoElla, fechaPago: "2026-11-12" },
+          { ref: "n1", mes: "2026-11", monto: 35412, pagadoCon: pagoElla },
+        ],
+      }),
     });
-    expect(res.statusCode).toBe(200);
-    expect(await item("2026-11", "F-931")).toMatchObject({ estado: "pagado", pagado: 493430, forma: "Lo pagó: Contadora" });
-    expect(await item("2026-11", "UTHGRA")).toMatchObject({ estado: "pagado", pagado: 35412, forma: "Lo pagó: Contadora" });
+    expect(res.json()).toMatchObject({ montos: 2, avisos: [] });
+    expect(await item("2026-11", "F-931")).toMatchObject({ estado: "pagado", pagado: 493430, forma: "Lo pagó: Contadora", pagadoEn: "2026-11-12" });
+    expect(await item("2026-11", "UTHGRA")).toMatchObject({ estado: "pagado", pagado: 35412, forma: "Lo pagó: Contadora", pagadoEn: "2026-11-26" });
     expect((await listarCuentas()).find((c) => c.id === contadora.id)?.saldo).toBe(493430 + 35412);
     await app.close();
   });
@@ -720,30 +744,32 @@ describe("Pagos", () => {
     // El resumen de la contadora de octubre, cargado en noviembre: va al F-931 de octubre y lo nuevo es de octubre en adelante.
     const contadora = await crearPersona({ nombre: "Contadora", saldoInicial: 0 });
     const pagoElla = (await listarFormas()).find((f) => f.personaId === contadora.id)!.id;
-    const f931Oct = (await item("2026-11", "F-931")).id;
     pedir.mockResolvedValue({
-      montos: [{ id: f931Oct, monto: 493430, como_figura: "F-931" }],
-      nuevos: [
-        { alcance: "lugar", lugar: "Express 1", tipo: "negocio", repartir_entre: [], nombre: "UTHGRA", categoria: "Sueldos y cargas", monto: 35412, variable: true, moneda: "ARS", dia: 0, mes_vencido: true, frecuencia: "mensual", forma: "", cuenta: "", nota: "", como_figura: "UTHGRA" },
+      nuevos: [conceptoIa({ ref: "u", alcance: "lugar", lugar: "Express 1", nombre: "UTHGRA", categoria: "Sueldos y cargas", monto: 35412, variable: true, mes_vencido: true, como_figura: "UTHGRA" })],
+      cambios: [],
+      borrar: [],
+      montos: [
+        { concepto: `#${f931}`, mes: "2026-10", monto: 493430, pagado_por: "Lo pagó: Contadora", fecha_pago: "2026-11-12", como_figura: "F-931" },
+        { concepto: "u", mes: "2026-10", monto: 35412, pagado_por: "contadora", fecha_pago: "2026-11-12", como_figura: "UTHGRA" },
       ],
+      sueltos: [],
       total: 528842,
       mensaje: "",
     });
-    const leido = await cargarMesConIa("2026-10", "lo de octubre");
+    const leido = await armarConIa("lo de octubre de la contadora, lo pagó ella el 12/11");
     const [, , system] = pedir.mock.calls[0];
-    expect(system).toContain("Cargás los montos que corresponden a octubre 2026");
-    expect(system).toContain(`#${f931Oct} | F-931 · Express 1 | 450000 ARS | pendiente`);
+    expect(system).toContain(`#${f931} | nombre: F-931 | alcance: lugar: Express 1`);
+    expect(system).toContain("pago: mes siguiente");
     expect(system).toContain("Mes vencido:");
-    expect(leido.montos).toEqual([expect.objectContaining({ fijoId: f931, monto: 493430, antes: 450000 })]);
-    expect(leido.nuevos[0]).toMatchObject({ nombre: "UTHGRA", desfase: 1 });
+    expect(leido.montos).toEqual([
+      expect.objectContaining({ fijoId: f931, mes: "2026-10", monto: 493430, antes: 450000, pagadoCon: pagoElla, fechaPago: "2026-11-12" }),
+      expect.objectContaining({ ref: "u", mes: "2026-10", monto: 35412, antes: null, pagadoCon: pagoElla, fechaPago: "2026-11-12" }),
+    ]);
+    // El nuevo arranca en octubre, va a mes vencido y, como lo pagó la contadora, ella queda como forma fija.
+    expect(leido.nuevos[0]).toMatchObject({ nombre: "UTHGRA", ref: "u", desde: "2026-10", desfase: 1, formaId: pagoElla });
     const { app, headers } = await panelConSesion();
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/pagos/mes/aplicar",
-      headers,
-      payload: { periodo: "2026-10", montos: [{ fijoId: f931, monto: 493430, pagadoCon: pagoElla }], nuevos: leido.nuevos.map((n) => ({ ...n, pagadoCon: pagoElla })), fechaPago: "2026-11-12" },
-    });
-    expect(res.json()).toEqual({ cambiados: 1, creados: 1 });
+    const res = await app.inject({ method: "POST", url: "/api/pagos/ia/aplicar", headers, payload: comoCarga(leido) });
+    expect(res.json()).toEqual({ creados: 1, cambiados: 0, borrados: 0, montos: 2, sueltos: 0, avisos: [] });
     const nov = await verMes("2026-11");
     expect(nov.items.filter((i) => i.periodo === "2026-10").map((i) => [i.nombre, i.monto, i.estado, i.pagadoEn, i.forma])).toEqual([
       ["F-931", 493430, "pagado", "2026-11-12", "Lo pagó: Contadora"],

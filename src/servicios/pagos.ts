@@ -544,11 +544,16 @@ export async function verMes(periodo: string) {
   };
 }
 
-/** Los pagos que corresponden a ese mes (para cargar sus montos), aunque se paguen el mes siguiente. */
-export async function pagosQueCorresponden(periodo: string) {
-  await prepararCorresponde(periodo);
-  const [filas, cat] = await Promise.all([filasDe(periodo, periodo, "corresponde"), catalogos()]);
-  return filas.map((r) => aItem(r, cat, hoyIso()));
+/** Cómo están los pagos de esos fijos en esos meses (lo que había antes de cargarles un monto con la IA). */
+export async function filasDeFijos(fijoIds: number[], periodos: string[]) {
+  const filas = await db
+    .select()
+    .from(pagoMes)
+    .where(and(inArray(pagoMes.fijoId, fijoIds), inArray(pagoMes.periodo, periodos)));
+  return filas.map((r) => {
+    const d = abrirMes(r.datosCifrados);
+    return { fijoId: r.fijoId, periodo: r.periodo, monto: d.boleta ?? d.esperado, estado: r.estado };
+  });
 }
 
 async function obtener(id: number) {

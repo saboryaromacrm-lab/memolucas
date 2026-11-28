@@ -532,6 +532,8 @@ export type RegistroCarga = {
   cambiados: FilaGuardada<typeof pagoFijo.$inferSelect>[];
   borrados: { fijo: FilaGuardada<typeof pagoFijo.$inferSelect>; filas: FilaGuardada<typeof pagoMes.$inferSelect>[]; historial: number[] }[];
   meses: { antes: FilaGuardada<typeof pagoMes.$inferSelect>; pagadoCon?: number }[];
+  /** Los pagos sueltos que anotó (las cargas de antes de la IA general no tienen). */
+  sueltos?: number[];
   /** Cómo quedó cada cosa que tocó ("f:id" un concepto, "m:id" un pago del mes): si cambió, la tocaste después. */
   huellas?: Record<string, string>;
 };
@@ -544,7 +546,8 @@ export type RegistroCarga = {
  */
 export const pagoCarga = pgTable("pago_carga", {
   id: serial("id").primaryKey(),
-  tipo: text("tipo").$type<"config" | "mes">().notNull(),
+  /** general: la IA de Pagos de arriba de todo; config y mes: las de antes (conceptos o montos de un mes). */
+  tipo: text("tipo").$type<"config" | "mes" | "general">().notNull(),
   /** El mes de los montos (mes) o desde cuándo van los conceptos nuevos (config). */
   periodo: text("periodo"),
   /** parcial: se deshizo, pero quedó algo que cambiaste después (se muestra lo que quedó). */

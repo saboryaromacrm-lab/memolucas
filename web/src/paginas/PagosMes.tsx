@@ -1,15 +1,14 @@
 import { useRef, useState, type ReactNode } from "react";
-import { AlertTriangle, Ban, Check, FileText, Paperclip, Pencil, RotateCcw, Sparkles, Trash2, Undo2, Upload, Wallet } from "lucide-react";
-import { archivoParaIa, CampoIa } from "../componentes/CampoIa";
+import { AlertTriangle, Ban, Check, FileText, Paperclip, Pencil, Plus, RotateCcw, Sparkles, Trash2, Undo2, Wallet } from "lucide-react";
 import { ElegirForma } from "../componentes/FormasPago";
+import { SelectorMes } from "../componentes/SelectorMes";
 import { Boton, Cargando, Deslizable, MenuAcciones, Modal, Vacio, useAccion } from "../componentes/ui";
 import { api, del, post, put } from "../lib/api";
 import { ahora } from "../lib/fechas";
 import { aCampo, aNumero, plata } from "../lib/numeros";
-import { diaMes, nombreMes, plataTotales, soloMes, sumarMeses } from "../lib/pagos";
-import type { ConfigPagos, FormaPago, ItemPago, MesPagos, PartePago, PropuestaMes } from "../lib/tipos";
+import { diaMes, nombreMes, plataTotales, soloMes } from "../lib/pagos";
+import type { ConfigPagos, FormaPago, ItemPago, MesPagos, PartePago } from "../lib/tipos";
 import { ElegirCategoria } from "./PagosFijo";
-import { RevisionIa, type FilaIa } from "./PagosRevisionIa";
 import { useDatos } from "../lib/vivo";
 
 type Filtro = { tipo: "todos" } | { tipo: "negocio" | "personal" } | { tipo: "lugar"; lugar: string };
@@ -22,7 +21,8 @@ const GRUPOS: { titulo: string; de: (i: ItemPago) => boolean; color?: string }[]
 ];
 const ETIQUETA_ORIGEN: Partial<Record<ItemPago["origen"], string>> = { suscripcion: "De Suscripciones", tarjeta: "De Tarjetas" };
 
-export function PagosMes({ periodo, nuevo, onCerrarNuevo, onConfigurar }: { periodo: string; nuevo: boolean; onCerrarNuevo: () => void; onConfigurar: () => void }) {
+/** Lo que se paga en el mes: el mes y «+ Pago» arriba, los totales, las alertas y la lista con sus filtros. */
+export function PagosMes({ periodo, onPeriodo, onConfigurar }: { periodo: string; onPeriodo: (p: string) => void; onConfigurar: () => void }) {
   const { datos } = useDatos<MesPagos>(`/api/pagos/mes?periodo=${periodo}`, ["pagos", "suscripciones", "tarjetas"]);
   const config = useDatos<ConfigPagos>("/api/pagos/config", ["pagos", "tarjetas"]).datos;
   const [filtro, setFiltro] = useState<Filtro>({ tipo: "todos" });
@@ -33,7 +33,7 @@ export function PagosMes({ periodo, nuevo, onCerrarNuevo, onConfigurar }: { peri
   const [pago, setPago] = useState<{ i: ItemPago; corregir: boolean } | null>(null);
   const [editando, setEditando] = useState<ItemPago | null>(null);
   const [analizando, setAnalizando] = useState(false);
-  const [cargando, setCargando] = useState(false);
+  const [nuevo, setNuevo] = useState(false);
   const comprobante = useRef<HTMLInputElement>(null);
   const [paraComprobante, setParaComprobante] = useState<ItemPago | null>(null);
   const accion = useAccion();
@@ -70,6 +70,17 @@ export function PagosMes({ periodo, nuevo, onCerrarNuevo, onConfigurar }: { peri
 
   return (
     <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <SelectorMes periodo={periodo} onPeriodo={onPeriodo} />
+        {datos.items.length > 0 && (
+          <Boton chico icono={<Sparkles className="size-3.5" />} cargando={analizando} onClick={() => void analizar()} title="Usa la IA: cuesta unos centavos de dólar">
+            {datos.analisis ? "Actualizar análisis" : "Pedir análisis"}
+          </Boton>
+        )}
+        <Boton variante="primario" className="ml-auto" icono={<Plus className="size-4" />} onClick={() => setNuevo(true)}>
+          Pago
+        </Boton>
+      </div>
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Cifra titulo="Total del mes" valor={plataTotales(t.total)} detalle={`${t.cantidad} ${t.cantidad === 1 ? "pago" : "pagos"}`} />
         <Cifra titulo="Pagado" valor={plataTotales(t.pagado)} color="text-marca-oscuro">
@@ -81,41 +92,25 @@ export function PagosMes({ periodo, nuevo, onCerrarNuevo, onConfigurar }: { peri
         <Cifra titulo="Vencidos" valor={String(t.vencidos)} color={t.vencidos ? "text-red-600" : undefined} detalle={t.vencidos ? "Mirá arriba de la lista" : "Ninguno"} />
       </div>
 
-      <section className="rounded-xl border border-teal-200 bg-gradient-to-br from-teal-50 to-white p-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="flex items-center gap-1.5 text-sm font-semibold text-marca-profundo">
-            <Sparkles className="size-4" /> Lo que ve la IA este mes
-          </h2>
-          <div className="flex flex-wrap gap-2">
-            <Boton chico icono={<Upload className="size-3.5" />} onClick={() => setCargando(true)} title="Pegá una foto o un PDF (el resumen de la contadora) y carga los montos del mes">
-              Cargar con IA
-            </Boton>
-            {datos.items.length > 0 && (
-              <Boton chico cargando={analizando} onClick={() => void analizar()} title="Usa la IA: cuesta unos centavos de dólar">
-                {datos.analisis ? "Actualizar análisis" : "Pedir análisis"}
-              </Boton>
-            )}
-          </div>
-        </div>
-        {datos.alertas.length > 0 && (
-          <ul className="mt-2 space-y-1 text-sm text-slate-700">
-            {datos.alertas.map((a) => (
-              <li key={a} className="flex gap-1.5">
-                <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-500" /> {a}
-              </li>
-            ))}
-          </ul>
-        )}
-        {datos.analisis ? (
-          <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-slate-700">{datos.analisis.texto}</p>
-        ) : (
-          !datos.alertas.length && (
-            <p className="mt-1 text-sm text-slate-500">
-              {datos.items.length ? "Todo en orden. El día 1 te llega por WhatsApp cómo cerró el mes." : "Pegá el resumen de la contadora (foto o PDF) con «Cargar con IA» y se cargan los montos."}
+      {(datos.alertas.length > 0 || datos.analisis) && (
+        <section className="rounded-xl border border-amber-200 bg-amber-50/60 px-4 py-2.5 text-sm text-slate-700">
+          {datos.alertas.length > 0 && (
+            <ul className="space-y-1">
+              {datos.alertas.map((a) => (
+                <li key={a} className="flex gap-1.5">
+                  <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-500" /> {a}
+                </li>
+              ))}
+            </ul>
+          )}
+          {datos.analisis && (
+            <p className={`whitespace-pre-line leading-relaxed ${datos.alertas.length ? "mt-2 border-t border-amber-200 pt-2" : ""}`}>
+              <Sparkles className="mr-1 inline size-4 text-marca-oscuro" />
+              {datos.analisis.texto}
             </p>
-          )
-        )}
+          )}
         </section>
+      )}
 
       {datos.items.length > 0 && (
         <div className="flex flex-wrap items-center gap-2">
@@ -214,8 +209,7 @@ export function PagosMes({ periodo, nuevo, onCerrarNuevo, onConfigurar }: { peri
       <input ref={comprobante} type="file" accept="image/*,application/pdf" hidden onChange={(e) => (void subirComprobante(e.target.files?.[0]), (e.target.value = ""))} />
       {pago && config && <ModalPago {...pago} formas={config.formas} onCerrar={() => setPago(null)} />}
       {editando && <ModalDelMes i={editando} onCerrar={() => setEditando(null)} />}
-      {nuevo && config && <ModalSuelto config={config} periodo={periodo} onCerrar={onCerrarNuevo} />}
-      {cargando && config && <ModalCargarMes periodo={periodo} config={config} onCerrar={() => setCargando(false)} />}
+      {nuevo && config && <ModalSuelto config={config} periodo={periodo} onCerrar={() => setNuevo(false)} />}
     </div>
   );
 }
@@ -478,65 +472,6 @@ function ModalSuelto({ config, periodo, onCerrar }: { config: ConfigPagos; perio
           <ElegirForma formas={config.formas} valor={formaId} onCambio={setFormaId} ninguna={f.pagado ? undefined : "Todavía no sé"} />
         </div>
       </div>
-    </Modal>
-  );
-}
-
-/**
- * Cargar con IA: el mes, una foto, un PDF o un texto (el resumen de impuestos de la contadora). La IA arma a qué pago
- * va cada monto y qué pagos hay que crear, y se revisa todo en la revisión antes de aplicar.
- */
-function ModalCargarMes({ periodo: periodoInicial, config, onCerrar }: { periodo: string; config: ConfigPagos; onCerrar: () => void }) {
-  // De entrada, el mes anterior al que estás viendo: lo que pagás en noviembre suele ser lo de octubre.
-  const [periodo, setPeriodo] = useState(sumarMeses(periodoInicial, -1));
-  const [texto, setTexto] = useState("");
-  const [archivo, setArchivo] = useState<File | null>(null);
-  const [leyendo, setLeyendo] = useState(false);
-  const [leido, setLeido] = useState<PropuestaMes | null>(null);
-  const accion = useAccion();
-  const leer = async () => {
-    setLeyendo(true);
-    const r = await accion(async () => post<PropuestaMes>("/api/pagos/ia/mes", { periodo, texto, archivo: archivo ? await archivoParaIa(archivo) : undefined }));
-    setLeyendo(false);
-    if (r) setLeido(r);
-  };
-
-  if (leido) {
-    const filas: FilaIa[] = [
-      ...leido.montos.map(({ monto, antes, nombre, lugar, pagado, original, ...a }) => {
-        const destino = "fijoId" in a ? { fijoId: a.fijoId } : { itemId: a.itemId, nombre, lugar };
-        return { tipo: "monto" as const, destino, monto, antes, pagado, original, ia: destino };
-      }),
-      ...leido.nuevos.map((fijo) => ({ tipo: "nuevo" as const, fijo, ia: fijo })),
-    ];
-    return <RevisionIa modo="mes" config={config} filas={filas} periodo={leido.periodo} periodoLeido={leido.periodo} totalImagen={leido.totalImagen} mensaje={leido.mensaje} cargaId={leido.cargaId} onCerrar={() => setLeido(null)} onListo={onCerrar} />;
-  }
-  return (
-    <Modal
-      abierto
-      onCerrar={onCerrar}
-      titulo="Cargar con IA"
-      ancho="max-w-2xl"
-      pie={
-        <>
-          <Boton onClick={onCerrar}>Cancelar</Boton>
-          <Boton variante="primario" icono={<Sparkles className="size-4" />} cargando={leyendo} disabled={texto.trim().length < 3 && !archivo} onClick={() => void leer()}>
-            Leer con IA
-          </Boton>
-        </>
-      }
-    >
-      <label className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
-        <span className="font-medium text-slate-800">¿A qué mes corresponden estos montos?</span>
-        <input className="campo h-9 w-auto py-0" type="month" value={periodo} onChange={(e) => e.target.value && setPeriodo(e.target.value)} aria-label="Mes al que corresponden" />
-        <span className="text-xs text-slate-500">
-          El mes del gasto ({nombreMes(periodo).toLowerCase()}), aunque lo pagues en {soloMes(sumarMeses(periodo, 1))}. Cuándo vence cada uno sale de su concepto.
-        </span>
-      </label>
-      <p className="mb-3 text-sm text-slate-500">
-        Pegá o elegí la foto o el PDF (por ejemplo, el resumen de impuestos de la contadora), o escribí los montos. Revisás y corregís todo antes de guardar (cuesta unos centavos).
-      </p>
-      <CampoIa texto={texto} onTexto={setTexto} archivo={archivo} onArchivo={setArchivo} placeholder="Opcional: algo que la IA tenga que saber («es lo de octubre», «el IVA diferido va a Fontana»…)" />
     </Modal>
   );
 }

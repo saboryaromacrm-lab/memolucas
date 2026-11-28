@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Download } from "lucide-react";
+import { SelectorMes } from "../componentes/SelectorMes";
 import { Cargando } from "../componentes/ui";
 import { plata } from "../lib/numeros";
 import { mesCorto, nombreMes, plataTotales, sumarMeses } from "../lib/pagos";
@@ -11,7 +12,7 @@ import { useDatos } from "../lib/vivo";
  * Resumen: los últimos 12 meses, el mes y el año por lugar, por categoría y por forma de pago, y el CSV para el
  * contador. De entrada por el mes al que corresponde cada pago (el gasto); también por el mes en que se paga.
  */
-export function PagosResumen({ periodo }: { periodo: string }) {
+export function PagosResumen({ periodo, onPeriodo }: { periodo: string; onPeriodo: (p: string) => void }) {
   const [por, setPor] = useRecordado<{ v: PorMes }>("pagos-resumen-por", { v: "corresponde" });
   const { datos } = useDatos<ResumenPagos>(`/api/pagos/resumen?periodo=${periodo}&por=${por.v}`, ["pagos"]);
   const [desde, setDesde] = useState(sumarMeses(periodo, -2));
@@ -23,6 +24,7 @@ export function PagosResumen({ periodo }: { periodo: string }) {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2 text-sm">
+        <SelectorMes periodo={periodo} onPeriodo={onPeriodo} />
         <div className="flex rounded-lg bg-slate-100 p-0.5 text-xs" role="radiogroup" aria-label="Ver por">
           {(
             [

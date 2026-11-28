@@ -1,11 +1,11 @@
 import { useState } from "react";
-import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
-import { Boton, Encabezado } from "../componentes/ui";
-import { nombreMes, periodoActual, sumarMeses } from "../lib/pagos";
+import { Encabezado } from "../componentes/ui";
+import { periodoActual } from "../lib/pagos";
 import { useRecordado } from "../lib/recordado";
 import { PagosCargas } from "./PagosCargas";
 import { PagosConfig } from "./PagosConfig";
 import { PagosCuentas } from "./PagosCuentas";
+import { PagosIa } from "./PagosIa";
 import { PagosMes } from "./PagosMes";
 import { PagosResumen } from "./PagosResumen";
 
@@ -18,40 +18,15 @@ const VISTAS: [Vista, string][] = [
   ["cargas", "Cargas con IA"],
 ];
 
-/** Pagos: todo lo que pagás mes a mes en tus locales, tu casa y tus cosas. */
+/** Pagos: todo lo que pagás mes a mes en tus locales, tu casa y tus cosas. Arriba de todo, la IA para cargar lo que sea. */
 export function Pagos() {
   const [vista, setVista] = useRecordado<{ v: Vista }>("pagos-vista", { v: "mes" });
   const [periodo, setPeriodo] = useState(periodoActual);
-  const [nuevo, setNuevo] = useState(false);
 
   return (
     <div>
-      <Encabezado
-        titulo="Pagos"
-        subtitulo="Todo lo que pagás, mes a mes. Se arma solo con lo que cargaste en Configuración."
-        acciones={
-          (vista.v === "mes" || vista.v === "resumen") && (
-            <>
-              <div className="flex items-center gap-1">
-                <Boton chico aria-label="Mes anterior" onClick={() => setPeriodo(sumarMeses(periodo, -1))}>
-                  <ChevronLeft className="size-4" />
-                </Boton>
-                <button onClick={() => setPeriodo(periodoActual())} title="Volver a este mes" className="min-w-36 px-2 text-center text-sm font-semibold text-slate-900">
-                  {nombreMes(periodo)}
-                </button>
-                <Boton chico aria-label="Mes siguiente" onClick={() => setPeriodo(sumarMeses(periodo, 1))}>
-                  <ChevronRight className="size-4" />
-                </Boton>
-              </div>
-              {vista.v === "mes" && (
-                <Boton variante="primario" icono={<Plus className="size-4" />} onClick={() => setNuevo(true)}>
-                  Pago
-                </Boton>
-              )}
-            </>
-          )
-        }
-      />
+      <Encabezado titulo="Pagos" subtitulo="Todo lo que pagás, mes a mes. Se arma solo con lo que cargaste en Configuración." />
+      <PagosIa />
       <div className="mb-5 flex gap-1 overflow-x-auto border-b border-slate-200">
         {VISTAS.map(([v, texto]) => (
           <button
@@ -63,8 +38,8 @@ export function Pagos() {
           </button>
         ))}
       </div>
-      {vista.v === "mes" && <PagosMes periodo={periodo} nuevo={nuevo} onCerrarNuevo={() => setNuevo(false)} onConfigurar={() => setVista({ v: "config" })} />}
-      {vista.v === "resumen" && <PagosResumen periodo={periodo} />}
+      {vista.v === "mes" && <PagosMes periodo={periodo} onPeriodo={setPeriodo} onConfigurar={() => setVista({ v: "config" })} />}
+      {vista.v === "resumen" && <PagosResumen periodo={periodo} onPeriodo={setPeriodo} />}
       {vista.v === "cuentas" && <PagosCuentas />}
       {vista.v === "config" && <PagosConfig />}
       {vista.v === "cargas" && <PagosCargas />}
