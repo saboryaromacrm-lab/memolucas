@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNotNull, isNull, lt, or } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, lt, or } from "drizzle-orm";
 import { DateTime } from "luxon";
 import { db } from "../db/index.js";
 import { pagoCarga, pagoCategoria, pagoFijo, pagoForma, pagoLugar, pagoMes, type FilaGuardada, type RegistroCarga, type TipoLugar } from "../db/schema.js";
@@ -18,28 +18,29 @@ import {
   borrarLugar,
   crearFijo,
   crearLugar,
+  crearSuelto,
   pendientesDesdeHoy,
   prepararCorresponde,
   registrarPago,
   type Alcance,
   type EntradaFijo,
 } from "./pagos.js";
-import { nombreMes, totalPagado } from "./pagos-reglas.js";
+import { nombreMes, totalPagado, type Moneda } from "./pagos-reglas.js";
 import { ErrorUsuario } from "./recordatorios.js";
 import { marcarPago } from "./tarjetas.js";
 
-// Las cargas con IA de Pagos: cada vez que aplicás lo que propuso la IA (los conceptos de Configuración o los montos
-// de un mes) queda lo que le pasaste, lo que hizo y cómo estaba todo antes, para verlo, deshacerlo entero o
-// corregirlo. Lo que tocaste a mano después de la carga queda como lo dejaste.
+// Las cargas con IA de Pagos: cada vez que aplicás lo que propuso la IA (conceptos, montos de uno o varios meses, lo
+// pagado y los pagos sueltos) queda lo que le pasaste, lo que hizo y cómo estaba todo antes, para verlo, deshacerlo
+// entero o corregirlo.
 
 type FilaFijo = typeof pagoFijo.$inferSelect;
 type FilaMes = typeof pagoMes.$inferSelect;
 type Lugar = typeof pagoLugar.$inferSelect;
-type TipoCarga = "config" | "mes";
 
 /** Un renglón de lo que hizo una carga (o, si se deshizo en parte, de lo que quedó). fijoId: el concepto, para abrirlo. */
-export type LineaCarga = { tipo: "nuevo" | "cambio" | "borrar" | "monto" | "lugar" | "categoria" | "queda"; nombre: string; detalle: string; fijoId?: number };
-type DatosCarga = { texto: string; lineas: LineaCarga[] };
+export type LineaCarga = { tipo: "nuevo" | "cambio" | "borrar" | "monto" | "suelto" | "lugar" | "categoria" | "queda"; nombre: string; detalle: string; fijoId?: number };
+/** propuesta: lo que se aplicó tal cual (para corregirlo); las cargas de antes de la IA general no la tienen. */
+type DatosCarga = { texto: string; lineas: LineaCarga[]; propuesta?: CargaPropuesta };
 
 const archivos = almacenCifrado("pagos-cargas");
 /** En las reconstruidas: lo que se tocó hasta 2 segundos después de aplicar es de la carga; lo de después, tuyo. */
@@ -73,7 +74,8 @@ const siQueda = (e: unknown) => {
   if (!(e instanceof ErrorUsuario)) throw e;
 };
 
-function dondeVa(f: Alcance, lugares: Lugar[]) {
+/** A qué corresponde, en palabras: el lugar, «Repartido · …» o «General · …». */
+export function dondeVa(f: Alcance, lugares: Lugar[]) {
   const nombre = (id: number | null) => lugares.find((l) => l.id === id)?.nombre ?? "lugar borrado";
   if (f.alcance === "general") return `General · ${f.tipo ?? "personal"}`;
   if (f.alcance === "repartido") return `Repartido · ${(f.reparto ?? []).map((r) => nombre(r.lugarId)).join(", ")}`;
@@ -113,19 +115,57 @@ export type FijoPropuesto = EntradaFijo & {
   original?: string;
 };
 
+/**
+ * Un monto de un mes (el mes al que corresponde): al pago de un concepto que ya tenés (fijoId), de uno nuevo de la misma
+ * carga (ref) o a un pago puntual (itemId). pagadoCon: ya está pagado con esa forma, el día fechaPago (de entrada, hoy).
+ */
+export type MontoPropuesto = ({ fijoId: number } | { ref: string } | { itemId: number }) & { mes: string; monto: number; pagadoCon?: number; fechaPago?: string };
+/** Un pago de una sola vez, de un lugar (también uno nuevo) o general. pagadoCon: ya está pagado, el día de la fecha. */
+export type SueltoPropuesto = Pick<FijoPropuesto, "lugarId" | "tipo" | "lugarNuevo"> & {
+  alcance: "lugar" | "general";
+  nombre: string;
+  categoria: string;
+  monto: number;
+  moneda: Moneda;
+  fecha: string;
+  pagadoCon?: number;
+  nota: string;
+};
+/** Lo que propuso la IA y revisaste, todo junto. Los nuevos llevan un ref para que los montos los nombren. */
+export type CargaPropuesta = {
+  nuevos: (FijoPropuesto & { ref: string; desde: string })[];
+  cambios: (FijoPropuesto & { id: number })[];
+  borrar: number[];
+  montos: MontoPropuesto[];
+  sueltos: SueltoPropuesto[];
+};
+
 /** Antes de tocar nada se revisa todo lo propuesto (así no queda a medias). */
-function validarPropuestos(lista: FijoPropuesto[]) {
-  for (const e of lista) {
+function revisar(c: CargaPropuesta) {
+  for (const e of [...c.nuevos, ...c.cambios, ...c.sueltos]) {
     if (!e.nombre.trim()) throw new ErrorUsuario("Falta el nombre de un pago.");
     if (e.alcance === "lugar" && !e.lugarId && !e.lugarNuevo?.nombre.trim()) throw new ErrorUsuario(`Falta el lugar de «${e.nombre}».`);
-    if (e.alcance !== "lugar") alcanceValido(e);
+    if (e.alcance !== "lugar" && "reparto" in e) alcanceValido(e);
+  }
+  for (const s of c.sueltos) if (!(s.monto > 0)) throw new ErrorUsuario(`Falta el monto de «${s.nombre}».`);
+  const refs = new Set(c.nuevos.map((n) => n.ref));
+  if (refs.size !== c.nuevos.length) throw new ErrorUsuario("Hay dos pagos nuevos con el mismo nombre interno: volvé a armar la carga.");
+  if (c.montos.some((m) => "ref" in m && !refs.has(m.ref))) throw new ErrorUsuario("Un monto va a un pago nuevo que ya no está: revisalo.");
+}
+
+/** Lo que nombra de lo que ya tenés tiene que seguir estando. */
+async function existen(c: CargaPropuesta) {
+  const ids = [...c.cambios.map((e) => e.id), ...c.borrar, ...c.montos.flatMap((m) => ("fijoId" in m ? [m.fijoId] : []))];
+  if (ids.length) {
+    const hay = new Set((await db.select({ id: pagoFijo.id }).from(pagoFijo).where(inArray(pagoFijo.id, ids))).map((f) => f.id));
+    if (ids.some((id) => !hay.has(id))) throw new ErrorUsuario("Algún pago ya no existe: volvé a armar los cambios.");
   }
 }
 
 /** Crea los lugares nuevos que nombran los pagos propuestos, una sola vez aunque los nombren varios. */
 function creadorDeLugares() {
   const creados = new Map<string, number>();
-  return async (e: FijoPropuesto): Promise<EntradaFijo> => {
+  return async <T extends Pick<FijoPropuesto, "lugarId" | "lugarNuevo"> & { alcance: string }>(e: T): Promise<T> => {
     if (e.alcance !== "lugar" || e.lugarId || !e.lugarNuevo) return e;
     const clave = normalizar(e.lugarNuevo.nombre);
     const lugarId = creados.get(clave) ?? (await crearLugar(e.lugarNuevo)).id;
@@ -143,7 +183,7 @@ async function idsActuales() {
  * Hace los cambios y anota en la carga qué hizo (también si se corta a mitad de camino: lo que llegó a hacer se puede
  * deshacer).
  */
-async function registrando<T>(cargaId: number | undefined, tipo: TipoCarga, periodo: string | null, hacer: (r: RegistroCarga) => Promise<T>): Promise<T> {
+async function registrando<T>(cargaId: number | undefined, propuesta: CargaPropuesta, hacer: (r: RegistroCarga) => Promise<T>): Promise<T> {
   const antes = await idsActuales();
   const r = vacio();
   try {
@@ -153,35 +193,40 @@ async function registrando<T>(cargaId: number | undefined, tipo: TipoCarga, peri
     r.lugares = ahora.lugares.filter((l) => !antes.lugares.some((x) => x.id === l.id)).map((l) => l.id);
     r.categorias = ahora.categorias.filter((c) => !antes.categorias.some((x) => x.id === c.id)).map((c) => c.nombre);
     r.huellas = await huellasDe(r);
-    await guardarRegistro(cargaId, tipo, periodo, r);
+    await guardarRegistro(cargaId, propuesta, r);
   }
 }
 
-/** Cómo quedó todo lo que tocó: los conceptos que creó y cambió, sus pagos y los pagos del mes. */
+/** Cómo quedó todo lo que tocó: los conceptos que creó y cambió, sus pagos, los pagos del mes y los sueltos. */
 async function huellasDe(r: RegistroCarga) {
   const idsCreados = r.creados.map((c) => c.id);
   const [fijos, filas] = await Promise.all([
     db.select().from(pagoFijo).where(inArray(pagoFijo.id, [...idsCreados, ...r.cambiados.map((f) => f.id)])),
-    db.select().from(pagoMes).where(or(inArray(pagoMes.fijoId, idsCreados), inArray(pagoMes.id, r.meses.map((m) => m.antes.id)))),
+    db
+      .select()
+      .from(pagoMes)
+      .where(or(inArray(pagoMes.fijoId, idsCreados), inArray(pagoMes.id, [...r.meses.map((m) => m.antes.id), ...(r.sueltos ?? [])]))),
   ]);
   return Object.fromEntries([...fijos.map((f) => [`f:${f.id}`, huellaFijo(f)]), ...filas.map((f) => [`m:${f.id}`, huellaMes(f)])]);
 }
 
-async function guardarRegistro(cargaId: number | undefined, tipo: TipoCarga, periodo: string | null, r: RegistroCarga) {
+async function guardarRegistro(cargaId: number | undefined, propuesta: CargaPropuesta, r: RegistroCarga) {
   const [previa] = cargaId ? await db.select().from(pagoCarga).where(eq(pagoCarga.id, cargaId)) : [];
-  const hizoAlgo = [r.lugares, r.categorias, r.creados, r.cambiados, r.borrados, r.meses].some((lista) => lista.length);
+  const hizoAlgo = [r.lugares, r.categorias, r.creados, r.cambiados, r.borrados, r.meses, r.sueltos ?? []].some((lista) => lista.length);
   // Sin nada hecho: una lectura queda para volver a intentar; una carga corregida a nada, ya no está.
   if (!hizoAlgo) {
     if (previa?.estado === "aplicada") await borrarCarga(previa);
     return;
   }
+  // El primer mes que toca (de los montos o desde cuándo van los nuevos).
+  const periodo = [...propuesta.montos.map((m) => m.mes), ...propuesta.nuevos.map((n) => n.desde)].sort()[0] ?? null;
   const valores = {
-    tipo,
+    tipo: "general" as const,
     periodo,
     estado: "aplicada" as const,
     reconstruida: false,
     registro: r,
-    datosCifrados: sellar({ texto: previa ? abrirCarga(previa.datosCifrados).texto : "", lineas: await lineasDe(r) } satisfies DatosCarga),
+    datosCifrados: sellar({ texto: previa ? abrirCarga(previa.datosCifrados).texto : "", lineas: await lineasDe(r), propuesta } satisfies DatosCarga),
     aplicadaEn: new Date(),
   };
   if (previa) await db.update(pagoCarga).set(valores).where(eq(pagoCarga.id, previa.id));
@@ -189,17 +234,22 @@ async function guardarRegistro(cargaId: number | undefined, tipo: TipoCarga, per
   bus.avisar("pagos");
 }
 
-/** Lo que propuso la IA y revisaste: agrega, cambia y borra. cargaId: la lectura de la IA (con lo que le pasaste). */
-export async function aplicarFijos(c: { nuevos: FijoPropuesto[]; cambios: (FijoPropuesto & { id: number })[]; borrar: number[] }, cargaId?: number) {
-  validarPropuestos([...c.nuevos, ...c.cambios]);
-  const ids = [...c.cambios.map((e) => e.id), ...c.borrar];
-  if (ids.length) {
-    const hay = new Set((await db.select({ id: pagoFijo.id }).from(pagoFijo).where(inArray(pagoFijo.id, ids))).map((f) => f.id));
-    if (ids.some((id) => !hay.has(id))) throw new ErrorUsuario("Algún pago ya no existe: volvé a armar los cambios.");
-  }
-  return registrando(cargaId, "config", c.nuevos[0]?.desde ?? null, async (r) => {
+/**
+ * Lo que propuso la IA y revisaste, todo junto y en una sola carga: crea, cambia y borra conceptos; cada monto va al
+ * pago del mes al que corresponde (aunque se pague el siguiente) y lo que ya está pagado queda pagado; los sueltos se
+ * anotan. Al final revisa que lo marcado como pagado haya quedado pagado (avisos). cargaId: la lectura de la IA.
+ */
+export async function aplicarCarga(c: CargaPropuesta, cargaId?: number) {
+  revisar(c);
+  await existen(c);
+  return registrando(cargaId, c, async (r) => {
     const conLugar = creadorDeLugares();
-    for (const e of c.nuevos) r.creados.push({ id: (await crearFijo(await conLugar(e))).id });
+    const porRef = new Map<string, number>();
+    for (const { ref, ...e } of c.nuevos) {
+      const { id } = await crearFijo(await conLugar(e));
+      porRef.set(ref, id);
+      r.creados.push({ id });
+    }
     for (const { id, ...e } of c.cambios) {
       const [antes] = await db.select().from(pagoFijo).where(eq(pagoFijo.id, id));
       r.cambiados.push(guardar(antes));
@@ -212,49 +262,52 @@ export async function aplicarFijos(c: { nuevos: FijoPropuesto[]; cambios: (FijoP
       r.borrados.push({ fijo: guardar(fijo), filas: filas.map(guardar), historial });
       await borrarFijo(id);
     }
-    return { creados: c.nuevos.length, cambiados: c.cambios.length, borrados: c.borrar.length };
+
+    // Cada monto, al pago del mes al que corresponde (los de los fijos se arman si todavía no están).
+    for (const mes of new Set(c.montos.map((m) => m.mes))) await prepararCorresponde(mes);
+    const fijoDe = (m: MontoPropuesto) => ("fijoId" in m ? m.fijoId : "ref" in m ? porRef.get(m.ref)! : null);
+    const filas = await db
+      .select()
+      .from(pagoMes)
+      .where(or(and(inArray(pagoMes.fijoId, c.montos.flatMap((m) => fijoDe(m) ?? [])), inArray(pagoMes.periodo, c.montos.map((m) => m.mes))), inArray(pagoMes.id, c.montos.flatMap((m) => ("itemId" in m ? [m.itemId] : [])))));
+    const destinos = c.montos.map((m) => {
+      const fijoId = fijoDe(m);
+      const fila = fijoId ? filas.find((x) => x.fijoId === fijoId && x.periodo === m.mes) : filas.find((x) => "itemId" in m && x.id === m.itemId);
+      if (!fila) throw new ErrorUsuario(`Un pago no se paga en ${nombreMes(m.mes)} (por su frecuencia o porque empieza después): revisalo.`);
+      return { fila, ...m };
+    });
+    // Cómo estaban (los pagos de los conceptos nuevos se van con el concepto).
+    const nuevos = new Set(porRef.values());
+    for (const d of destinos) {
+      if ((d.fila.fijoId && nuevos.has(d.fila.fijoId)) || r.meses.some((m) => m.antes.id === d.fila.id)) continue;
+      r.meses.push({ antes: guardar(d.fila), ...(d.pagadoCon && d.fila.estado !== "pagado" ? { pagadoCon: d.pagadoCon } : {}) });
+    }
+    for (const d of destinos) if (d.monto !== montoDe(d.fila.datosCifrados)) await actualizarPagoDelMes(d.fila.id, { monto: d.monto });
+    // Lo que ya está pagado (por la contadora, por ejemplo) queda pagado con esa forma, en esa fecha.
+    for (const d of destinos) if (d.pagadoCon && d.fila.estado !== "pagado") await registrarPago(d.fila.id, { formaId: d.pagadoCon, ...(d.fechaPago ? { fecha: d.fechaPago } : {}) });
+
+    r.sueltos = [];
+    const sueltosPagados: number[] = [];
+    for (const s of c.sueltos) {
+      const e = await conLugar(s);
+      const item = await crearSuelto({ nombre: e.nombre, lugarId: e.alcance === "lugar" ? e.lugarId : null, tipo: e.tipo ?? undefined, categoria: e.categoria, monto: e.monto, moneda: e.moneda, fecha: e.fecha, formaId: e.pagadoCon ?? null, nota: e.nota, pagado: !!e.pagadoCon });
+      r.sueltos.push(item.id);
+      if (e.pagadoCon) sueltosPagados.push(item.id);
+    }
+    const avisos = await sinPagar([...destinos.filter((d) => d.pagadoCon).map((d) => d.fila.id), ...sueltosPagados]);
+    return { creados: c.nuevos.length, cambiados: c.cambios.length, borrados: c.borrar.length, montos: destinos.length, sueltos: c.sueltos.length, avisos };
   });
 }
 
-/**
- * Un monto del mes: al pago de un concepto de todos los meses (fijoId) o a un pago puntual del mes (itemId).
- * pagadoCon: ya está pagado con esa forma (por ejemplo «Lo pagó: Contadora»).
- */
-export type MontoDelMes = ({ fijoId: number } | { itemId: number }) & { monto: number; pagadoCon?: number };
-
-/**
- * Los montos que corresponden a un mes, que leyó la IA (el resumen de la contadora, por ejemplo) y revisaste: cada
- * monto va al pago que corresponde a ese mes (aunque se pague el siguiente), y lo que no estaba se crea como pago fijo
- * desde ese mes, con ese monto. Lo que ya está pagado queda pagado en fechaPago (de entrada, hoy).
- */
-export async function aplicarMes(periodo: string, c: { montos: MontoDelMes[]; nuevos: (FijoPropuesto & { pagadoCon?: number })[]; fechaPago?: string }, cargaId?: number) {
-  validarPropuestos(c.nuevos);
-  return registrando(cargaId, "mes", periodo, async (r) => {
-    const conLugar = creadorDeLugares();
-    const creados: MontoDelMes[] = [];
-    for (const e of c.nuevos) {
-      const { id } = await crearFijo({ ...(await conLugar(e)), desde: periodo });
-      r.creados.push({ id, ...(e.pagadoCon ? { pagadoCon: e.pagadoCon } : {}) });
-      if (e.pagadoCon) creados.push({ fijoId: id, monto: e.monto, pagadoCon: e.pagadoCon });
-    }
-    await prepararCorresponde(periodo);
-    // Cada monto va al pago de ese mes: el del concepto (lo de todos los meses) o, si no sale de uno, ese pago.
-    const filas = await db.select().from(pagoMes).where(eq(pagoMes.periodo, periodo));
-    const filaDe = (m: MontoDelMes) => {
-      const fila = "fijoId" in m ? filas.find((x) => x.fijoId === m.fijoId) : filas.find((x) => x.id === m.itemId);
-      if (!fila) throw new ErrorUsuario(`Un pago elegido no está en ${nombreMes(periodo).toLowerCase()} (no se paga ese mes o ya no existe): revisalo.`);
-      return fila;
-    };
-    const destinos = c.montos.map((m) => ({ fila: filaDe(m), monto: m.monto, pagadoCon: m.pagadoCon }));
-    for (const d of destinos) {
-      if (r.meses.some((m) => m.antes.id === d.fila.id)) continue;
-      r.meses.push({ antes: guardar(d.fila), ...(d.pagadoCon && d.fila.estado !== "pagado" ? { pagadoCon: d.pagadoCon } : {}) });
-    }
-    for (const d of destinos) await actualizarPagoDelMes(d.fila.id, { monto: d.monto });
-    // Lo que ya está pagado (por la contadora, por ejemplo) queda pagado con esa forma.
-    for (const d of [...destinos, ...creados.map((m) => ({ fila: filaDe(m), pagadoCon: m.pagadoCon }))])
-      if (d.pagadoCon && d.fila.estado !== "pagado") await registrarPago(d.fila.id, { formaId: d.pagadoCon, ...(c.fechaPago ? { fecha: c.fechaPago } : {}) });
-    return { cambiados: destinos.length, creados: c.nuevos.length };
+/** La revisión después de aplicar: lo que se marcó como pagado y no quedó pagado (entero). */
+async function sinPagar(ids: number[]): Promise<string[]> {
+  if (!ids.length) return [];
+  const filas = await db.select().from(pagoMes).where(inArray(pagoMes.id, ids));
+  return filas.flatMap((f) => {
+    if (f.estado === "pagado") return [];
+    const d = abrirMes(f.datosCifrados);
+    const que = `${d.nombre} · ${mesTexto(f.periodo)}`;
+    return [f.estado === "parcial" ? `${que} quedó pagado en parte (falta ${plata(montoDe(f.datosCifrados) - totalPagado(d.pagos), f.moneda)}).` : `${que} no quedó pagado.`];
   });
 }
 
@@ -264,7 +317,7 @@ export async function aplicarMes(periodo: string, c: { montos: MontoDelMes[]; nu
  * Lo que leyó la IA, antes de aplicarlo: lo que escribiste y el archivo (la foto como la leyó, el PDF tal cual).
  * Devuelve el id que va con lo que aplicás.
  */
-export async function crearBorrador(tipo: TipoCarga, periodo: string | null, texto: string, archivo?: { datos: Buffer; mime: string }) {
+export async function crearBorrador(texto: string, archivo?: { datos: Buffer; mime: string }) {
   let guardado: { nombre: string; mime: string } | null = null;
   if (archivo) {
     const datos = archivo.mime === "application/pdf" ? archivo.datos : (await comoWebp(archivo.datos, { ancho: 1600, alto: 1600 }).catch(() => null))?.data;
@@ -275,7 +328,7 @@ export async function crearBorrador(tipo: TipoCarga, periodo: string | null, tex
   }
   const [c] = await db
     .insert(pagoCarga)
-    .values({ tipo, periodo, datosCifrados: sellar({ texto: texto.trim(), lineas: [] } satisfies DatosCarga), archivo: guardado?.nombre, archivoMime: guardado?.mime })
+    .values({ tipo: "general", datosCifrados: sellar({ texto: texto.trim(), lineas: [] } satisfies DatosCarga), archivo: guardado?.nombre, archivoMime: guardado?.mime })
     .returning({ id: pagoCarga.id });
   return c.id;
 }
@@ -322,17 +375,36 @@ function diferencias(antes: FilaGuardada<FilaFijo>, ahora: FilaFijo, lugares: Lu
   return partes.filter(Boolean).join(" · ") || "sin cambios";
 }
 
+const fechaCorta = (iso: string) => iso.split("-").reverse().join("/");
+/** Con qué se pagó un pago del mes (la última parte), o null si no está pagado. */
+const formaDelPago = (f: FilaMes) => (f.estado === "pagado" || f.estado === "parcial" ? (abrirMes(f.datosCifrados).pagos.at(-1)?.formaId ?? f.formaId) : null);
+
 /** El detalle de lo que hizo, con los nombres de ese momento (se calcula al aplicar y se guarda). */
 async function lineasDe(r: RegistroCarga): Promise<LineaCarga[]> {
-  const idsFijos = [...r.creados.map((c) => c.id), ...r.cambiados.map((f) => f.id)];
+  const idsCreados = r.creados.map((c) => c.id);
+  const idsFijos = [...idsCreados, ...r.cambiados.map((f) => f.id)];
   const [fijos, lugares, listaFormas, filas] = await Promise.all([
     idsFijos.length ? db.select().from(pagoFijo).where(inArray(pagoFijo.id, idsFijos)) : [],
     db.select().from(pagoLugar),
     db.select().from(pagoForma),
-    r.meses.length ? db.select().from(pagoMes).where(inArray(pagoMes.id, r.meses.map((m) => m.antes.id))) : [],
+    db
+      .select()
+      .from(pagoMes)
+      .where(or(inArray(pagoMes.id, [...r.meses.map((m) => m.antes.id), ...(r.sueltos ?? [])]), inArray(pagoMes.fijoId, idsCreados)))
+      .orderBy(asc(pagoMes.periodo), asc(pagoMes.id)),
   ]);
   const formas = new Map(listaFormas.map((f) => [f.id, f.nombre]));
-  const pagadoCon = (id?: number) => (id ? `pagado con ${formas.get(id) ?? "una forma borrada"}` : "");
+  /** «pagado con Lo pagó: Contadora el 12/11/2026». */
+  const pagado = (f: FilaMes | undefined, formaId?: number | null) => {
+    if (!formaId) return "";
+    const fecha = f && abrirMes(f.datosCifrados).pagos.at(-1)?.fecha;
+    return `pagado con ${formas.get(formaId) ?? "una forma borrada"}${fecha ? ` el ${fechaCorta(fecha)}` : ""}`;
+  };
+  // Los pagos de los conceptos nuevos que la carga dejó con monto o pagados.
+  const deNuevos = filas.filter((f) => {
+    const d = abrirMes(f.datosCifrados);
+    return f.fijoId && idsCreados.includes(f.fijoId) && r.huellas?.[`m:${f.id}`] && (d.boleta !== null || d.pagos.length > 0);
+  });
   return [
     ...r.lugares.flatMap((id) => {
       const l = lugares.find((x) => x.id === id);
@@ -343,7 +415,7 @@ async function lineasDe(r: RegistroCarga): Promise<LineaCarga[]> {
       const f = fijos.find((x) => x.id === c.id);
       if (!f) return [];
       const d = abrirFijo(f.datosCifrados);
-      const detalle = [dondeVa(f, lugares), f.categoria, d.monto ? plata(d.monto, f.moneda) : "sin monto", pagadoCon(c.pagadoCon)].filter(Boolean).join(" · ");
+      const detalle = [dondeVa(f, lugares), f.categoria, d.monto ? plata(d.monto, f.moneda) : "sin monto", `desde ${nombreMes(f.desde)}`].join(" · ");
       return [{ tipo: "nuevo" as const, nombre: d.nombre, detalle, fijoId: f.id }];
     }),
     ...r.cambiados.map((antes) => {
@@ -355,9 +427,22 @@ async function lineasDe(r: RegistroCarga): Promise<LineaCarga[]> {
       const fila = filas.find((x) => x.id === m.antes.id);
       const [antes, ahora] = [montoDe(m.antes.datosCifrados), fila ? montoDe(fila.datosCifrados) : null];
       const monto = ahora === null || ahora === antes ? plata(antes, m.antes.moneda) : `${plata(antes, m.antes.moneda)} → ${plata(ahora, m.antes.moneda)}`;
-      const detalle = [mesTexto(m.antes.periodo), dondeVa(m.antes, lugares), monto, pagadoCon(m.pagadoCon)].filter(Boolean).join(" · ");
+      const detalle = [mesTexto(m.antes.periodo), dondeVa(m.antes, lugares), monto, pagado(fila, m.pagadoCon)].filter(Boolean).join(" · ");
       return { tipo: "monto" as const, nombre: abrirMes(m.antes.datosCifrados).nombre, detalle, ...(m.antes.fijoId ? { fijoId: m.antes.fijoId } : {}) };
     }),
+    ...deNuevos.map((f) => ({
+      tipo: "monto" as const,
+      nombre: abrirMes(f.datosCifrados).nombre,
+      detalle: [mesTexto(f.periodo), dondeVa(f, lugares), plata(montoDe(f.datosCifrados), f.moneda), pagado(f, formaDelPago(f))].filter(Boolean).join(" · "),
+      fijoId: f.fijoId!,
+    })),
+    ...filas
+      .filter((f) => r.sueltos?.includes(f.id))
+      .map((f) => ({
+        tipo: "suelto" as const,
+        nombre: abrirMes(f.datosCifrados).nombre,
+        detalle: [f.vence ? fechaCorta(f.vence) : mesTexto(f.periodo), dondeVa(f, lugares), plata(montoDe(f.datosCifrados), f.moneda), pagado(f, formaDelPago(f)) || "para pagar"].join(" · "),
+      })),
   ];
 }
 
@@ -407,8 +492,13 @@ type Quedan = { nombre: string; motivo: string; sigue: boolean }[];
 type Plan = {
   meses: FilaGuardada<FilaMes>[];
   cambiados: FilaGuardada<FilaFijo>[];
-  creados: { id: number; nombre: string; filas: number[] }[];
-  /** Pagos que registraste después en los conceptos que creó: quedan en el historial salvo que elijas borrarlos. */
+  /** Los conceptos que creó (se borran siempre) y los que editaste después (para no corregir encima). */
+  creados: { id: number; nombre: string }[];
+  editadosDespues: string[];
+  /** Los pagos del mes que se borran: los de los conceptos que creó y los sueltos que anotó (sueltos: sus nombres). */
+  filas: number[];
+  sueltos: string[];
+  /** Pagos que registraste después en lo que creó: quedan en el historial salvo que elijas borrarlos. */
   pagosDespues: { id: number; nombre: string }[];
   borrados: RegistroCarga["borrados"];
   quedan: Quedan;
@@ -429,9 +519,12 @@ async function armarPlan(c: typeof pagoCarga.$inferSelect): Promise<Plan> {
   const filaTocada = (f: FilaMes) => (r.huellas ? ![huellaMes(f), huellasViejas.mes(f)].includes(r.huellas[`m:${f.id}`]) : porFecha(f));
   const idsCreados = r.creados.map((x) => x.id);
   const idsFijos = [...idsCreados, ...r.cambiados.map((f) => f.id), ...r.borrados.map((b) => b.fijo.id)];
-  const [fijos, filasCreados, filasMeses, lugares, formas] = await Promise.all([
+  const [fijos, filasPropias, filasMeses, lugares, formas] = await Promise.all([
     idsFijos.length ? db.select().from(pagoFijo).where(inArray(pagoFijo.id, idsFijos)) : [],
-    idsCreados.length ? db.select().from(pagoMes).where(inArray(pagoMes.fijoId, idsCreados)) : [],
+    db
+      .select()
+      .from(pagoMes)
+      .where(or(inArray(pagoMes.fijoId, idsCreados), inArray(pagoMes.id, r.sueltos ?? []))),
     r.meses.length ? db.select().from(pagoMes).where(inArray(pagoMes.id, r.meses.map((m) => m.antes.id))) : [],
     db.select().from(pagoLugar),
     db.select({ id: pagoForma.id }).from(pagoForma),
@@ -441,6 +534,9 @@ async function armarPlan(c: typeof pagoCarga.$inferSelect): Promise<Plan> {
     meses: [],
     cambiados: [],
     creados: [],
+    editadosDespues: [],
+    filas: [],
+    sueltos: [],
     pagosDespues: [],
     borrados: [],
     quedan: [],
@@ -468,21 +564,26 @@ async function armarPlan(c: typeof pagoCarga.$inferSelect): Promise<Plan> {
     else if (!hayLugar(antes.lugarId)) plan.quedan.push({ nombre, motivo: "el lugar donde estaba ya no existe", sigue: false });
     else plan.cambiados.push(antes);
   }
-  // Lo que creó la carga se borra siempre, aunque lo hayas editado después. Los pagos que registraste vos después, no:
-  // quedan en el historial (sin el concepto) salvo que elijas borrarlos.
+  // Lo que creó la carga (conceptos y pagos sueltos) se borra siempre, aunque lo hayas editado después. Los pagos que
+  // registraste vos después, no: quedan en el historial salvo que elijas borrarlos.
   for (const { id } of r.creados) {
     const f = fijos.find((x) => x.id === id);
     if (!f) continue;
     const nombre = abrirFijo(f.datosCifrados).nombre;
-    const filas = filasCreados.filter((x) => x.fijoId === id);
-    const pagadas = filas.filter((x) => filaTocada(x) && (!!x.comprobante || abrirMes(x.datosCifrados).pagos.length > 0));
-    for (const x of pagadas) {
-      const d = abrirMes(x.datosCifrados);
+    plan.creados.push({ id, nombre });
+    if (fijoTocado(f)) plan.editadosDespues.push(nombre);
+  }
+  for (const x of filasPropias) {
+    const d = abrirMes(x.datosCifrados);
+    const nombre = plan.creados.find((c) => c.id === x.fijoId)?.nombre ?? d.nombre;
+    if (filaTocada(x) && (!!x.comprobante || d.pagos.length > 0)) {
       const ultimo = d.pagos.at(-1);
-      const pago = ultimo ? ` · ${plata(totalPagado(d.pagos), x.moneda)} pagado el ${ultimo.fecha.split("-").reverse().join("/")}` : " · con comprobante";
+      const pago = ultimo ? ` · ${plata(totalPagado(d.pagos), x.moneda)} pagado el ${fechaCorta(ultimo.fecha)}` : " · con comprobante";
       plan.pagosDespues.push({ id: x.id, nombre: `${nombre} · ${mesTexto(x.periodo)}${pago}` });
+    } else {
+      plan.filas.push(x.id);
+      if (!x.fijoId) plan.sueltos.push(nombre);
     }
-    plan.creados.push({ id, nombre, filas: filas.filter((x) => !pagadas.includes(x)).map((x) => x.id) });
   }
   for (const b of r.borrados) {
     if (fijos.some((x) => x.id === b.fijo.id)) continue;
@@ -497,7 +598,7 @@ export async function verDeshacer(id: number) {
   const c = await obtenerCarga(id);
   const p = await armarPlan(c);
   return {
-    borra: p.creados.map((x) => x.nombre),
+    borra: [...p.creados.map((x) => x.nombre), ...p.sueltos.map((n) => `${n} (pago suelto)`)],
     pagosDespues: p.pagosDespues,
     vuelve: p.cambiados.map((f) => abrirFijo(f.datosCifrados).nombre),
     recrea: p.borrados.map((b) => abrirFijo(b.fijo.datosCifrados).nombre),
@@ -530,13 +631,10 @@ async function ejecutar(p: Plan, borrarPagos: number[] = []) {
     if (antes.tarjetaId) await marcarPago(antes.tarjetaId, totalPagado(abrirMes(antes.datosCifrados).pagos));
   }
   for (const antes of p.cambiados) await actualizarFijo(antes.id, entradaDe(antes, p.formas));
-  const pagosABorrar = p.pagosDespues.filter((x) => borrarPagos.includes(x.id)).map((x) => x.id);
-  for (const c of p.creados) {
-    const filas = [...c.filas, ...pagosABorrar];
-    if (filas.length) for (const f of await db.select().from(pagoMes).where(and(inArray(pagoMes.id, filas), eq(pagoMes.fijoId, c.id)))) await borrarFila(f);
-    // Lo que quedó en el historial pasa a no tener concepto.
-    await db.delete(pagoFijo).where(eq(pagoFijo.id, c.id));
-  }
+  const filas = [...p.filas, ...p.pagosDespues.filter((x) => borrarPagos.includes(x.id)).map((x) => x.id)];
+  for (const f of await db.select().from(pagoMes).where(inArray(pagoMes.id, filas))) await borrarFila(f);
+  // Lo que quedó en el historial pasa a no tener concepto.
+  if (p.creados.length) await db.delete(pagoFijo).where(inArray(pagoFijo.id, p.creados.map((c) => c.id)));
   for (const b of p.borrados) {
     await asegurarCategoria(b.fijo.categoria);
     await db.insert(pagoFijo).values({ ...b.fijo, formaId: forma(b.fijo.formaId), creadoEn: new Date(b.fijo.creadoEn), actualizadoEn: new Date() });
@@ -585,73 +683,103 @@ async function planParaCorregir(c: typeof pagoCarga.$inferSelect) {
   if (c.reconstruida) throw new ErrorUsuario("Esta carga se reconstruyó con lo que se creó junto: solo se puede deshacer.");
   if (c.estado === "parcial") throw new ErrorUsuario("Esta carga ya se deshizo en parte: no se puede corregir.");
   const p = await armarPlan(c);
-  const tocadas = [...p.quedan.map((q) => q.nombre), ...p.pagosDespues.map((x) => x.nombre)];
+  const tocadas = [...p.quedan.map((q) => q.nombre), ...p.editadosDespues, ...p.pagosDespues.map((x) => x.nombre)];
   if (tocadas.length) throw new ErrorUsuario(`Después de esta carga tocaste cosas que hizo (${tocadas.join(", ")}): deshacela o corregí cada concepto desde su ficha.`);
   return p;
 }
 
-/**
- * Lo que hizo la carga, como lo muestra la revisión de la IA, para corregirlo: los conceptos que creó y cambió como
- * están ahora (los de un lugar que creó la carga vuelven a traer ese lugar como nuevo), los que borró y los montos.
- */
-export async function paraCorregir(id: number) {
-  const c = await obtenerCarga(id);
-  const p = await planParaCorregir(c);
+/** Lo que aplicó una carga de antes de la IA general (conceptos o montos de un mes), armado como una carga general. */
+async function propuestaVieja(c: typeof pagoCarga.$inferSelect, p: Plan): Promise<CargaPropuesta> {
   const r = c.registro ?? vacio();
-  const idsCreados = r.creados.map((x) => x.id);
   const [fijos, filas] = await Promise.all([
-    db.select().from(pagoFijo).where(inArray(pagoFijo.id, [...idsCreados, ...r.cambiados.map((f) => f.id)])),
-    db.select().from(pagoMes).where(inArray(pagoMes.id, r.meses.map((m) => m.antes.id))),
+    db.select().from(pagoFijo).where(inArray(pagoFijo.id, [...r.creados.map((x) => x.id), ...r.cambiados.map((f) => f.id)])),
+    db
+      .select()
+      .from(pagoMes)
+      .where(or(inArray(pagoMes.id, r.meses.map((m) => m.antes.id)), and(inArray(pagoMes.fijoId, r.creados.map((x) => x.id)), eq(pagoMes.periodo, c.periodo ?? "")))),
   ]);
+  // Un concepto en un lugar que creó la carga vuelve con ese lugar como nuevo (al corregir se vuelve a crear).
   const propuesta = (f: FilaFijo): FijoPropuesto => {
     const { desde: _, ...e } = entradaDe(f, p.formas);
     const nuevo = p.lugares.find((l) => l.id === f.lugarId);
     return nuevo ? { ...e, lugarId: null, lugarNuevo: { nombre: nuevo.nombre, tipo: nuevo.tipo } } : e;
   };
+  const pagadoEl = (fila: FilaMes | undefined) => {
+    const fecha = fila && abrirMes(fila.datosCifrados).pagos.at(-1)?.fecha;
+    return fecha ? { fechaPago: fecha } : {};
+  };
+  return {
+    nuevos: r.creados.flatMap((x) => {
+      const f = fijos.find((y) => y.id === x.id);
+      return f ? [{ ...propuesta(f), ref: `n${x.id}`, desde: f.desde }] : [];
+    }),
+    cambios: r.cambiados.flatMap((antes) => {
+      const f = fijos.find((y) => y.id === antes.id);
+      return f ? [{ ...propuesta(f), id: f.id }] : [];
+    }),
+    borrar: r.borrados.map((b) => b.fijo.id),
+    montos: [
+      ...r.meses.flatMap(({ antes, pagadoCon }) => {
+        const fila = filas.find((f) => f.id === antes.id);
+        if (!fila) return [];
+        return [{ ...(fila.fijoId ? { fijoId: fila.fijoId } : { itemId: fila.id }), mes: fila.periodo, monto: montoDe(fila.datosCifrados), ...(pagadoCon ? { pagadoCon, ...pagadoEl(fila) } : {}) }];
+      }),
+      ...r.creados.flatMap((x) => {
+        const f = fijos.find((y) => y.id === x.id);
+        if (!x.pagadoCon || !f || !c.periodo) return [];
+        return [{ ref: `n${x.id}`, mes: c.periodo, monto: abrirFijo(f.datosCifrados).monto, pagadoCon: x.pagadoCon, ...pagadoEl(filas.find((y) => y.fijoId === x.id)) }];
+      }),
+    ],
+    sueltos: [],
+  };
+}
+
+/**
+ * Lo que aplicó la carga, como lo muestra la revisión de la IA, para corregirlo: lo propuesto tal cual, con cómo estaba
+ * cada concepto que cambió, los que borró y, de cada monto, a qué pago va y lo que tenía antes.
+ */
+export async function paraCorregir(id: number) {
+  const c = await obtenerCarga(id);
+  const p = await planParaCorregir(c);
+  const r = c.registro ?? vacio();
+  const propuesta = abrirCarga(c.datosCifrados).propuesta ?? (await propuestaVieja(c, p));
+  const [lugares, fijos] = await Promise.all([
+    db.select().from(pagoLugar),
+    db.select().from(pagoFijo).where(inArray(pagoFijo.id, propuesta.montos.flatMap((m) => ("fijoId" in m ? [m.fijoId] : [])))),
+  ]);
   const comoFijoPago = (f: FilaGuardada<FilaFijo>) => {
     const e = entradaDe(f, p.formas);
     return { ...e, id: f.id, desde: f.desde, estimado: e.monto };
   };
-  const creados = r.creados.flatMap((x) => {
-    const f = fijos.find((y) => y.id === x.id);
-    return f ? [{ ...propuesta(f), ...(x.pagadoCon ? { pagadoCon: x.pagadoCon } : {}) }] : [];
+  const montos = propuesta.montos.map((m) => {
+    const antes = r.meses.find((x) => ("itemId" in m ? x.antes.id === m.itemId : "fijoId" in m && x.antes.fijoId === m.fijoId && x.antes.periodo === m.mes))?.antes;
+    const fijo = "fijoId" in m ? fijos.find((f) => f.id === m.fijoId) : undefined;
+    const nuevo = "ref" in m ? propuesta.nuevos.find((n) => n.ref === m.ref) : undefined;
+    const info = fijo
+      ? { nombre: abrirFijo(fijo.datosCifrados).nombre, lugar: dondeVa(fijo, lugares) }
+      : nuevo
+        ? { nombre: nuevo.nombre, lugar: nuevo.lugarNuevo?.nombre ?? dondeVa(nuevo, lugares) }
+        : { nombre: antes ? abrirMes(antes.datosCifrados).nombre : "Pago borrado", lugar: antes ? dondeVa(antes, lugares) : "" };
+    return { ...m, ...info, antes: antes ? montoDe(antes.datosCifrados) : null, pagado: antes?.estado === "pagado" };
   });
-  const base = { id: c.id, tipo: c.tipo, periodo: c.periodo, propios: idsCreados };
-  if (c.tipo === "config")
-    return {
-      ...base,
-      nuevos: creados,
-      cambios: r.cambiados.map((antes) => ({ antes: comoFijoPago(antes), despues: propuesta(fijos.find((f) => f.id === antes.id)!) })),
-      borrar: r.borrados.map((b) => comoFijoPago(b.fijo)),
-      montos: [],
-      fechaPago: null,
-    };
-  const lugares = await db.select().from(pagoLugar);
-  const montos = r.meses.flatMap(({ antes, pagadoCon }) => {
-    const fila = filas.find((f) => f.id === antes.id);
-    if (!fila || (antes.fijoId && idsCreados.includes(antes.fijoId))) return [];
-    const destino = fila.fijoId ? { fijoId: fila.fijoId } : { itemId: fila.id };
-    return [{ ...destino, monto: montoDe(fila.datosCifrados), antes: montoDe(antes.datosCifrados), nombre: abrirMes(fila.datosCifrados).nombre, lugar: dondeVa(fila, lugares), pagado: antes.estado === "pagado", ...(pagadoCon ? { pagadoCon } : {}) }];
-  });
-  // La fecha en que quedó pagado lo que la carga dejó pagado («Ya lo pagó: …»).
-  const pagadas = await db
-    .select()
-    .from(pagoMes)
-    .where(
-      or(
-        inArray(pagoMes.id, r.meses.filter((m) => m.pagadoCon).map((m) => m.antes.id)),
-        and(inArray(pagoMes.fijoId, r.creados.filter((x) => x.pagadoCon).map((x) => x.id)), eq(pagoMes.periodo, c.periodo ?? "")),
-      ),
-    );
-  const fechaPago = pagadas.map((f) => abrirMes(f.datosCifrados).pagos.at(-1)?.fecha).find(Boolean) ?? null;
-  return { ...base, nuevos: creados, cambios: [], borrar: [], montos, fechaPago };
+  return {
+    id: c.id,
+    propios: r.creados.map((x) => x.id),
+    nuevos: propuesta.nuevos,
+    cambios: propuesta.cambios.flatMap((e) => {
+      const antes = r.cambiados.find((x) => x.id === e.id);
+      return antes ? [{ antes: comoFijoPago(antes), despues: e }] : [];
+    }),
+    borrar: r.borrados.map((b) => comoFijoPago(b.fijo)),
+    montos,
+    sueltos: propuesta.sueltos,
+  };
 }
 
 /** Corregir: se deshace lo que hizo y se aplica lo corregido, en la misma carga (con lo que le pasaste a la IA). */
-export async function corregirCarga(id: number, nueva: Parameters<typeof aplicarFijos>[0] | ({ periodo: string } & Parameters<typeof aplicarMes>[1])) {
+export async function corregirCarga(id: number, nueva: CargaPropuesta) {
   const c = await obtenerCarga(id);
-  if ("periodo" in nueva !== (c.tipo === "mes")) throw new ErrorUsuario("Lo corregido no es de esta carga: volvé a abrirla.");
-  validarPropuestos([...nueva.nuevos, ...("cambios" in nueva ? nueva.cambios : [])]);
+  revisar(nueva);
   await ejecutar(await planParaCorregir(c));
-  return "periodo" in nueva ? aplicarMes(nueva.periodo, nueva, id) : aplicarFijos(nueva, id);
+  return aplicarCarga(nueva, id);
 }

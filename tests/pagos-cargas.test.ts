@@ -37,6 +37,11 @@ const fijo = (lugarId: number | null, e: Partial<EntradaFijo>): EntradaFijo => (
   nota: "",
   ...e,
 });
+/** Una carga de la IA de Pagos: lo que no se pasa, vacío. */
+const cargaIa = (c: Record<string, unknown[]>) => ({ nuevos: [], cambios: [], borrar: [], montos: [], sueltos: [], ...c });
+/** Un concepto nuevo de una carga, con su ref y el primer mes al que corresponde. */
+const nuevo = (ref: string, desde: string, lugarId: number | null, e: Partial<EntradaFijo> & { lugarNuevo?: { nombre: string; tipo: "negocio" | "personal" } }) => ({ ...fijo(lugarId, e), ref, desde });
+const ia = (concepto: object) => ({ repartir_entre: [], tipo: "negocio", variable: true, moneda: "ARS", dia: 0, mes_vencido: false, frecuencia: "mensual", forma: "", cuenta: "", nota: "", como_figura: "", desde: "", ...concepto });
 const item = async (periodo: string, nombre: string) => (await verMes(periodo)).items.find((i) => i.nombre === nombre);
 const nombres = async () => (await listarFijos()).map((f) => f.nombre).sort();
 
@@ -64,11 +69,13 @@ describe("Cargas con IA", () => {
     // La IA lee (con una foto): la respuesta trae el id de la carga.
     pedir.mockResolvedValue({
       nuevos: [
-        { alcance: "lugar", lugar: "Fontana", tipo: "negocio", repartir_entre: [], nombre: "Gas", categoria: "Gas y calefacción", monto: 30000, variable: true, moneda: "ARS", dia: 0, frecuencia: "mensual", forma: "", cuenta: "", nota: "", como_figura: "" },
-        { alcance: "lugar", lugar: "Express 1", tipo: "negocio", repartir_entre: [], nombre: "Luz", categoria: "Servicios", monto: 70000, variable: true, moneda: "ARS", dia: 0, frecuencia: "mensual", forma: "", cuenta: "", nota: "", como_figura: "" },
+        ia({ ref: "n1", alcance: "lugar", lugar: "Fontana", nombre: "Gas", categoria: "Gas y calefacción", monto: 30000 }),
+        ia({ ref: "n2", alcance: "lugar", lugar: "Express 1", nombre: "Luz", categoria: "Servicios", monto: 70000 }),
       ],
       cambios: [{ id: alquiler, campo: "monto", valor: "850000" }],
       borrar: [gym],
+      montos: [],
+      sueltos: [],
       total: 0,
       mensaje: "",
     });
@@ -80,20 +87,20 @@ describe("Cargas con IA", () => {
 
     const res = await app.inject({
       method: "POST",
-      url: "/api/pagos/fijos/aplicar",
+      url: "/api/pagos/ia/aplicar",
       headers,
-      payload: { cargaId: leido.cargaId, nuevos: leido.nuevos, cambios: leido.cambios.map((c: { id: number; despues: object }) => ({ id: c.id, ...c.despues })), borrar: leido.borrar },
+      payload: { cargaId: leido.cargaId, ...cargaIa({ nuevos: leido.nuevos, cambios: leido.cambios.map((c: { id: number; despues: object }) => ({ id: c.id, ...c.despues })), borrar: leido.borrar }) },
     });
-    expect(res.json()).toEqual({ creados: 2, cambiados: 1, borrados: 1 });
+    expect(res.json()).toEqual({ creados: 2, cambiados: 1, borrados: 1, montos: 0, sueltos: 0, avisos: [] });
     expect(await nombres()).toEqual(["Alquiler", "Gas", "Luz"]);
 
     const [carga] = await listarCargas();
-    expect(carga).toMatchObject({ id: leido.cargaId, tipo: "config", texto: "luz y gas, el alquiler subió, borrá el gimnasio", archivo: "image/webp", reconstruida: false });
+    expect(carga).toMatchObject({ id: leido.cargaId, tipo: "general", texto: "luz y gas, el alquiler subió, borrá el gimnasio", archivo: "image/webp", reconstruida: false });
     expect(carga.lineas.map((l) => [l.tipo, l.nombre, l.detalle])).toEqual([
       ["lugar", "Fontana", "Lugar nuevo · negocio"],
       ["categoria", "Otros", "Categoría nueva"],
-      ["nuevo", "Gas", "Fontana · Otros · $ 30.000,00"],
-      ["nuevo", "Luz", "Express 1 · Servicios · $ 70.000,00"],
+      ["nuevo", "Gas", "Fontana · Otros · $ 30.000,00 · desde noviembre 2026"],
+      ["nuevo", "Luz", "Express 1 · Servicios · $ 70.000,00 · desde noviembre 2026"],
       ["cambio", "Alquiler", "monto: $ 650.000,00 → $ 850.000,00"],
       ["borrar", "Gimnasio", "Express 1 · Servicios"],
     ]);
@@ -137,23 +144,24 @@ describe("Cargas con IA", () => {
     const { app, headers } = await panelConSesion();
     const aplicar = await app.inject({
       method: "POST",
-      url: "/api/pagos/mes/aplicar",
+      url: "/api/pagos/ia/aplicar",
       headers,
-      payload: {
-        periodo: "2026-11",
+      payload: cargaIa({
+        nuevos: [nuevo("n1", "2026-11", express, { nombre: "UTHGRA", categoria: "Sueldos y cargas", monto: 35412, variable: true })],
         montos: [
-          { fijoId: f931, monto: 493430, pagadoCon: pagoElla },
-          { fijoId: ips, monto: 26930 },
+          { fijoId: f931, mes: "2026-11", monto: 493430, pagadoCon: pagoElla },
+          { fijoId: ips, mes: "2026-11", monto: 26930 },
+          { ref: "n1", mes: "2026-11", monto: 35412, pagadoCon: pagoElla },
         ],
-        nuevos: [{ ...fijo(express, { nombre: "UTHGRA", categoria: "Sueldos y cargas", monto: 35412, variable: true }), pagadoCon: pagoElla }],
-      },
+      }),
     });
-    expect(aplicar.json()).toEqual({ cambiados: 2, creados: 1 });
+    expect(aplicar.json()).toEqual({ creados: 1, cambiados: 0, borrados: 0, montos: 3, sueltos: 0, avisos: [] });
     const [carga] = await listarCargas();
     expect(carga.lineas.map((l) => [l.tipo, l.nombre, l.detalle])).toEqual([
-      ["nuevo", "UTHGRA", "Express 1 · Sueldos y cargas · $ 35.412,00 · pagado con Lo pagó: Contadora"],
-      ["monto", "F-931", "Noviembre 2026 · Express 1 · $ 450.000,00 → $ 493.430,00 · pagado con Lo pagó: Contadora"],
+      ["nuevo", "UTHGRA", "Express 1 · Sueldos y cargas · $ 35.412,00 · desde noviembre 2026"],
+      ["monto", "F-931", "Noviembre 2026 · Express 1 · $ 450.000,00 → $ 493.430,00 · pagado con Lo pagó: Contadora el 26/11/2026"],
       ["monto", "IPS", "Noviembre 2026 · Express 1 · $ 26.000,00 → $ 26.930,00"],
+      ["monto", "UTHGRA", "Noviembre 2026 · Express 1 · $ 35.412,00 · pagado con Lo pagó: Contadora el 26/11/2026"],
     ]);
 
     // Después: pagaste el IPS de noviembre y el UTHGRA de diciembre.
@@ -171,7 +179,7 @@ describe("Cargas con IA", () => {
     });
     // Corregir pisaría lo tuyo: no deja.
     const corregir = await app.inject({ method: "GET", url: `/api/pagos/cargas/${carga.id}/corregir`, headers });
-    expect(corregir.json().error).toContain("Después de esta carga tocaste cosas que hizo (IPS · Noviembre 2026, UTHGRA Coffit · Diciembre 2026");
+    expect(corregir.json().error).toContain("Después de esta carga tocaste cosas que hizo (IPS · Noviembre 2026, UTHGRA Coffit, UTHGRA Coffit · Diciembre 2026");
 
     // Sin tildar el pago de diciembre: queda en el historial.
     await app.inject({ method: "POST", url: `/api/pagos/cargas/${carga.id}/deshacer`, headers, payload: { borrarPagos: [] } });
@@ -198,27 +206,48 @@ describe("Cargas con IA", () => {
   it("corregir: se abre con lo que hizo, se cambia y queda una sola carga con lo corregido", async () => {
     const f931 = (await crearFijo(fijo(express, { nombre: "F-931", categoria: "Sueldos y cargas", monto: 450000, variable: true }))).id;
     const { app, headers } = await panelConSesion();
-    pedir.mockResolvedValue({ montos: [], nuevos: [], total: 0, mensaje: "" });
-    const leido = (await app.inject({ method: "POST", url: "/api/pagos/ia/mes", headers, payload: { periodo: "2026-11", texto: "lo de la contadora de octubre" } })).json();
+    pedir.mockResolvedValue({ nuevos: [], cambios: [], borrar: [], montos: [], sueltos: [], total: 0, mensaje: "" });
+    const leido = (await app.inject({ method: "POST", url: "/api/pagos/ia/armar", headers, payload: { texto: "lo de la contadora de octubre" } })).json();
     await app.inject({
       method: "POST",
-      url: "/api/pagos/mes/aplicar",
+      url: "/api/pagos/ia/aplicar",
       headers,
-      payload: { cargaId: leido.cargaId, periodo: "2026-11", montos: [{ fijoId: f931, monto: 493430 }], nuevos: [fijo(null, { nombre: "Gas", lugarNuevo: { nombre: "Fontana", tipo: "negocio" } } as Partial<EntradaFijo>)] },
+      payload: {
+        cargaId: leido.cargaId,
+        ...cargaIa({
+          nuevos: [nuevo("n1", "2026-11", null, { nombre: "Gas", monto: 30000, lugarNuevo: { nombre: "Fontana", tipo: "negocio" } })],
+          montos: [
+            { fijoId: f931, mes: "2026-11", monto: 493430 },
+            { ref: "n1", mes: "2026-11", monto: 30000 },
+          ],
+        }),
+      },
     });
     const abierta = (await app.inject({ method: "GET", url: `/api/pagos/cargas/${leido.cargaId}/corregir`, headers })).json();
     const gas = (await listarFijos()).find((f) => f.nombre === "Gas")!;
-    expect(abierta).toMatchObject({ tipo: "mes", periodo: "2026-11", propios: [gas.id], montos: [{ fijoId: f931, monto: 493430, antes: 450000, nombre: "F-931", lugar: "Express 1" }] });
-    // El concepto nuevo vuelve con su lugar nuevo (que al corregir se vuelve a crear).
-    expect(abierta.nuevos[0]).toMatchObject({ nombre: "Gas", lugarId: null, lugarNuevo: { nombre: "Fontana", tipo: "negocio" } });
+    expect(abierta).toMatchObject({
+      propios: [gas.id],
+      montos: [
+        { fijoId: f931, mes: "2026-11", monto: 493430, antes: 450000, nombre: "F-931", lugar: "Express 1" },
+        { ref: "n1", mes: "2026-11", monto: 30000, antes: null, nombre: "Gas", lugar: "Fontana" },
+      ],
+    });
+    // El concepto nuevo vuelve tal cual se aplicó, con su lugar nuevo (que al corregir se vuelve a crear).
+    expect(abierta.nuevos[0]).toMatchObject({ nombre: "Gas", ref: "n1", lugarId: null, lugarNuevo: { nombre: "Fontana", tipo: "negocio" } });
 
     const r = await app.inject({
       method: "POST",
       url: `/api/pagos/cargas/${leido.cargaId}/corregir`,
       headers,
-      payload: { periodo: "2026-11", montos: [{ fijoId: f931, monto: 500000 }], nuevos: [{ ...abierta.nuevos[0], nombre: "Gas natural" }] },
+      payload: cargaIa({
+        nuevos: [{ ...abierta.nuevos[0], nombre: "Gas natural" }],
+        montos: [
+          { fijoId: f931, mes: "2026-11", monto: 500000 },
+          { ref: "n1", mes: "2026-11", monto: 30000 },
+        ],
+      }),
     });
-    expect(r.json()).toEqual({ cambiados: 1, creados: 1 });
+    expect(r.json()).toMatchObject({ creados: 1, montos: 2, avisos: [] });
     expect(await nombres()).toEqual(["F-931", "Gas natural"]);
     expect((await listarLugares()).map((l) => l.nombre)).toEqual(["Express 1", "Fontana"]);
     expect((await item("2026-11", "F-931"))?.monto).toBe(500000);
@@ -226,7 +255,7 @@ describe("Cargas con IA", () => {
     expect(cargas.map((c) => [c.id, c.texto])).toEqual([[leido.cargaId, "lo de la contadora de octubre"]]);
     expect(cargas[0].lineas.map((l) => l.nombre)).toEqual(["Fontana", "Gas natural", "F-931"]);
     // Corregido sin nada elegido: es como deshacerla.
-    await app.inject({ method: "POST", url: `/api/pagos/cargas/${leido.cargaId}/corregir`, headers, payload: { periodo: "2026-11", montos: [], nuevos: [] } });
+    await app.inject({ method: "POST", url: `/api/pagos/cargas/${leido.cargaId}/corregir`, headers, payload: cargaIa({}) });
     expect([await nombres(), (await item("2026-11", "F-931"))?.monto, await listarCargas()]).toEqual([["F-931"], 450000, []]);
     await app.close();
   });
@@ -236,14 +265,45 @@ describe("Cargas con IA", () => {
     const pagoElla = (await listarFormas()).find((f) => f.personaId === contadora.id)!.id;
     const f931 = (await crearFijo(fijo(express, { nombre: "F-931", categoria: "Sueldos y cargas", monto: 450000, variable: true, desde: "2026-10", desfase: 1 }))).id;
     const { app, headers } = await panelConSesion();
-    await app.inject({ method: "POST", url: "/api/pagos/mes/aplicar", headers, payload: { periodo: "2026-10", montos: [{ fijoId: f931, monto: 493430, pagadoCon: pagoElla }], nuevos: [], fechaPago: "2026-11-12" } });
-    const [carga] = await listarCargas();
-    expect(carga.lineas.map((l) => l.detalle)).toEqual(["Octubre 2026 · Express 1 · $ 450.000,00 → $ 493.430,00 · pagado con Lo pagó: Contadora"]);
-    const abierta = (await app.inject({ method: "GET", url: `/api/pagos/cargas/${carga.id}/corregir`, headers })).json();
-    expect(abierta).toMatchObject({ periodo: "2026-10", fechaPago: "2026-11-12", montos: [{ fijoId: f931, monto: 493430, antes: 450000, pagadoCon: pagoElla }] });
-    await app.inject({ method: "POST", url: `/api/pagos/cargas/${carga.id}/corregir`, headers, payload: { periodo: "2026-10", montos: [{ fijoId: f931, monto: 500000, pagadoCon: pagoElla }], nuevos: [], fechaPago: "2026-11-13" } });
+    await app.inject({ method: "POST", url: "/api/pagos/ia/aplicar", headers, payload: cargaIa({ montos: [{ fijoId: f931, mes: "2026-10", monto: 493430, pagadoCon: pagoElla, fechaPago: "2026-11-12" }] }) });
+    const [cargaHecha] = await listarCargas();
+    expect(cargaHecha.lineas.map((l) => l.detalle)).toEqual(["Octubre 2026 · Express 1 · $ 450.000,00 → $ 493.430,00 · pagado con Lo pagó: Contadora el 12/11/2026"]);
+    const abierta = (await app.inject({ method: "GET", url: `/api/pagos/cargas/${cargaHecha.id}/corregir`, headers })).json();
+    expect(abierta.montos).toEqual([expect.objectContaining({ fijoId: f931, mes: "2026-10", monto: 493430, antes: 450000, pagadoCon: pagoElla, fechaPago: "2026-11-12" })]);
+    await app.inject({ method: "POST", url: `/api/pagos/cargas/${cargaHecha.id}/corregir`, headers, payload: cargaIa({ montos: [{ fijoId: f931, mes: "2026-10", monto: 500000, pagadoCon: pagoElla, fechaPago: "2026-11-13" }] }) });
     expect(await item("2026-11", "F-931")).toMatchObject({ periodo: "2026-10", monto: 500000, estado: "pagado", pagadoEn: "2026-11-13" });
     expect((await listarCuentas()).find((c) => c.id === contadora.id)?.saldo).toBe(500000);
+    await app.close();
+  });
+
+  it("repartido en tres meses y un pago suelto, pagados: queda pagado de verdad y deshacerla saca todo", async () => {
+    await actualizarConfig({ pagosDesde: "2026-10" });
+    const alquiler = (await crearFijo(fijo(express, { nombre: "Alquiler", categoria: "Alquiler", monto: 650000, desde: "2026-10" }))).id;
+    const { app, headers } = await panelConSesion();
+    const r = await app.inject({
+      method: "POST",
+      url: "/api/pagos/ia/aplicar",
+      headers,
+      payload: cargaIa({
+        montos: ["2026-10", "2026-11", "2026-12"].map((mes) => ({ fijoId: alquiler, mes, monto: 100000, pagadoCon: transferencia, fechaPago: "2026-11-20" })),
+        sueltos: [{ alcance: "lugar", lugarId: express, tipo: null, nombre: "Plomero", categoria: "Servicios", monto: 50000, moneda: "ARS", fecha: "2026-11-20", pagadoCon: transferencia, nota: "" }],
+      }),
+    });
+    expect(r.json()).toEqual({ creados: 0, cambiados: 0, borrados: 0, montos: 3, sueltos: 1, avisos: [] });
+    for (const mes of ["2026-10", "2026-11", "2026-12"]) expect(await item(mes, "Alquiler")).toMatchObject({ monto: 100000, estado: "pagado", pagadoEn: "2026-11-20", forma: "Transferencia" });
+    expect(await item("2026-11", "Plomero")).toMatchObject({ estado: "pagado", monto: 50000 });
+    const [hecha] = await listarCargas();
+    expect(hecha.lineas.map((l) => [l.tipo, l.detalle])).toEqual([
+      ["monto", "Octubre 2026 · Express 1 · $ 650.000,00 → $ 100.000,00 · pagado con Transferencia el 20/11/2026"],
+      ["monto", "Noviembre 2026 · Express 1 · $ 650.000,00 → $ 100.000,00 · pagado con Transferencia el 20/11/2026"],
+      ["monto", "Diciembre 2026 · Express 1 · $ 650.000,00 → $ 100.000,00 · pagado con Transferencia el 20/11/2026"],
+      ["suelto", "20/11/2026 · Express 1 · $ 50.000,00 · pagado con Transferencia el 20/11/2026"],
+    ]);
+    expect(await verDeshacer(hecha.id)).toMatchObject({ borra: ["Plomero (pago suelto)"], montos: ["Alquiler · Octubre 2026", "Alquiler · Noviembre 2026", "Alquiler · Diciembre 2026"], quedan: [] });
+    await app.inject({ method: "POST", url: `/api/pagos/cargas/${hecha.id}/deshacer`, headers, payload: {} });
+    for (const mes of ["2026-10", "2026-11", "2026-12"]) expect(await item(mes, "Alquiler")).toMatchObject({ monto: 650000, estado: "pendiente" });
+    expect(await item("2026-11", "Plomero")).toBeUndefined();
+    expect(await listarCargas()).toEqual([]);
     await app.close();
   });
 
@@ -284,7 +344,7 @@ describe("Cargas con IA", () => {
 
   it("una carga hecha antes de una actualización (huellas viejas) se deshace entera", async () => {
     const { app, headers } = await panelConSesion();
-    await app.inject({ method: "POST", url: "/api/pagos/fijos/aplicar", headers, payload: { nuevos: [fijo(express, { nombre: "Monotributo", desde: "2026-10" }), fijo(express, { nombre: "IIBB", desde: "2026-10" })], cambios: [], borrar: [] } });
+    await app.inject({ method: "POST", url: "/api/pagos/ia/aplicar", headers, payload: cargaIa({ nuevos: [nuevo("n1", "2026-10", express, { nombre: "Monotributo" }), nuevo("n2", "2026-10", express, { nombre: "IIBB" })] }) });
     await verMes("2026-11");
     const [carga] = await db.select().from(pagoCarga);
     const fijos = await db.select().from(pagoFijo);
@@ -306,7 +366,7 @@ describe("Cargas con IA", () => {
   it("recupera una carga que se borró sin borrar lo suyo, y no toca lo de las cargas que siguen", async () => {
     const { app, headers } = await panelConSesion();
     // Una carga que sigue en la lista.
-    await app.inject({ method: "POST", url: "/api/pagos/fijos/aplicar", headers, payload: { nuevos: [fijo(express, { nombre: "Luz" }), fijo(express, { nombre: "Agua" })], cambios: [], borrar: [] } });
+    await app.inject({ method: "POST", url: "/api/pagos/ia/aplicar", headers, payload: cargaIa({ nuevos: [nuevo("n1", "2026-11", express, { nombre: "Luz" }), nuevo("n2", "2026-11", express, { nombre: "Agua" })] }) });
     // Lo de una carga que se borró (sin registro): creados juntos en octubre, con un lugar.
     const hace = (iso: string) => DateTime.fromISO(iso, { zone: Z }).toJSDate();
     const coffit = (await crearLugar({ nombre: "Coffit", tipo: "negocio" })).id;
@@ -333,11 +393,11 @@ describe("Cargas con IA", () => {
 
   it("mantenimiento: las lecturas sin aplicar se borran al día y los archivos a los 12 meses", async () => {
     const { app, headers } = await panelConSesion();
-    pedir.mockResolvedValue({ nuevos: [], cambios: [], borrar: [], total: 0, mensaje: "" });
+    pedir.mockResolvedValue({ nuevos: [], cambios: [], borrar: [], montos: [], sueltos: [], total: 0, mensaje: "" });
     const pdf = Buffer.from("%PDF-1.4 prueba").toString("base64");
     const sinAplicar = (await app.inject({ method: "POST", url: "/api/pagos/ia/armar", headers, payload: { texto: "nada", archivo: { mime: "application/pdf", base64: pdf } } })).json().cargaId;
     const vieja = (await app.inject({ method: "POST", url: "/api/pagos/ia/armar", headers, payload: { texto: "luz", archivo: { mime: "application/pdf", base64: pdf } } })).json().cargaId;
-    await app.inject({ method: "POST", url: "/api/pagos/fijos/aplicar", headers, payload: { cargaId: vieja, nuevos: [fijo(express, { nombre: "Luz" })], cambios: [], borrar: [] } });
+    await app.inject({ method: "POST", url: "/api/pagos/ia/aplicar", headers, payload: { cargaId: vieja, ...cargaIa({ nuevos: [nuevo("n1", "2026-11", express, { nombre: "Luz" })] }) } });
     await db.update(pagoCarga).set({ creadoEn: new Date("2025-01-01"), aplicadaEn: new Date("2025-01-01") });
     await purgarCargas();
     const filas = await db.select().from(pagoCarga);

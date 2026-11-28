@@ -3,12 +3,12 @@ import { ChevronDown, FileText, Pencil, Search, Sparkles, Undo2 } from "lucide-r
 import { Boton, Cargando, Modal, Vacio, useAccion } from "../componentes/ui";
 import { get, post } from "../lib/api";
 import { fechaHora } from "../lib/fechas";
-import { nombreMes, periodoActual } from "../lib/pagos";
+import { nombreMes } from "../lib/pagos";
 import { sinTildes } from "../lib/textos";
 import type { CargaIa, CargaParaCorregir, ConfigPagos, FijoPago, LineaCarga, PlanDeshacer } from "../lib/tipos";
 import { useDatos } from "../lib/vivo";
 import { ModalFijo } from "./PagosFijo";
-import { RevisionIa, type FilaIa } from "./PagosRevisionIa";
+import { filasDePropuesta, RevisionIa } from "./PagosRevisionIa";
 
 // Cargas con IA: todo lo que aplicaste con la IA en Pagos (los conceptos de Configuración y los montos de un mes), con
 // lo que le pasaste y lo que hizo. Cada una se puede deshacer entera o corregir.
@@ -18,6 +18,7 @@ const INSIGNIA: Record<LineaCarga["tipo"], [string, string]> = {
   cambio: ["Cambió", "bg-sky-100 text-sky-800"],
   borrar: ["Borró", "bg-red-100 text-red-700"],
   monto: ["Monto", "bg-sky-100 text-sky-800"],
+  suelto: ["Suelto", "bg-violet-100 text-violet-800"],
   lugar: ["Lugar", "bg-amber-100 text-amber-800"],
   categoria: ["Categoría", "bg-amber-100 text-amber-800"],
   queda: ["Quedó", "bg-amber-100 text-amber-800"],
@@ -27,29 +28,18 @@ const CUANTOS: [LineaCarga["tipo"], string, string][] = [
   ["cambio", "cambiado", "cambiados"],
   ["borrar", "borrado", "borrados"],
   ["monto", "monto", "montos"],
+  ["suelto", "pago suelto", "pagos sueltos"],
   ["lugar", "lugar nuevo", "lugares nuevos"],
   ["categoria", "categoría nueva", "categorías nuevas"],
 ];
 
-const tituloDe = (c: CargaIa) => (c.tipo === "mes" && c.periodo ? `Montos que corresponden a ${nombreMes(c.periodo).toLowerCase()}` : "Conceptos");
+const tituloDe = (c: CargaIa) =>
+  c.tipo === "general" ? (c.periodo ? `Carga desde ${nombreMes(c.periodo).toLowerCase()}` : "Carga") : c.tipo === "mes" && c.periodo ? `Montos que corresponden a ${nombreMes(c.periodo).toLowerCase()}` : "Conceptos";
 const resumen = (c: CargaIa) =>
   CUANTOS.flatMap(([tipo, uno, varios]) => {
     const n = c.lineas.filter((l) => l.tipo === tipo).length;
     return n ? [`${n} ${n === 1 ? uno : varios}`] : [];
   }).join(" · ");
-
-/** Lo que hizo la carga, como lo muestra la revisión de la IA (todo tildado: es lo que está aplicado). */
-function filasParaCorregir(c: CargaParaCorregir): FilaIa[] {
-  return [
-    ...c.cambios.map((x) => ({ tipo: "cambio" as const, antes: x.antes, fijo: x.despues, ia: x.despues })),
-    ...c.nuevos.map(({ pagadoCon, ...fijo }) => ({ tipo: "nuevo" as const, fijo, ia: fijo, pagadoCon })),
-    ...c.borrar.map((antes) => ({ tipo: "borrar" as const, antes, elegido: true })),
-    ...c.montos.map(({ monto, antes, nombre, lugar, pagado, pagadoCon, ...a }) => {
-      const destino = "fijoId" in a ? { fijoId: a.fijoId } : { itemId: a.itemId, nombre, lugar };
-      return { tipo: "monto" as const, destino, monto, antes, pagado, original: "", ia: destino, pagadoCon };
-    }),
-  ];
-}
 
 export function PagosCargas() {
   const { datos: cargas } = useDatos<CargaIa[]>("/api/pagos/cargas", ["pagos"]);
@@ -179,17 +169,14 @@ export function PagosCargas() {
         />
       )}
       {corrigiendo && (
+        // Todo tildado (también lo que borró): es lo que está aplicado.
         <RevisionIa
-          modo={corrigiendo.tipo}
           config={config}
-          filas={filasParaCorregir(corrigiendo)}
-          periodo={corrigiendo.periodo ?? periodoActual()}
-          periodoLeido={corrigiendo.tipo === "mes" ? (corrigiendo.periodo ?? undefined) : undefined}
+          filas={filasDePropuesta(corrigiendo, true)}
           totalImagen={null}
           mensaje=""
           cargaId={corrigiendo.id}
           propios={corrigiendo.propios}
-          fechaPago={corrigiendo.fechaPago}
           onCerrar={() => setCorrigiendo(null)}
           onListo={() => setCorrigiendo(null)}
         />

@@ -3,17 +3,19 @@ import { z } from "zod";
 import { normalizar, plata } from "../lib/textos.js";
 import { obtenerConfig } from "../servicios/configuracion.js";
 import { comoWebp } from "../servicios/archivos-cifrados.js";
-import { guardarAnalisis, listarFijos, listarLugares, pagosQueCorresponden, resumenPagos, verMes, type Alcance } from "../servicios/pagos.js";
-import type { FijoPropuesto } from "../servicios/pagos-cargas.js";
+import { DateTime } from "luxon";
+import { filasDeFijos, guardarAnalisis, listarFijos, listarLugares, pagosPendientes, resumenPagos, verMes, type Alcance } from "../servicios/pagos.js";
+import { dondeVa, type FijoPropuesto } from "../servicios/pagos-cargas.js";
 import type { FrecuenciaPago, TipoLugar } from "../db/schema.js";
 import { elegirForma, formasActivas, type FormaPago } from "../servicios/pagos-formas.js";
 import { nombresDeCategorias } from "../servicios/pagos-categorias.js";
-import { MESES_DE, nombreMes, type Moneda } from "../servicios/pagos-reglas.js";
+import { MESES_DE, nombreMes, periodoDe, type Moneda } from "../servicios/pagos-reglas.js";
 import { hoyIso } from "../lib/fechas.js";
 import { ErrorUsuario } from "../servicios/recordatorios.js";
 import { gastoDelMes, pedir } from "./ia.js";
 
-// La IA en Pagos: arma y cambia la lista de lo que pagás a partir de lo que dictás, y analiza cada mes.
+// La IA en Pagos: una sola para cargar todo (lo que pagás siempre, los montos de cada mes, lo pagado y lo suelto) a
+// partir de lo que dictás o pegás, y el análisis de cada mes.
 
 /** Con el tope de gasto de IA del mes alcanzado, no se usa (igual que el asistente). */
 async function conTope() {
@@ -84,8 +86,39 @@ const Concepto = z.object({
   como_figura: z.string().describe('El renglón tal cual figura en la imagen o el texto ("F-931 SYA"); "" si no viene de un renglón'),
 });
 
-const EsquemaArmado = z.object({
-  nuevos: z.array(Concepto).describe("Los pagos que no están en la lista y hay que agregar"),
+/** Un monto de un mes: a qué va (un concepto que ya tiene, uno puntual o uno nuevo), de qué mes es y si ya se pagó. */
+const MontoIa = z.object({
+  concepto: z.string().describe('A qué va: "#id" de lo que paga siempre, "i:id" de un pago puntual de la lista, o el "ref" de uno nuevo'),
+  mes: z.string().describe('El mes al que corresponde (el del gasto), "YYYY-MM": lo de octubre es de octubre aunque se pague en noviembre'),
+  monto: z.number().describe("En números, sin redondear ($ 2.896.003,34 = 2896003.34)"),
+  pagado_por: z.string().describe('Si dice que ya está pagado: con qué, una de sus formas de pago tal cual figura (si lo pagó otra persona, su «Lo pagó: …»). Si no: ""'),
+  fecha_pago: z.string().describe('Si ya está pagado y dice cuándo: "YYYY-MM-DD". Si no: ""'),
+  como_figura: z.string().describe('El renglón tal cual figura; "" si no viene de un renglón'),
+});
+
+/** Un pago de una sola vez (no se repite): el plomero, un arreglo. */
+const SueltoIa = z.object({
+  nombre: z.string().describe("Qué se pagó, corto"),
+  lugar: z.string().describe('El lugar tal cual figura en la lista, uno nuevo, o "" si no es de un lugar'),
+  tipo: z.string().describe('"negocio" o "personal"'),
+  categoria: z.string().describe("Una de las categorías de la lista"),
+  monto: z.number(),
+  moneda: z.string().describe('"ARS" o "USD"'),
+  fecha: z.string().describe('"YYYY-MM-DD": cuándo se pagó (si ya está pagado) o cuándo hay que pagarlo'),
+  pagado_por: z.string().describe('Si ya está pagado: con qué (una de sus formas, tal cual). Si no: ""'),
+  nota: z.string().describe('Otro dato útil; si no, ""'),
+  como_figura: z.string().describe('El renglón tal cual figura; "" si no viene de un renglón'),
+});
+
+const EsquemaCarga = z.object({
+  nuevos: z
+    .array(
+      Concepto.extend({
+        ref: z.string().describe('Un nombre corto y único ("n1", "n2"…) para usarlo en "montos"'),
+        desde: z.string().describe('El primer mes al que corresponde, "YYYY-MM"; "" si no se sabe'),
+      }),
+    )
+    .describe("Lo que se paga siempre (todos los meses o cada tanto) y todavía no está en la lista"),
   cambios: z
     .array(
       z.object({
@@ -96,6 +129,8 @@ const EsquemaArmado = z.object({
     )
     .describe("Un renglón por cada campo que cambia de cada pago de la lista"),
   borrar: z.array(z.number().int()).describe("Los id (#) de los pagos de la lista que pidió borrar"),
+  montos: z.array(MontoIa).describe("Los montos de cada mes: un renglón por concepto y por mes. Si reparte un monto en varios meses, un renglón por mes con su parte"),
+  sueltos: z.array(SueltoIa).describe("Los pagos de una sola vez, que no se repiten"),
   total: z.number().describe("Si te pasó un resumen con un total general (no un subtotal), ese total; si no, 0"),
   mensaje: z.string().describe('Lo que no pudiste hacer y por qué (no entendiste, no encontraste lo que nombró), corto y con voseo. Si hiciste todo: ""'),
 });
@@ -251,31 +286,44 @@ function cambio(a: FijoPropuesto, b: FijoPropuesto, campo: CampoFijo) {
 
 const comoEntrada = ({ id: _, desde: __, estimado: ___, ...f }: Fijo): FijoPropuesto => f;
 
+const esMes = (m: string) => /^\d{4}-(0[1-9]|1[0-2])$/.test(m);
+const esFecha = (f: string) => /^\d{4}-\d{2}-\d{2}$/.test(f) && DateTime.fromISO(f).isValid;
+
 /**
- * Lo que dictaste o pegaste, armado contra lo que ya tenés cargado: pagos nuevos, cambios a los que están y los que
- * pediste borrar. No guarda nada: lo revisás y se aplica con `aplicarFijos`.
+ * La IA de Pagos, una sola para todo: lo que dictás, escribís o pegás (una foto o un PDF), armado contra lo que ya
+ * tenés: conceptos nuevos, cambios y borrados; montos de uno o varios meses (cada uno con el mes al que corresponde y,
+ * si ya se pagó, con qué y cuándo) y pagos sueltos. No guarda nada: lo revisás y se aplica con `aplicarCarga`.
  */
-export async function armarFijosConIa(texto: string, archivo?: ArchivoIa) {
+export async function armarConIa(texto: string, archivo?: ArchivoIa) {
   const cfg = await conTope();
-  const [lugares, fijos, formas, categorias] = await Promise.all([listarLugares(), listarFijos(), formasActivas(), nombresDeCategorias()]);
-  const system = `Llevás la lista de pagos que ${cfg.nombreUsuario} hace siempre (sus locales, su casa, sus cosas). Te escribe o dicta como le sale, o te pasa una foto o un PDF: puede querer agregar pagos, cambiar los que tiene o borrarlos.
+  const [lugares, fijos, formas, categorias, pendientes] = await Promise.all([listarLugares(), listarFijos(), formasActivas(), nombresDeCategorias(), pagosPendientes()]);
+  const hoy = hoyIso();
+  const puntuales = pendientes.filter((i) => !i.fijoId);
+  const system = `Llevás los pagos de ${cfg.nombreUsuario} (sus locales, su casa, sus cosas). Hoy es ${hoy}. Te escribe o dicta como le sale, o te pasa una foto o un PDF (por ejemplo el resumen de impuestos que le manda la contadora): puede querer agregar, cambiar o borrar lo que paga siempre, cargar montos de uno o varios meses, marcar lo que ya está pagado o anotar pagos sueltos.
 Lugares que ya tiene: ${lugares.map((l) => `${l.nombre} (${l.tipo})`).join(", ") || "ninguno"}.
 Categorías (usá una de estas): ${categorias.join(", ")}.
 Formas de pago que tiene: ${formas.map((f) => f.nombre).join(", ") || "ninguna"}.${notasDe(cfg.pagosNotasIa)}
 ${ALCANCES}
 ${MES_VENCIDO}
 
-Pagos que ya tiene cargados:
-${fijos.map((f) => textoFijo(f, lugares, formas)).join("\n") || "ninguno"}
+Lo que paga siempre:
+${fijos.map((f) => textoFijo(f, lugares, formas)).join("\n") || "nada todavía"}
+
+Pagos puntuales sin pagar (suscripciones, tarjetas, sueltos):
+${puntuales.map((i) => `i:${i.id} | ${i.nombre} · ${i.lugar} | ${i.monto} ${i.moneda} | corresponde a ${i.periodo}`).join("\n") || "ninguno"}
 
 Qué hacer:
-- Lo que no está en la lista va en "nuevos": un pago por cosa ("luz y gas en casa" son dos). "La luz de todos los locales" es una luz por cada local (no repartido).
-- Lo que ya está y quiere cambiar va en "cambios", solo los campos que cambian. "Todos" o "todos los de X" se refiere a cada pago de la lista que corresponda.
-- Lo que pide borrar va en "borrar". Nunca borres ni cambies algo que no pidió.
-- Si nombra un pago que ya está, es un cambio (no uno nuevo). No inventes montos ni datos que no dijo.
+- Lo que se paga siempre y no está en la lista va en "nuevos": un pago por cosa ("luz y gas en casa" son dos; "la luz de todos los locales" es una por local). Si nombra uno que ya está, es un cambio, no uno nuevo.
+- Lo que quiere cambiar de lo que ya está va en "cambios", solo los campos que cambian. Lo que pide borrar, en "borrar". Nunca cambies ni borres algo que no pidió.
+- Cada monto de un mes va en "montos", con el mes al que corresponde (el del gasto). Si reparte un pago en varios meses, un renglón por mes con su parte. Un monto de un concepto nuevo lleva su "ref".
+- Un resumen con montos (el de la contadora): cada renglón con un monto es un pago; los subtotales y el total no (el total general va en "total"). Un título con el nombre de un negocio dice de qué negocio son los renglones de abajo. Si es uno de lo que paga siempre (el mismo concepto y del mismo negocio), el monto va a ese "#id"; si no, es uno nuevo (mensual y variable, con nombre corto y legible, sin la sigla del negocio: "F-931 SYA" → "F-931").
+- Si dice que ya está pagado (o quién lo pagó: "lo pagó la contadora"), poné "pagado_por" y, si la dice, "fecha_pago".
+- Lo de una sola vez, que no se repite, va en "sueltos".
+- No inventes montos, fechas ni datos que no dijo.
 ${FORMATOS}`;
-  const r = await pedir(cfg, EsquemaArmado, system, [{ role: "user", content: await contenido(texto, archivo) }]);
+  const r = await pedir(cfg, EsquemaCarga, system, [{ role: "user", content: await contenido(texto, archivo) }]);
 
+  // Conceptos: los nuevos (cada uno con su ref), los cambios y los borrados.
   const porId = new Map(fijos.map((f) => [f.id, f]));
   const pedidos = new Map<number, { campo: CampoFijo; valor: string }[]>();
   for (const c of r.cambios) {
@@ -289,70 +337,77 @@ ${FORMATOS}`;
     const campos = CAMPOS_FIJO.filter((c) => cambio(antes, despues, c));
     return campos.length ? [{ id, despues, campos }] : [];
   });
-  const nuevos = r.nuevos.map((p) => nuevoDesde(p, lugares, formas, categorias));
-  const vacio = !nuevos.length && !cambios.length && !borrar.length;
+  const refs = new Set<string>();
+  const nuevos = r.nuevos.map((p, k) => {
+    const ref = p.ref.trim() && !refs.has(p.ref.trim()) ? p.ref.trim() : `n${k + 1}`;
+    refs.add(ref);
+    return { ...nuevoDesde(p, lugares, formas, categorias), ref, refIa: p.ref.trim(), desde: esMes(p.desde) ? p.desde : "" };
+  });
+
+  // Montos: a qué pago van y cómo están hoy (lo que había y si ya estaba pagado).
+  const meses = [...new Set(r.montos.map((m) => m.mes).filter(esMes))];
+  const filas = await filasDeFijos(fijos.map((f) => f.id), meses);
+  const vistos = new Set<string>();
+  const sinDestino: string[] = [];
+  const montos = r.montos.flatMap((m) => {
+    const c = m.concepto.trim();
+    const fijo = porId.get(Number(/^#?(\d+)$/.exec(c)?.[1]));
+    const puntual = puntuales.find((i) => `i:${i.id}` === c.replace(/\s/g, ""));
+    const nuevo = nuevos.find((n) => n.refIa === c || n.ref === c);
+    const mes = puntual?.periodo ?? (esMes(m.mes) ? m.mes : periodoDe(hoy));
+    const destino = fijo ? { fijoId: fijo.id } : puntual ? { itemId: puntual.id } : nuevo ? { ref: nuevo.ref } : null;
+    const clave = `${JSON.stringify(destino)}|${mes}`;
+    if (!destino || !(m.monto >= 0) || vistos.has(clave)) {
+      if (!destino) sinDestino.push(m.como_figura.trim() || c);
+      return [];
+    }
+    vistos.add(clave);
+    const fila = fijo ? filas.find((x) => x.fijoId === fijo.id && x.periodo === mes) : undefined;
+    const info = fijo
+      ? { nombre: fijo.nombre, lugar: dondeVa(fijo, lugares), antes: fila?.monto ?? fijo.estimado, pagado: fila?.estado === "pagado" }
+      : puntual
+        ? { nombre: puntual.nombre, lugar: puntual.lugar, antes: puntual.monto, pagado: false }
+        : { nombre: nuevo!.nombre, lugar: nuevo!.lugarNuevo?.nombre ?? dondeVa(nuevo!, lugares), antes: null, pagado: false };
+    return [{ ...destino, mes, monto: m.monto, ...info, pagadoCon: elegirForma(formas, m.pagado_por)?.id ?? null, fechaPago: esFecha(m.fecha_pago) ? m.fecha_pago : null, original: m.como_figura.trim() }];
+  });
+
+  // Los nuevos: desde el primer mes de sus montos (si no lo dijo) y, si siempre lo pagó la misma (la contadora), con esa forma.
+  for (const n of nuevos) {
+    const suyos = montos.filter((m) => "ref" in m && m.ref === n.ref);
+    n.desde ||= suyos.map((m) => m.mes).sort()[0] ?? periodoDe(hoy);
+    const formasSuyas = [...new Set(suyos.map((m) => m.pagadoCon))];
+    if (n.formaId === null && formasSuyas.length === 1 && formasSuyas[0]) n.formaId = formasSuyas[0];
+  }
+
+  const sueltos = r.sueltos.flatMap((s) => {
+    if (!s.nombre.trim() || !(s.monto > 0)) return [];
+    const { reparto: _, ...a } = resolverAlcance(lugares, s.lugar.trim() ? "lugar" : "general", s.lugar, s.tipo, []);
+    return [
+      {
+        ...a,
+        alcance: a.alcance === "lugar" ? ("lugar" as const) : ("general" as const),
+        nombre: s.nombre.trim(),
+        categoria: categoriaDe(categorias, s.categoria) ?? "Otros",
+        monto: s.monto,
+        moneda: monedaDe(s.moneda),
+        fecha: esFecha(s.fecha) ? s.fecha : hoy,
+        pagadoCon: elegirForma(formas, s.pagado_por)?.id ?? null,
+        nota: s.nota.trim(),
+        original: s.como_figura.trim(),
+      },
+    ];
+  });
+
+  const vacio = !nuevos.length && !cambios.length && !borrar.length && !montos.length && !sueltos.length;
+  const avisoSinDestino = sinDestino.length ? `No supe a qué pago van: ${sinDestino.join(", ")}.` : "";
   return {
-    nuevos,
+    nuevos: nuevos.map(({ refIa: _, ...n }) => n),
     cambios,
     borrar,
-    totalImagen: r.total > 0 ? r.total : null,
-    mensaje: r.mensaje.trim() || (vacio ? "No encontré nada para agregar, cambiar ni borrar. Probá decirlo de otra forma." : ""),
-  };
-}
-
-const EsquemaMes = z.object({
-  montos: z
-    .array(z.object({ id: z.number().int().describe("El id (#) del pago del mes"), monto: z.number(), como_figura: z.string().describe("El renglón tal cual figura") }))
-    .describe("Los renglones que son pagos del mes que ya están, con el monto que figura"),
-  nuevos: z.array(Concepto).describe("Los renglones que no están entre los pagos del mes: se crean como pago fijo, con el monto que figura"),
-  total: z.number().describe("El total general que figura (no un subtotal); 0 si no hay"),
-  mensaje: z.string().describe('Lo que no pudiste leer o no entendiste, corto y con voseo. Si leíste todo: ""'),
-});
-
-/**
- * Los montos que corresponden a un mes (el gasto: lo de octubre, aunque se pague en noviembre) a partir de un archivo
- * o un texto (el resumen de impuestos de la contadora, por ejemplo): a qué pago de ese mes va cada monto, qué pagos hay
- * que crear y si la suma da el total que figura. No guarda nada: lo revisás y se aplica con `aplicarMes`.
- */
-export async function cargarMesConIa(periodo: string, texto: string, archivo?: ArchivoIa) {
-  const cfg = await conTope();
-  const [lugares, formas, pagos, categorias] = await Promise.all([listarLugares(), formasActivas(), pagosQueCorresponden(periodo), nombresDeCategorias()]);
-  const items = pagos.filter((i) => i.estado !== "omitido");
-  const system = `Cargás los montos que corresponden a ${nombreMes(periodo)} (el mes del gasto, aunque se paguen el mes siguiente) en los pagos de ${cfg.nombreUsuario} (sus locales, su casa, sus cosas), a partir de lo que te pasa: una foto, captura o PDF (por ejemplo el resumen de impuestos que le manda la contadora) o un texto.
-Lugares que tiene: ${lugares.map((l) => `${l.nombre} (${l.tipo})`).join(", ") || "ninguno"}.
-Categorías (usá una de estas): ${categorias.join(", ")}.
-Formas de pago que tiene: ${formas.map((f) => f.nombre).join(", ") || "ninguna"}.${notasDe(cfg.pagosNotasIa)}
-${ALCANCES}
-${MES_VENCIDO}
-
-Pagos que corresponden a ${nombreMes(periodo)} (id | pago · lugar | monto actual | estado):
-${items.map((i) => `#${i.id} | ${i.nombre} · ${i.alcance === "repartido" ? i.partes.map((p) => p.lugar).join(", ") : i.lugar} | ${i.monto} ${i.moneda} | ${i.estado}`).join("\n") || "ninguno"}
-
-Qué hacer:
-- Cada renglón con un monto es un pago. Los subtotales y el total no son pagos: el total general va en "total".
-- Un título o bloque con el nombre de un negocio dice a qué corresponden los renglones de abajo.
-- Si el renglón es uno de los pagos del mes (el mismo concepto y del mismo negocio), va en "montos" con su id. Si no, va en "nuevos".
-- Los nuevos: nombre corto y legible, en mayúsculas y minúsculas y sin la sigla del negocio ("F-931 SYA" → "F-931", "CENTRO EMPL COMERCIO" → "Centro de Empleados de Comercio"); mensuales y variables (los impuestos y cargas cambian cada mes); dia 0 salvo que figure el vencimiento; mes_vencido según la regla de arriba.
-- Montos en números, sin redondear ($ 2.896.003,34 = 2896003.34). No inventes nada que no figure.`;
-  const r = await pedir(cfg, EsquemaMes, system, [{ role: "user", content: await contenido(texto, archivo) }]);
-
-  const porId = new Map(items.map((i) => [i.id, i]));
-  const vistos = new Set<number>();
-  const montos = r.montos
-    .filter((m) => porId.has(m.id) && m.monto >= 0 && !vistos.has(m.id) && !!vistos.add(m.id))
-    .map((m) => {
-      const i = porId.get(m.id)!;
-      // A qué va: al concepto de todos los meses (así sirve aunque cambies el mes) o, si no sale de uno, a ese pago.
-      return { ...(i.fijoId ? { fijoId: i.fijoId } : { itemId: i.id }), monto: m.monto, antes: i.monto, nombre: i.nombre, lugar: i.lugar, pagado: i.estado === "pagado", original: m.como_figura.trim() };
-    });
-  const nuevos = r.nuevos.map((p) => nuevoDesde(p, lugares, formas, categorias));
-  return {
-    periodo,
-    /** Todo lo que leyó, también lo que ya tenía ese monto (así la suma se compara con el total). */
     montos,
-    nuevos,
+    sueltos,
     totalImagen: r.total > 0 ? r.total : null,
-    mensaje: r.mensaje.trim() || (!montos.length && !nuevos.length ? "No encontré montos para cargar. Probá con otra foto o decilo con texto." : ""),
+    mensaje: [r.mensaje.trim(), avisoSinDestino].filter(Boolean).join(" ") || (vacio ? "No encontré nada para cargar, cambiar ni borrar. Probá decirlo de otra forma o con otra foto." : ""),
   };
 }
 
