@@ -4,6 +4,11 @@ import { imagenParaIa } from "./adjuntos.js";
 
 /** Se identifica tal cual es: el bot de Memolucas leyendo un link que le mandó su dueño. */
 const AGENTE = "Mozilla/5.0 (compatible; MemolucasBot/1.0; +https://memolucas.saboryaroma.com)";
+/**
+ * Facebook e Instagram a un programa que se presenta como bot le muestran solo «Iniciá sesión». Para esos dos se usa
+ * la identidad de un navegador común: se lee lo mismo que ves al abrir el link sin cuenta, nada más.
+ */
+const NAVEGADOR = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 const TIEMPO_MS = 12_000;
 const MAX_HTML = 2 * 1024 * 1024;
 const MAX_IMAGEN = 8 * 1024 * 1024;
@@ -21,7 +26,8 @@ export type ContenidoEnlace = {
   evento: { nombre: string | null; inicio: string | null; lugar: string | null } | null;
   imagen: { datos: Buffer; mime: string } | null;
   legible: boolean;
-  esInstagram: boolean;
+  /** Por qué no se pudo leer, para explicártelo (un grupo de Facebook, Instagram sin sesión…); null si no se sabe. */
+  motivo: string | null;
 };
 
 // ───────────── URLs ─────────────
@@ -55,6 +61,8 @@ const hostDe = (u: string) => {
   }
 };
 const esDe = (host: string, dominio: string) => host === dominio || host.endsWith(`.${dominio}`);
+const esFacebook = (host: string) => esDe(host, "facebook.com") || host === "fb.watch" || host === "fb.me";
+const esInstagram = (host: string) => esDe(host, "instagram.com") || host === "instagr.am";
 
 // ───────────── Seguridad: solo direcciones públicas ─────────────
 
@@ -111,10 +119,11 @@ export async function traer(url: string, op: { max: number; aceptar: string; cor
   let actual = new URL(url);
   for (let saltos = 0; saltos < 6; saltos++) {
     await verificarDestino(actual);
+    const host = hostDe(actual.toString());
     const r = await fetch(actual, {
       redirect: "manual",
       signal: AbortSignal.timeout(TIEMPO_MS),
-      headers: { "user-agent": AGENTE, accept: op.aceptar, "accept-language": "es-AR,es;q=0.9,en;q=0.6" },
+      headers: { "user-agent": esFacebook(host) || esInstagram(host) ? NAVEGADOR : AGENTE, accept: op.aceptar, "accept-language": "es-AR,es;q=0.9,en;q=0.6" },
     });
     const destino = r.headers.get("location");
     if (r.status >= 300 && r.status < 400 && destino) {
@@ -283,12 +292,60 @@ async function bajarImagen(url: string): Promise<{ datos: Buffer; mime: string }
   }
 }
 
-const PANTALLA_DE_LOGIN = /^(instagram|log ?in|iniciar sesión|inicia sesión|facebook|tiktok - make your day)\b/i;
+/** La pantalla de «Iniciá sesión» (Instagram, Facebook, TikTok): no es el contenido del link. */
+const PANTALLA_DE_LOGIN = /^(instagram|facebook|log ?in(to)?\b|iniciar sesi[oó]n|inicia sesi[oó]n|entrar a facebook|tiktok - make your day)/i;
+const TEXTO_DE_LOGIN = /log in(to)? (to )?facebook|inici[aá] sesi[oó]n en facebook|create an account|cre[aá] una cuenta|see more of .* on facebook/i;
+
+/** Los links de «Compartir» de Facebook (facebook.com/share/…) no dicen qué son. */
+const esCompartido = (url: string) => {
+  try {
+    const u = new URL(url);
+    return esFacebook(hostDe(url)) && /^\/share\/(?![rv]\/)/i.test(u.pathname);
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * A dónde lleva un link de «Compartir» de Facebook (un video, una publicación, un evento…): se sigue la redirección o,
+ * si la página lo dice, su dirección real. Cualquier otro link vuelve tal cual (también si no se puede abrir).
+ */
+export async function abrirCompartido(url: string): Promise<string> {
+  if (!esCompartido(url)) return url;
+  try {
+    const r = await traer(url, { max: 512 * 1024, aceptar: "text/html,application/xhtml+xml", cortarSiSobra: true });
+    if (!esCompartido(r.url)) return r.url;
+    for (const m of decodificarHtml(r.datos, r.tipo).matchAll(/<meta\b[^>]*>/gi)) {
+      const a = atributos(m[0]);
+      const destino = (a.property ?? "").toLowerCase() === "og:url" ? a.content : (a["http-equiv"] ?? "").toLowerCase() === "refresh" ? /url=(.+)$/i.exec(a.content ?? "")?.[1] : null;
+      if (destino) return new URL(decodificarEntidades(destino.trim().replace(/^['"]|['"]$/g, "")), r.url).toString();
+    }
+    return r.url;
+  } catch {
+    return url;
+  }
+}
+
+/** Por qué Facebook o Instagram no muestran ese link sin iniciar sesión, para explicártelo. */
+export function motivoSinSesion(url: string): string | null {
+  const host = hostDe(url);
+  let ruta = "";
+  try {
+    ruta = decodeURIComponent(`${new URL(url).pathname}${new URL(url).search}`).toLowerCase();
+  } catch {
+    ruta = "";
+  }
+  if (esInstagram(host)) return "Instagram no deja ver esa publicación sin iniciar sesión.";
+  if (!esFacebook(host)) return null;
+  if (ruta.includes("/groups/")) return "Es de un grupo de Facebook: sin iniciar sesión no se puede ver.";
+  if (ruta.includes("/marketplace/")) return "Es de Marketplace: Facebook no lo muestra sin iniciar sesión.";
+  return "Facebook no lo muestra sin iniciar sesión (puede ser privado o de un grupo).";
+}
 
 /** Lee un link: metadatos, texto, evento e imagen de portada. Combina con la vista previa de WhatsApp. */
 export async function leerEnlace(url: string, previa?: VistaPreviaWa | null): Promise<ContenidoEnlace> {
   const host = hostDe(url);
-  const esInstagram = esDe(host, "instagram.com") || host === "instagr.am";
+  const deMeta = esFacebook(host) || esInstagram(host);
   const [pagina, embebido] = await Promise.allSettled([
     traer(url, { max: MAX_HTML, aceptar: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.5", cortarSiSobra: true }),
     oembed(url),
@@ -304,9 +361,10 @@ export async function leerEnlace(url: string, previa?: VistaPreviaWa | null): Pr
 
   let titulo = oe?.titulo ?? datos.titulo;
   let descripcion = datos.descripcion ?? (oe?.autor ? `De ${oe.autor}` : null);
-  // Instagram sin sesión suele devolver una pantalla de ingreso: eso no cuenta como contenido.
-  const bloqueado = !!titulo && PANTALLA_DE_LOGIN.test(titulo) && !descripcion;
-  if (bloqueado) titulo = null;
+  // Sin sesión, Instagram y Facebook suelen devolver la pantalla de ingreso: eso no cuenta como contenido.
+  const bloqueado =
+    /^\/(login|checkpoint)\b/i.test(new URL(urlFinal).pathname) || (!!titulo && PANTALLA_DE_LOGIN.test(titulo) && (!descripcion || TEXTO_DE_LOGIN.test(descripcion)));
+  if (bloqueado) [titulo, descripcion] = [null, null];
   titulo ??= limpiar(previa?.titulo);
   descripcion ??= limpiar(previa?.descripcion);
 
@@ -315,8 +373,9 @@ export async function leerEnlace(url: string, previa?: VistaPreviaWa | null): Pr
   if (urlImagen) imagen = await bajarImagen(urlImagen);
   if (!imagen && previa?.miniatura?.length) imagen = await imagenParaIa(previa.miniatura);
 
-  const texto = bloqueado || esInstagram ? null : datos.texto;
-  const legible = !!(titulo || descripcion || datos.evento || (texto && texto.length > 200) || (imagen && !esInstagram));
+  // En Facebook e Instagram el texto de la página es el menú y los avisos: sirven los metadatos y la imagen.
+  const texto = bloqueado || deMeta ? null : datos.texto;
+  const legible = !!(titulo || descripcion || datos.evento || (texto && texto.length > 200) || (imagen && !deMeta));
   return {
     url,
     urlFinal,
@@ -327,6 +386,6 @@ export async function leerEnlace(url: string, previa?: VistaPreviaWa | null): Pr
     evento: datos.evento,
     imagen,
     legible,
-    esInstagram,
+    motivo: legible ? null : motivoSinSesion(urlFinal),
   };
 }

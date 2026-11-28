@@ -23,7 +23,7 @@ export class ErrorVideo extends Error {
 }
 
 const ERRORES: Record<MotivoErrorVideo, string> = {
-  login: "No pude bajar ese video: Instagram pide iniciar sesión para verlo 😕\nGuardalo desde la app y mandámelo acá como *video*, y te lo resumo.",
+  login: "No pude bajar ese video: la página pide iniciar sesión para verlo (pasa con Instagram y Facebook) 😕\nGuardalo desde la app y mandámelo acá como *video*, y te lo resumo.",
   no_disponible: "No pude bajar ese video 😕 (puede ser privado o que la página haya cambiado).\nGuardalo desde la app y mandámelo acá como *video*, y te lo resumo.",
   largo: `Ese video dura más de ${MAX_SEGUNDOS_VIDEO / 60} minutos: es muy largo para resumirlo por acá.`,
 };
@@ -46,7 +46,8 @@ export function esLinkDeVideo(url: string): boolean {
   if (de("instagram.com")) return /^\/(reels?|tv)\//.test(ruta);
   if (host === "youtu.be" || host === "fb.watch") return true;
   if (de("youtube.com")) return /^\/(shorts\/|watch)/.test(ruta);
-  if (de("facebook.com")) return /\/(reel|watch|videos)\b/.test(ruta);
+  // Los links de «Compartir» de un reel (/share/r/) o un video (/share/v/) ya dicen que son videos.
+  if (de("facebook.com")) return /\/(reel|watch|videos)\b|^\/share\/[rv]\//.test(ruta);
   return false;
 }
 
@@ -100,7 +101,7 @@ async function bajar(url: string, carpeta: string) {
     const detalle = `${(err as { stderr?: string }).stderr ?? ""} ${(err as Error).message}`;
     if ((err as NodeJS.ErrnoException).code === "ENOENT") throw err; // Falta yt-dlp: es un problema de la instalación.
     await registrar("aviso", "videos", `No se pudo bajar ${url}`, { detalle: detalle.slice(0, 500) });
-    throw new ErrorVideo(/instagram/i.test(url) && LOGIN.test(detalle) ? "login" : "no_disponible");
+    throw new ErrorVideo(/instagram|facebook|fb\.watch/i.test(url) && LOGIN.test(detalle) ? "login" : "no_disponible");
   }
   const info = JSON.parse(salida.trim().split("\n").at(-1) || "{}") as InfoYtDlp;
   const archivo = (await fs.readdir(carpeta)).find((n) => n.startsWith("video.") && !n.endsWith(".part"));

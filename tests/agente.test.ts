@@ -183,6 +183,25 @@ describe("asistente", () => {
     expect(guion.mock.calls[2][0].messages.map((m) => m.content.split("\n").at(-1))).toEqual(["hola panel", "Hola desde el panel", "seguimos"]);
   });
 
+  it("por WhatsApp, citando un mensaje del bot, el asistente sabe a qué mensaje responde", async () => {
+    const respuestas: string[] = [];
+    const bot = new Procesador({
+      responder: async (t: string) => (respuestas.push(t), `OUT${respuestas.length}`),
+      responderImagen: async () => null,
+      responderEncuesta: async () => ({ id: null, secreto: "" }),
+      descifrarVoto: () => null,
+      descargarMedia: async () => Buffer.alloc(0),
+      reaccionar: async () => {},
+    });
+    interpretar.mockResolvedValue({ intencion: "consulta" } as Interpretacion);
+    guion.mockReturnValueOnce({ llamadas: [], responder: () => "Este mes pagaste $ 70.000 de luz en el Express 1." });
+    await bot.procesar({ key: { id: "H1", remoteJid: "5491112345678@s.whatsapp.net" }, message: { conversation: "¿cuánto pagué de luz?" } });
+    guion.mockReturnValueOnce({ llamadas: [], responder: () => "En octubre, $ 65.000." });
+    await bot.procesar({ key: { id: "H2", remoteJid: "5491112345678@s.whatsapp.net" }, message: { extendedTextMessage: { text: "¿y el mes anterior?", contextInfo: { stanzaId: "OUT1" } } } });
+    const ultimo = guion.mock.calls[1][0].messages.at(-1)!.content;
+    expect(ultimo).toMatch(/\[Está respondiendo a tu mensaje del \d\d\/\d\d \d\d:\d\d: "Este mes pagaste \$ 70\.000 de luz en el Express 1\."\. Lo que pide es sobre ese mensaje\.\]\n¿y el mes anterior\?$/);
+  });
+
   it("por WhatsApp, lo que el intérprete marca como consulta lo responde el asistente (en el grupo no)", async () => {
     const respuestas: string[] = [];
     const bot = new Procesador({
