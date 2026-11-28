@@ -516,10 +516,11 @@ export const textoTope = (tope: number) =>
   `Llegué al tope de IA de este mes (US$ ${tope}) 😅 Sigo con lo básico: recordatorios, notas, suscripciones y links. Lo podés subir en el panel, en Configuración → IA.`;
 
 /**
- * Le pregunta al asistente. sinMensajeId: el mensaje actual ya guardado (para no mandarlo dos veces).
+ * Le pregunta al asistente. sinMensajeId: el mensaje actual ya guardado (para no mandarlo dos veces). cita: el mensaje
+ * que cita al responder por WhatsApp (sigue ese hilo).
  * Devuelve { tope } si se llegó al tope de gasto de IA del mes.
  */
-export async function preguntarAlAgente(texto: string, origen: Canal, sinMensajeId?: number): Promise<RespuestaAgente> {
+export async function preguntarAlAgente(texto: string, origen: Canal, sinMensajeId?: number, cita?: string | null): Promise<RespuestaAgente> {
   const cfg = await obtenerConfig();
   if ((await gastoDelMes()).costoUsd >= cfg.agenteTopeUsd) return { tope: cfg.agenteTopeUsd };
   const ya = ahora();
@@ -536,7 +537,7 @@ export async function preguntarAlAgente(texto: string, origen: Canal, sinMensaje
     cache_control: { type: "ephemeral" },
     system: sistema(cfg.nombreUsuario),
     tools: [...herramientas(origen, despues), { type: "web_search_20260209", name: "web_search", max_uses: 3, user_location: { type: "approximate", country: "AR", timezone: zona() } }],
-    messages: [...(await historial(origen, sinMensajeId)), { role: "user", content: `[Ahora: ${ya.setLocale("es").toFormat("cccc dd/MM/yyyy HH:mm")} (${zona()})]\n${texto}` }],
+    messages: [...(await historial(origen, sinMensajeId)), { role: "user", content: `[Ahora: ${ya.setLocale("es").toFormat("cccc dd/MM/yyyy HH:mm")} (${zona()})]\n${cita ? `${cita}\n` : ""}${texto}` }],
   });
   let ultimo: Anthropic.Beta.BetaMessage | null = null;
   for await (const m of runner) {

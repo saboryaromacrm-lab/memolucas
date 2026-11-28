@@ -195,7 +195,8 @@ export async function actualizarRecordatorio(id: number, cambios: Partial<DatosR
     cambios.insistenciaIntervaloMin !== undefined ||
     cambios.insistenciaTope !== undefined ||
     cambios.insistirPrevios !== undefined;
-  if (cambiaAgenda) validar({ titulo, fechaHora, rrule: cambios.rrule ?? actual.rrule }, rr);
+  // Sacarle la repetición (rrule null) también cuenta: se valida con la nueva, no con la que tenía.
+  if (cambiaAgenda) validar({ titulo, fechaHora, rrule: cambios.rrule !== undefined ? cambios.rrule : actual.rrule }, rr);
   let estado = actual.estado;
   // Un recordatorio terminado vuelve a estar activo si le cambiás la fecha.
   if (cambiaAgenda && (estado === "cumplido" || estado === "no_confirmado")) estado = "activo";

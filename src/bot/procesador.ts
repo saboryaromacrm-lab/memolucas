@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
-import type { WAMessage } from "baileys";
+import type { proto, WAMessage } from "baileys";
 import { and, asc, desc, eq, gt, inArray } from "drizzle-orm";
 import { DateTime } from "luxon";
 import type Anthropic from "@anthropic-ai/sdk";
@@ -44,7 +44,7 @@ import {
   type DatosRecordatorio,
 } from "../servicios/recordatorios.js";
 import { EMOJIS_CONFIRMACION, TEXTO_AYUDA, detectarComando, esAfirmativo, esNegativo, pedidoDeLinks, respuestaASuscripcion, type PedidoDeLinks } from "./comandos.js";
-import { extraerUrls, leerEnlace, textoSinUrls, type VistaPreviaWa } from "../servicios/enlaces.js";
+import { abrirCompartido, extraerUrls, leerEnlace, textoSinUrls, type VistaPreviaWa } from "../servicios/enlaces.js";
 import { analizarEnlace, analizarFoto, interpretar, motivoFallaIA, responderConNotas, type AnalisisFoto, type Interpretacion } from "./ia.js";
 import { actualizarPagoDelMes, buscarPendientes, guardarComprobante, pagosPendientes, registrarPago, type ItemPago } from "../servicios/pagos.js";
 import { buscarForma, formasActivas } from "../servicios/pagos-formas.js";
@@ -221,9 +221,27 @@ function textoMensaje(msg: WAMessage): string | null {
   return m?.conversation ?? m?.extendedTextMessage?.text ?? m?.imageMessage?.caption ?? null;
 }
 
-function idCitado(msg: WAMessage): string | null {
-  const m = msg.message;
-  return m?.extendedTextMessage?.contextInfo?.stanzaId ?? m?.imageMessage?.contextInfo?.stanzaId ?? m?.audioMessage?.contextInfo?.stanzaId ?? null;
+/**
+ * El mensaje que cita al responder (texto, audio, foto, video, documento o sticker): su id y su texto, que WhatsApp
+ * manda con la respuesta (sirve si el citado es viejo y ya no está guardado).
+ */
+function citaDe(msg: WAMessage): { id: string; texto: string | null } | null {
+  for (const parte of Object.values(msg.message ?? {})) {
+    const info = (parte as { contextInfo?: proto.IContextInfo | null } | null)?.contextInfo;
+    if (!info?.stanzaId) continue;
+    const q = info.quotedMessage;
+    const texto = q?.conversation ?? q?.extendedTextMessage?.text ?? q?.imageMessage?.caption ?? q?.videoMessage?.caption ?? q?.documentMessage?.caption ?? null;
+    return { id: info.stanzaId, texto: texto?.trim() || null };
+  }
+  return null;
+}
+
+/** Para el asistente: el mensaje que cita, así sabe de qué habla («eso», «cambialo», «el segundo»). */
+function citaParaAgente(fila: typeof mensaje.$inferSelect | null, textoCitado: string | null): string | null {
+  const texto = fila?.texto ?? textoCitado;
+  if (!texto) return null;
+  const quien = !fila ? "un mensaje" : fila.direccion === "saliente" ? `tu mensaje del ${aLocal(fila.creadoEn).toFormat("dd/MM HH:mm")}` : "un mensaje suyo anterior";
+  return `[Está respondiendo a ${quien}: "${texto.slice(0, 1500)}". Lo que pide es sobre ese mensaje.]`;
 }
 
 // ───────────── Borradores (propuestas de fotos) ─────────────
@@ -251,6 +269,8 @@ type DatosIA = Ctx & {
   entranteId: number;
   historial: Awaited<ReturnType<typeof ultimosMensajes>>;
   citadoFila: typeof mensaje.$inferSelect | null;
+  /** El texto del mensaje citado, cuando no está guardado (uno viejo). */
+  textoCitado?: string | null;
   /** Lo que entendió de un audio, para mostrarlo en el grupo. */
   eco?: string;
   /** Es uno guardado mientras la IA no andaba que se hace ahora: cuándo llegó. */
@@ -626,8 +646,9 @@ export class Procesador {
 
   private async texto(msg: WAMessage, texto: string, tipo: "texto" | "audio" = "texto", eco?: string) {
     const historial = await ultimosMensajes(5, chat());
-    const citado = idCitado(msg);
-    const citadoFila = citado ? await mensajePorWaId(citado) : null;
+    const cita = citaDe(msg);
+    const citadoFila = cita ? await mensajePorWaId(cita.id) : null;
+    const textoCitado = citadoFila ? null : (cita?.texto ?? null);
     const ocCitada = citadoFila?.ocurrenciaId ?? null;
     const entrante = await registrarAqui({ direccion: "entrante", texto, tipo, waMessageId: msg.key.id });
     // ¿Contesta una pregunta del bot? Citándola, siempre; si no, si fue lo último que dijo el bot y hace poco.
@@ -666,7 +687,7 @@ export class Procesador {
     ) {
       await anotar("agente");
       if (eco) await this.decir(eco, { intencion: "transcripcion" });
-      return this.consultarAgente(texto, entrante.id);
+      return this.consultarAgente(texto, entrante.id, undefined, citaParaAgente(citadoFila, textoCitado));
     }
 
     // 2) "Mis links" (en privado): guardar uno o buscarlo. Va antes que el análisis de links.
@@ -677,10 +698,12 @@ export class Procesador {
     if (urls.length) {
       // En el grupo, un link compartido sin pedirle nada al bot es charla.
       if (enGrupo() && !PIDE_BOT.test(normalizar(textoSinUrls(texto)))) return void (await anotar("ignorar"));
-      // Reels, TikTok, Shorts: en privado se resumen (salvo que pida agendarlo).
-      if (!enGrupo() && esLinkDeVideo(urls[0]) && !PIDE_RECORDAR.test(normalizar(textoSinUrls(texto)))) {
+      // Reels, TikTok, Shorts: en privado se resumen (salvo que pida agendarlo). Un link de «Compartir» de Facebook
+      // se abre primero para saber si es un video.
+      const destino = await abrirCompartido(urls[0]);
+      if (!enGrupo() && esLinkDeVideo(destino) && !PIDE_RECORDAR.test(normalizar(textoSinUrls(texto)))) {
         await anotar("video");
-        return this.video({ url: urls[0] }, msg, urls[0]);
+        return this.video({ url: destino }, msg, urls[0]);
       }
       await anotar("enlace");
       return this.enlace(msg, urls[0], textoSinUrls(texto) || null);
@@ -772,7 +795,7 @@ export class Procesador {
     }
 
     // 6) IA.
-    return this.conIA({ texto, entranteId: entrante.id, historial, citadoFila, ocCitada, borrador, msg, eco });
+    return this.conIA({ texto, entranteId: entrante.id, historial, citadoFila, textoCitado, ocCitada, borrador, msg, eco });
   }
 
   /**
@@ -788,7 +811,7 @@ export class Procesador {
       : d.texto;
     let interp: Interpretacion;
     try {
-      interp = await interpretar(cfg, texto, await this.contexto(d.historial, d.borrador?.datos ?? null, d.citadoFila));
+      interp = await interpretar(cfg, texto, await this.contexto(d.historial, d.borrador?.datos ?? null, d.citadoFila, d.textoCitado ?? null));
     } catch (err) {
       return this.falloIA(err, d);
     }
@@ -799,7 +822,7 @@ export class Procesador {
     }
     if (d.eco) await this.decir(d.eco, { intencion: "transcripcion" });
     // Lo que no es un pedido simple lo resuelve el asistente (solo en privado: en el grupo no ve tus cosas).
-    if (interp.intencion === "consulta" && !enGrupo()) return this.consultarAgente(texto, d.entranteId, d);
+    if (interp.intencion === "consulta" && !enGrupo()) return this.consultarAgente(texto, d.entranteId, d, citaParaAgente(d.citadoFila, d.textoCitado ?? null));
     return this.ejecutarSeguro(interp, { ocCitada: d.ocCitada, borrador: d.borrador, msg: d.msg });
   }
 
@@ -893,9 +916,10 @@ export class Procesador {
     });
   }
 
-  private async consultarAgente(texto: string, entranteId: number, d?: DatosIA) {
+  /** cita: el mensaje que cita al responder, para que el asistente siga el hilo. */
+  private async consultarAgente(texto: string, entranteId: number, d?: DatosIA, cita?: string | null) {
     try {
-      const r = await preguntarAlAgente(texto, "whatsapp", entranteId);
+      const r = await preguntarAlAgente(texto, "whatsapp", entranteId, cita);
       if ("tope" in r) return this.decir(textoTope(r.tope), { intencion: "agente_tope" });
       // Si solo confirma lo que hizo, contesta con un emoji: va como reacción.
       if (esSoloEmoji(r.texto)) await this.reaccionarODecir(r.texto.trim(), "Hecho", `${r.texto.trim()} Listo.`, "agente");
@@ -934,8 +958,8 @@ export class Procesador {
     return `${cita} Usalo para entender a qué se refiere. Si cita una lista con varios recordatorios y no queda claro de cuál habla, preguntale cuál.`;
   }
 
-  /** citado: el mensaje que el usuario cita al responder (del bot o suyo), si cita alguno. */
-  private async contexto(historial: Awaited<ReturnType<typeof ultimosMensajes>>, borrador: DatosBorrador | null, citado: typeof mensaje.$inferSelect | null) {
+  /** citado: el mensaje que el usuario cita al responder (del bot o suyo), si cita alguno; textoCitado, si no está guardado. */
+  private async contexto(historial: Awaited<ReturnType<typeof ultimosMensajes>>, borrador: DatosBorrador | null, citado: typeof mensaje.$inferSelect | null, textoCitado: string | null = null) {
     const activos = await recordatoriosActivos(chat());
     const esperando = await pendientesSinConfirmar(chat());
     const ultima = await ultimaOcurrenciaEnviada(undefined, chat());
@@ -965,7 +989,11 @@ export class Procesador {
       propuesta = `${borrador.descripcion} (ya se lo mandaste${borrador.guardar ? " y ofreciste guardarlo" : ""}).`;
     else if (borrador)
       propuesta = `${origen} recibido sin propuesta (${borrador.descripcion ?? "sin datos"}). Si el usuario dice cuándo, crear_recordatorio (usá un título que describa el contenido) y se le adjunta ${adjunta}.`;
-    const respondiendoA = citado ? await this.respondiendoA(citado) : null;
+    const respondiendoA = citado
+      ? await this.respondiendoA(citado)
+      : textoCitado
+        ? `El usuario está respondiendo citando este mensaje: "${textoCitado}". Lo que pide es sobre ese mensaje.`
+        : null;
     // Las notas son personales: en el grupo no se muestran.
     const notas = (enGrupo() ? [] : await todasLasNotas())
       .slice(0, 100)
@@ -995,7 +1023,7 @@ export class Procesador {
 
     if (!contenido?.legible) {
       await guardarBorrador({ url, adjuntoId: null, descripcion: "link que no se pudo leer", esperaCaptura: true });
-      const motivo = contenido?.esInstagram ? " Instagram no deja ver los posts sin iniciar sesión." : "";
+      const motivo = contenido?.motivo ? ` ${contenido.motivo}` : "";
       return this.decir(
         `No pude leer ese link 😕${motivo}\n¿Me mandás una *captura de pantalla*? O decime cuándo te lo recuerdo y te mando el link en el aviso.`,
         { intencion: "enlace_ilegible" },

@@ -191,6 +191,41 @@ describe("bot", () => {
     expect((interpretar.mock.calls[2][2] as { respondiendoA: string }).respondiendoA).toContain("citando un mensaje suyo anterior");
   });
 
+  it("'este lunes nomás' citando un recordatorio de todos los lunes: le saca la repetición (sin «La repetición no es válida»)", async () => {
+    const testa = { titulo: "Escribirle a Testa para que retire café", descripcion: null, fecha_hora: "2026-10-26T09:00:00-03:00", recurrencia: "FREQ=WEEKLY;BYDAY=MO", avisos_previos_min: [], es_evento: false };
+    interpretar.mockResolvedValueOnce({ ...base, intencion: "crear_recordatorio", recordatorios: [testa] });
+    await bot.procesar(texto("todos los lunes a las 9 escribirle a Testa para que retire café"));
+    const [rec] = await recordatoriosActivos();
+    expect(rec.rrule).toContain("FREQ=WEEKLY");
+    const confirmacion = `OUT${respuestas.length}`;
+    interpretar.mockResolvedValueOnce({
+      ...base,
+      intencion: "editar",
+      recordatorio_ids: [rec.id],
+      cambios: { titulo: null, descripcion: null, fecha_hora: "2026-10-26T09:00:00-03:00", recurrencia: null, avisos_previos_min: null, es_evento: false, quitar_recurrencia: true },
+    });
+    await bot.procesar(respuestaA(confirmacion, "No, no son todos los lunes, este lunes nomás haceme acordar a la mañana"));
+    expect(respuestas.at(-1)).not.toContain("La repetición no es válida");
+    const [editado] = await recordatoriosActivos();
+    expect([editado.id, editado.rrule, editado.fechaHora.toISOString()]).toEqual([rec.id, null, local("2026-10-26T09:00").toISOString()]);
+    // La IA supo que respondía a ese mensaje y de qué recordatorio.
+    expect((interpretar.mock.calls[1][2] as { respondiendoA: string }).respondiendoA).toContain(`Es del recordatorio "Escribirle a Testa para que retire café" (ID ${rec.id}`);
+  });
+
+  it("citando un mensaje viejo que ya no está guardado (o un video), usa el texto que manda WhatsApp", async () => {
+    interpretar.mockResolvedValue(base);
+    await bot.procesar({
+      key: { id: `IN${++n}`, remoteJid: YO },
+      message: { extendedTextMessage: { text: "pasalo al viernes", contextInfo: { stanzaId: "VIEJO1", quotedMessage: { conversation: "📌 Llevar el auto al service" } } } },
+    });
+    expect((interpretar.mock.calls[0][2] as { respondiendoA: string }).respondiendoA).toBe('El usuario está respondiendo citando este mensaje: "📌 Llevar el auto al service". Lo que pide es sobre ese mensaje.');
+    await bot.procesar({
+      key: { id: `IN${++n}`, remoteJid: YO },
+      message: { extendedTextMessage: { text: "recordame verlo el sábado", contextInfo: { stanzaId: "VID1", quotedMessage: { videoMessage: { caption: "Receta de budín" } } } } },
+    });
+    expect((interpretar.mock.calls[1][2] as { respondiendoA: string }).respondiendoA).toContain('"Receta de budín"');
+  });
+
   it("comandos rápidos sin IA y 'listo' confirma el último aviso", async () => {
     interpretar.mockResolvedValue({
       ...base,
@@ -273,7 +308,7 @@ describe("bot", () => {
     evento: null,
     imagen: null,
     legible: true,
-    esInstagram: false,
+    motivo: null,
     ...extra,
   });
   const analisis = (extra: Partial<AnalisisEnlace> = {}): AnalisisEnlace => ({
@@ -313,7 +348,7 @@ describe("bot", () => {
   });
 
   it("link que no se puede leer: pide captura y la foto hereda el link", async () => {
-    leerEnlace.mockResolvedValue(contenido({ legible: false, esInstagram: true, titulo: null, descripcion: null }));
+    leerEnlace.mockResolvedValue(contenido({ legible: false, motivo: "Instagram no deja ver esa publicación sin iniciar sesión.", titulo: null, descripcion: null }));
     await bot.procesar(texto("https://www.instagram.com/p/ABC/"));
     expect(respuestas[0]).toContain("captura de pantalla");
     expect(respuestas[0]).toContain("Instagram");

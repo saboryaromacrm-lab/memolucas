@@ -100,9 +100,11 @@ describe("videos", () => {
       "https://youtu.be/abc",
       "https://www.facebook.com/reel/123",
       "https://fb.watch/abc",
+      "https://www.facebook.com/share/r/1AbCdE/",
+      "https://www.facebook.com/share/v/1AbCdE/",
     ])
       expect(esLinkDeVideo(u), u).toBe(true);
-    for (const u of ["https://www.instagram.com/agustin/", "https://www.instagram.com/p/C1abc/", "https://www.youtube.com/@canal", "https://www.facebook.com/eventos/1", "https://www.canva.com", "no es link"])
+    for (const u of ["https://www.instagram.com/agustin/", "https://www.instagram.com/p/C1abc/", "https://www.youtube.com/@canal", "https://www.facebook.com/eventos/1", "https://www.facebook.com/share/1FYA6MBX6K/", "https://www.canva.com", "no es link"])
       expect(esLinkDeVideo(u), u).toBe(false);
   });
 
@@ -127,7 +129,7 @@ describe("videos", () => {
     const r = JSON.parse((await app.inject({ method: "POST", url: "/api/agente", headers, payload: { texto: "https://vt.tiktok.com/ZSsLtax8R/" } })).json().respuesta);
     expect(r).toMatchObject({ cuenta: "@agustin", titulo: "3 páginas para ahorrar horas", escucho_el_audio: true, recursos: [{ nombre: "Canva" }, { nombre: "Notion" }, {}] });
     asistente.mockReturnValueOnce({ llamadas: [{ name: "resumir_video", input: { url: "https://www.instagram.com/reel/login/" } }], responder: ([r]) => r });
-    expect((await app.inject({ method: "POST", url: "/api/agente", headers, payload: { texto: "y este?" } })).json().respuesta).toContain("Instagram pide iniciar sesión");
+    expect((await app.inject({ method: "POST", url: "/api/agente", headers, payload: { texto: "y este?" } })).json().respuesta).toContain("la página pide iniciar sesión");
     await app.close();
   });
 
@@ -201,7 +203,7 @@ describe("videos", () => {
 
     it("si no lo puede bajar, pide el video; si es largo, lo dice; con 'recordame' va como link", async () => {
       await texto("https://www.instagram.com/reel/login/");
-      expect(respuestas.at(-1)).toContain("Instagram pide iniciar sesión");
+      expect(respuestas.at(-1)).toContain("la página pide iniciar sesión");
       expect(respuestas.at(-1)).toContain("mandámelo acá como *video*");
       expect(reacciones).toEqual(["⏳", "😕"]);
       await texto("https://www.tiktok.com/@x/video/roto");
